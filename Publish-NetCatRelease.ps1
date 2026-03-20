@@ -45,7 +45,8 @@ try {
         Copy-Item (Join-Path $_.FullName "AmazTool.resources.dll") $targetDir -Force
     }
 
-    Compress-Archive -Path (Join-Path $OutputDir "*") -DestinationPath $ZipPath -Force
+    $resolvedOutputDir = (Resolve-Path $OutputDir).Path
+    Compress-Archive -Path $resolvedOutputDir -DestinationPath $ZipPath -Force
 
     Write-Host "Published folder: $OutputDir"
     Write-Host "Release zip: $ZipPath"
