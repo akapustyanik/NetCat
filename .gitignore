@@ -1,4 +1,5 @@
 artifacts/
+pre-releases/
 .dotnet-cli/
 .vs/
 **/.dotnet/

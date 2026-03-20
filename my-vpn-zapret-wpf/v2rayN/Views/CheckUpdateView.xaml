@@ -63,9 +63,8 @@
                                     <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="1*" />
-                                    <ColumnDefinition Width="1*" />
                                     <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="2*" />
                                     <ColumnDefinition Width="3*" />
                                 </Grid.ColumnDefinitions>
                                 <ToggleButton
@@ -75,23 +74,23 @@
                                     HorizontalAlignment="Left"
                                     VerticalAlignment="Center"
                                     IsChecked="{Binding IsSelected}" />
-                                <TextBlock
+                                <StackPanel
                                     Grid.Column="1"
-                                    Style="{StaticResource ListItemTitle}"
-                                    Text="{Binding CoreType}"
+                                    Margin="{StaticResource Margin8}"
                                     ToolTip="{Binding Hint}"
-                                    ToolTipService.ShowDuration="60000" />
+                                    ToolTipService.ShowDuration="60000">
+                                    <TextBlock
+                                        Style="{StaticResource ListItemTitle}"
+                                        Text="{Binding CoreType}" />
+                                    <TextBlock
+                                        Margin="0,4,0,0"
+                                        Foreground="{DynamicResource MaterialDesignBodyLight}"
+                                        Opacity="0.85"
+                                        Text="{Binding Hint}"
+                                        TextWrapping="Wrap" />
+                                </StackPanel>
                                 <TextBlock
                                     Grid.Column="2"
-                                    Margin="{StaticResource Margin8}"
-                                    VerticalAlignment="Center"
-                                    FontWeight="Bold"
-                                    Foreground="{DynamicResource MaterialDesignBodyLight}"
-                                    Text="?"
-                                    ToolTip="{Binding Hint}"
-                                    ToolTipService.ShowDuration="60000" />
-                                <TextBlock
-                                    Grid.Column="3"
                                     Style="{StaticResource ListItemSubTitle}"
                                     Text="{Binding Remarks}"
                                     TextWrapping="WrapWithOverflow" />

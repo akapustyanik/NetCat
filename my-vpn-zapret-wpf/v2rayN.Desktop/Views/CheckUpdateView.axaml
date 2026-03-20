@@ -58,7 +58,7 @@
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
                         <Panel Width="500" VerticalAlignment="Center">
-                            <Grid ColumnDefinitions="1*,1*,Auto,3*" RowDefinitions="Auto">
+                            <Grid ColumnDefinitions="Auto,2*,3*" RowDefinitions="Auto">
                                 <ToggleSwitch
                                     x:Name="togAutoRefresh"
                                     Grid.Column="0"
@@ -66,22 +66,26 @@
                                     HorizontalAlignment="Left"
                                     VerticalAlignment="Center"
                                     IsChecked="{Binding IsSelected}" />
-                                <TextBlock
+                                <StackPanel
                                     Grid.Column="1"
-                                    HorizontalAlignment="Left"
-                                    VerticalAlignment="Center"
-                                    Text="{Binding CoreType}"
-                                    ToolTip.Tip="{Binding Hint}" />
-                                <TextBlock
-                                    Grid.Column="2"
                                     Margin="{StaticResource Margin4}"
                                     HorizontalAlignment="Left"
                                     VerticalAlignment="Center"
-                                    FontWeight="Bold"
-                                    Text="?"
-                                    ToolTip.Tip="{Binding Hint}" />
+                                    ToolTip.Tip="{Binding Hint}">
+                                    <TextBlock
+                                        HorizontalAlignment="Left"
+                                        VerticalAlignment="Center"
+                                        Text="{Binding CoreType}" />
+                                    <TextBlock
+                                        Margin="0,4,0,0"
+                                        HorizontalAlignment="Left"
+                                        VerticalAlignment="Center"
+                                        Opacity="0.75"
+                                        Text="{Binding Hint}"
+                                        TextWrapping="Wrap" />
+                                </StackPanel>
                                 <TextBlock
-                                    Grid.Column="3"
+                                    Grid.Column="2"
                                     HorizontalAlignment="Left"
                                     VerticalAlignment="Center"
                                     Text="{Binding Remarks}"
