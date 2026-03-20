@@ -703,10 +703,24 @@ public class Utils
 
     #region Miscellaneous
 
+    private const string UpgradeAppFolderName = "updater";
+
     public static bool UpgradeAppExists(out string upgradeFileName)
     {
-        upgradeFileName = Path.Combine(GetBaseDirectory(), GetExeName("AmazTool"));
+        upgradeFileName = GetUpgradeAppPath();
         return File.Exists(upgradeFileName);
+    }
+
+    public static string GetUpgradeAppPath()
+    {
+        var fileName = GetExeName("AmazTool");
+        var packagedPath = Path.Combine(GetBaseDirectory(UpgradeAppFolderName), fileName);
+        if (File.Exists(packagedPath))
+        {
+            return packagedPath;
+        }
+
+        return Path.Combine(GetBaseDirectory(), fileName);
     }
 
     /// <summary>

@@ -23,12 +23,14 @@ internal class UpgradeApp
 
     public static void Upgrade(string fileName)
     {
+        Utils.Log($"Upgrade started. Target path: {Utils.StartupPath()}");
         Console.WriteLine($"{Resx.Resource.StartUnzipping}\n{fileName}");
 
         Utils.Waiting(5);
 
         if (!File.Exists(fileName))
         {
+            Utils.Log($"Upgrade package not found: {fileName}");
             Console.WriteLine(Resx.Resource.UpgradeFileNotFound);
             return;
         }
@@ -43,6 +45,7 @@ internal class UpgradeApp
                 var path = pp.MainModule?.FileName ?? string.Empty;
                 if (string.Equals(path, appExePath, StringComparison.OrdinalIgnoreCase))
                 {
+                    Utils.Log($"Stopping running app instance: {path}");
                     pp.Kill();
                     pp.WaitForExit(1000);
                 }
@@ -50,6 +53,7 @@ internal class UpgradeApp
         }
         catch (Exception ex)
         {
+            Utils.Log($"Failed to terminate process: {ex}");
             Console.WriteLine(Resx.Resource.FailedTerminateProcess + ex.StackTrace);
         }
 
@@ -74,6 +78,7 @@ internal class UpgradeApp
                         continue;
                     }
 
+                    Utils.Log($"Extracting entry: {entry.FullName}");
                     Console.WriteLine(entry.FullName);
 
                     var relativePath = GetEntryRelativePath(entry.FullName, archiveRootFolder);
@@ -106,10 +111,12 @@ internal class UpgradeApp
                         throw new IOException($"Failed to extract {entry.FullName} to {entryOutputPath}");
                     }
 
+                    Utils.Log($"Updated file: {entryOutputPath}");
                     Console.WriteLine(entryOutputPath);
                 }
                 catch (Exception ex)
                 {
+                    Utils.Log($"Entry extraction failed: {ex}");
                     sb.Append(ex.StackTrace);
                 }
             }
@@ -121,21 +128,25 @@ internal class UpgradeApp
         }
         catch (Exception ex)
         {
+            Utils.Log($"Upgrade failed: {ex}");
             Console.WriteLine(Resx.Resource.FailedUpgrade + ex.StackTrace);
             RestoreAppFromBackup(currentAppPath, appBackupPath);
         }
 
         if (sb.Length > 0)
         {
+            Utils.Log($"Upgrade completed with entry failures. Rolling back app executable.");
             Console.WriteLine(Resx.Resource.FailedUpgrade + sb);
             RestoreAppFromBackup(currentAppPath, appBackupPath);
         }
 
+        Utils.Log("Restarting NetCat after update.");
         Console.WriteLine(Resx.Resource.Restartv2rayN);
         Utils.Waiting(2);
 
         if (!Utils.StartApp())
         {
+            Utils.Log("Failed to restart application after update.");
             Console.WriteLine("Failed to restart application after update.");
         }
     }
@@ -230,6 +241,7 @@ internal class UpgradeApp
         }
 
         DeleteFileIfExists(appBackupPath);
+        Utils.Log($"Backed up current app to {appBackupPath}");
         File.Move(currentAppPath, appBackupPath, true);
     }
 
@@ -242,6 +254,7 @@ internal class UpgradeApp
         }
 
         DeleteFileIfExists(appBackupPath);
+        Utils.Log("App replacement finalized.");
     }
 
     private static void RestoreAppFromBackup(string currentAppPath, string appBackupPath)
@@ -255,6 +268,7 @@ internal class UpgradeApp
 
             DeleteFileIfExists(currentAppPath);
             File.Move(appBackupPath, currentAppPath, true);
+            Utils.Log($"Restored app from backup: {appBackupPath}");
         }
         catch
         {

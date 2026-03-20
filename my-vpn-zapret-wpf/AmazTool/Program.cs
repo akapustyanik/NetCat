@@ -7,6 +7,8 @@ internal static class Program
     {
         try
         {
+            Utils.Log($"AmazTool start. Args: {string.Join(" | ", args)}");
+
             // If no arguments are provided, display usage guidelines and exit
             if (args.Length == 0)
             {
@@ -23,6 +25,11 @@ internal static class Program
             // Parse command based on first argument
             switch (args[0].ToLowerInvariant())
             {
+                case "upgrade" when args.Length >= 3:
+                    Utils.SetTargetStartupPath(Uri.UnescapeDataString(args[1]));
+                    HandleUpgrade(Uri.UnescapeDataString(args[2]));
+                    break;
+
                 case "rebootas":
                     // Handle application restart
                     HandleRebootAsync();
@@ -47,6 +54,7 @@ internal static class Program
         catch (Exception ex)
         {
             // Global exception handling
+            Utils.Log($"Fatal updater error: {ex}");
             Console.WriteLine($"An error occurred: {ex.Message}");
             Console.WriteLine("Press any key to exit...");
             Console.ReadKey();
@@ -70,11 +78,11 @@ internal static class Program
     /// </summary>
     private static void HandleRebootAsync()
     {
-        Console.WriteLine("Restarting application...");
+        Utils.Log("Restarting application...");
         Thread.Sleep(1000);
         if (!Utils.StartApp())
         {
-            Console.WriteLine("Failed to restart application.");
+            Utils.Log("Failed to restart application.");
         }
     }
 
@@ -84,7 +92,7 @@ internal static class Program
     /// <param name="upgradeData">Data for the upgrade process</param>
     private static void HandleUpgrade(string upgradeData)
     {
-        Console.WriteLine("Upgrading application...");
+        Utils.Log($"Upgrading application with package: {upgradeData}");
         UpgradeApp.Upgrade(upgradeData);
     }
 }

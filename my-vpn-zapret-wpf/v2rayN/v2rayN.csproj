@@ -84,7 +84,7 @@
 
 		<Copy
 			SourceFiles="@(AmazToolPublishFile)"
-			DestinationFiles="@(AmazToolPublishFile->'$(PublishDir)%(RecursiveDir)%(Filename)%(Extension)')"
+			DestinationFiles="@(AmazToolPublishFile->'$(PublishDir)updater\%(RecursiveDir)%(Filename)%(Extension)')"
 			SkipUnchangedFiles="true" />
 	</Target>
 

@@ -1,9 +1,14 @@
 using System.Diagnostics;
+using System.Text;
 
 namespace AmazTool;
 
 internal class Utils
 {
+    private const string RebootAsArgument = "rebootas";
+    private static readonly object _logLock = new();
+    private static string? _targetStartupPath;
+
     public static string AppProcessName => "NetCat";
 
     public static string GetExePath()
@@ -11,9 +16,19 @@ internal class Utils
         return Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName ?? string.Empty;
     }
 
+    public static void SetTargetStartupPath(string? targetPath)
+    {
+        if (string.IsNullOrWhiteSpace(targetPath))
+        {
+            return;
+        }
+
+        _targetStartupPath = Path.GetFullPath(targetPath);
+    }
+
     public static string StartupPath()
     {
-        return AppDomain.CurrentDomain.BaseDirectory;
+        return _targetStartupPath ?? AppDomain.CurrentDomain.BaseDirectory;
     }
 
     public static string GetPath(string fileName)
@@ -50,14 +65,17 @@ internal class Utils
                     {
                         UseShellExecute = true,
                         FileName = appExePath,
+                        Arguments = RebootAsArgument,
                         WorkingDirectory = StartupPath()
                     }
                 };
                 process.Start();
+                Log($"Started app from {appExePath}");
                 return true;
             }
-            catch
+            catch (Exception ex)
             {
+                Log($"Restart attempt {i} failed: {ex.Message}");
                 Thread.Sleep(delayMs * i);
             }
         }
@@ -71,6 +89,27 @@ internal class Utils
         {
             Console.WriteLine(i);
             Thread.Sleep(1000);
+        }
+    }
+
+    public static void Log(string message)
+    {
+        try
+        {
+            var text = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} {message}";
+            Console.WriteLine(text);
+
+            lock (_logLock)
+            {
+                var logDir = Path.Combine(StartupPath(), "guiLogs");
+                Directory.CreateDirectory(logDir);
+                var logPath = Path.Combine(logDir, $"updater-{DateTime.Now:yyyy-MM-dd}.log");
+                File.AppendAllText(logPath, text + Environment.NewLine, Encoding.UTF8);
+            }
+        }
+        catch
+        {
+            // Ignore updater log failures to avoid breaking the update flow.
         }
     }
 }

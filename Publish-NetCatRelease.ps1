@@ -33,26 +33,7 @@ try {
         throw "Publish output was not created: $OutputDir"
     }
 
-    $amazToolBuildDir = Join-Path $repoRoot "my-vpn-zapret-wpf\AmazTool\bin\$Configuration\net8.0\$Runtime"
-    $amazToolFiles = @(
-        "AmazTool.exe",
-        "AmazTool.dll",
-        "AmazTool.deps.json",
-        "AmazTool.runtimeconfig.json"
-    )
-
-    foreach ($file in $amazToolFiles) {
-        $source = Join-Path $amazToolBuildDir $file
-        if (Test-Path $source) {
-            Copy-Item $source $OutputDir -Force
-        }
-    }
-
-    Get-ChildItem -Path $amazToolBuildDir -Directory -Filter "zh-*" -ErrorAction SilentlyContinue | ForEach-Object {
-        $targetDir = Join-Path $OutputDir $_.Name
-        New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
-        Copy-Item (Join-Path $_.FullName "AmazTool.resources.dll") $targetDir -Force
-    }
+    Get-ChildItem -Path $OutputDir -File -Filter "AmazTool*" -ErrorAction SilentlyContinue | Remove-Item -Force
 
     Compress-Archive -Path $OutputDir -DestinationPath $ZipPath -Force
 

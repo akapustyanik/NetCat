@@ -266,8 +266,21 @@ public class CheckUpdateViewModel : MyReactiveObject
                 return;
             }
 
-            var id = ProcUtils.ProcessStart(upgradeFileName, fileName, Utils.StartupPath());
-            if (id > 0)
+            var stagedUpgradeFileName = StageUpgradeApp(upgradeFileName);
+            Process proc = new()
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    UseShellExecute = true,
+                    FileName = stagedUpgradeFileName,
+                    WorkingDirectory = Path.GetDirectoryName(stagedUpgradeFileName) ?? Utils.GetTempPath(),
+                }
+            };
+            proc.StartInfo.ArgumentList.Add("upgrade");
+            proc.StartInfo.ArgumentList.Add(Utils.StartupPath());
+            proc.StartInfo.ArgumentList.Add(fileName);
+
+            if (proc.Start())
             {
                 await AppManager.Instance.AppExitAsync(true);
             }
@@ -275,7 +288,36 @@ public class CheckUpdateViewModel : MyReactiveObject
         catch (Exception ex)
         {
             await UpdateView(_v2rayN, ex.Message);
+            Logging.SaveLog(_tag, ex);
         }
+    }
+
+    private static string StageUpgradeApp(string upgradeFileName)
+    {
+        var sourceDir = Path.GetDirectoryName(upgradeFileName) ?? Utils.GetBaseDirectory();
+        var targetDir = Utils.GetTempPath($"updater-{Utils.GetGuid()}");
+        Directory.CreateDirectory(targetDir);
+
+        foreach (var file in Directory.GetFiles(sourceDir, "AmazTool*"))
+        {
+            File.Copy(file, Path.Combine(targetDir, Path.GetFileName(file)), true);
+        }
+
+        foreach (var resourceFile in Directory.GetFiles(sourceDir, "AmazTool.resources.dll", SearchOption.AllDirectories))
+        {
+            var relativePath = Path.GetRelativePath(sourceDir, resourceFile);
+            var targetPath = Path.Combine(targetDir, relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(targetPath) ?? targetDir);
+            File.Copy(resourceFile, targetPath, true);
+        }
+
+        var stagedUpgradeFileName = Path.Combine(targetDir, Path.GetFileName(upgradeFileName));
+        if (!File.Exists(stagedUpgradeFileName))
+        {
+            throw new FileNotFoundException("Failed to stage updater files.", stagedUpgradeFileName);
+        }
+
+        return stagedUpgradeFileName;
     }
 
     private async Task UpgradeCore()
