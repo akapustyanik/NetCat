@@ -48,7 +48,7 @@
 		<Content Include="..\..\my-vpn-zapret\resources\v2rayn\guiConfigs\guiNConfig.json">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 			<CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-			<Link>guiNConfig.json</Link>
+			<Link>userdata\guiNConfig.json</Link>
 		</Content>
 	</ItemGroup>
 
@@ -75,11 +75,10 @@
 
 	<Target Name="CopyAmazToolToPublish" AfterTargets="Publish">
 		<ItemGroup>
-			<AmazToolPublishFile Include="..\AmazTool\bin\$(Configuration)\net8.0\$(RuntimeIdentifier)\AmazTool.exe" Condition="Exists('..\AmazTool\bin\$(Configuration)\net8.0\$(RuntimeIdentifier)\AmazTool.exe')" />
-			<AmazToolPublishFile Include="..\AmazTool\bin\$(Configuration)\net8.0\$(RuntimeIdentifier)\AmazTool.dll" Condition="Exists('..\AmazTool\bin\$(Configuration)\net8.0\$(RuntimeIdentifier)\AmazTool.dll')" />
-			<AmazToolPublishFile Include="..\AmazTool\bin\$(Configuration)\net8.0\$(RuntimeIdentifier)\AmazTool.deps.json" Condition="Exists('..\AmazTool\bin\$(Configuration)\net8.0\$(RuntimeIdentifier)\AmazTool.deps.json')" />
-			<AmazToolPublishFile Include="..\AmazTool\bin\$(Configuration)\net8.0\$(RuntimeIdentifier)\AmazTool.runtimeconfig.json" Condition="Exists('..\AmazTool\bin\$(Configuration)\net8.0\$(RuntimeIdentifier)\AmazTool.runtimeconfig.json')" />
-			<AmazToolPublishFile Include="..\AmazTool\bin\$(Configuration)\net8.0\$(RuntimeIdentifier)\zh-*\AmazTool.resources.dll" Condition="Exists('..\AmazTool\bin\$(Configuration)\net8.0\$(RuntimeIdentifier)')" />
+			<AmazToolPublishFile
+				Include="..\AmazTool\bin\$(Configuration)\net8.0\$(RuntimeIdentifier)\**\*"
+				Exclude="..\AmazTool\bin\$(Configuration)\net8.0\$(RuntimeIdentifier)\guiLogs\**\*"
+				Condition="Exists('..\AmazTool\bin\$(Configuration)\net8.0\$(RuntimeIdentifier)')" />
 		</ItemGroup>
 
 		<Copy

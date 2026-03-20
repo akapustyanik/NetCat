@@ -8,6 +8,17 @@ namespace ServiceLib.Common;
 public class Utils
 {
     private static readonly string _tag = "Utils";
+    private const string UpgradeAppFolderName = "updater";
+    private const string UserDataFolderName = "userdata";
+    private static readonly string[] _legacyUserDataDirectories =
+    [
+        "binConfigs",
+        "guiBackups",
+        "guiConfigs",
+        "guiFonts",
+        "guiLogs",
+        "guiTemps",
+    ];
 
     #region Conversion Functions
 
@@ -703,8 +714,6 @@ public class Utils
 
     #region Miscellaneous
 
-    private const string UpgradeAppFolderName = "updater";
-
     public static bool UpgradeAppExists(out string upgradeFileName)
     {
         upgradeFileName = GetUpgradeAppPath();
@@ -914,6 +923,24 @@ public class Utils
 
     #region TempPath
 
+    public static void EnsureUserDataLayout()
+    {
+        try
+        {
+            Directory.CreateDirectory(GetUserDataPath());
+            TryMigrateLegacyFile(Global.ConfigFileName, GetUserDataPath(Global.ConfigFileName));
+
+            foreach (var directory in _legacyUserDataDirectories)
+            {
+                TryMigrateLegacyDirectory(directory, Path.Combine(GetUserDataPath(), directory));
+            }
+        }
+        catch
+        {
+            // Ignore migration failures, the app can still operate with the legacy layout.
+        }
+    }
+
     public static bool HasWritePermission()
     {
         try
@@ -979,9 +1006,20 @@ public class Utils
         return GetBaseDirectory();
     }
 
+    public static string GetUserDataPath(string fileName = "")
+    {
+        var dataPath = Path.Combine(StartupPath(), UserDataFolderName);
+        if (!Directory.Exists(dataPath))
+        {
+            Directory.CreateDirectory(dataPath);
+        }
+
+        return fileName.IsNullOrEmpty() ? dataPath : Path.Combine(dataPath, fileName);
+    }
+
     public static string GetTempPath(string filename = "")
     {
-        var tempPath = Path.Combine(StartupPath(), "guiTemps");
+        var tempPath = Path.Combine(GetUserDataPath(), "guiTemps");
         if (!Directory.Exists(tempPath))
         {
             Directory.CreateDirectory(tempPath);
@@ -999,7 +1037,7 @@ public class Utils
 
     public static string GetBackupPath(string filename)
     {
-        var tempPath = Path.Combine(StartupPath(), "guiBackups");
+        var tempPath = Path.Combine(GetUserDataPath(), "guiBackups");
         if (!Directory.Exists(tempPath))
         {
             Directory.CreateDirectory(tempPath);
@@ -1012,10 +1050,10 @@ public class Utils
     {
         if (string.Equals(filename, Global.ConfigFileName, StringComparison.OrdinalIgnoreCase))
         {
-            return Path.Combine(StartupPath(), filename);
+            return Path.Combine(GetUserDataPath(), filename);
         }
 
-        var tempPath = Path.Combine(StartupPath(), "guiConfigs");
+        var tempPath = Path.Combine(GetUserDataPath(), "guiConfigs");
         if (!Directory.Exists(tempPath))
         {
             Directory.CreateDirectory(tempPath);
@@ -1060,7 +1098,7 @@ public class Utils
 
     public static string GetLogPath(string filename = "")
     {
-        var tempPath = Path.Combine(StartupPath(), "guiLogs");
+        var tempPath = Path.Combine(GetUserDataPath(), "guiLogs");
         if (!Directory.Exists(tempPath))
         {
             Directory.CreateDirectory(tempPath);
@@ -1078,7 +1116,7 @@ public class Utils
 
     public static string GetFontsPath(string filename = "")
     {
-        var tempPath = Path.Combine(StartupPath(), "guiFonts");
+        var tempPath = Path.Combine(GetUserDataPath(), "guiFonts");
         if (!Directory.Exists(tempPath))
         {
             Directory.CreateDirectory(tempPath);
@@ -1096,7 +1134,7 @@ public class Utils
 
     public static string GetBinConfigPath(string filename = "")
     {
-        var tempPath = Path.Combine(StartupPath(), "binConfigs");
+        var tempPath = Path.Combine(GetUserDataPath(), "binConfigs");
         if (!Directory.Exists(tempPath))
         {
             Directory.CreateDirectory(tempPath);
@@ -1109,6 +1147,77 @@ public class Utils
         else
         {
             return Path.Combine(tempPath, filename);
+        }
+    }
+
+    private static IEnumerable<string> GetLegacyDataRoots()
+    {
+        yield return StartupPath();
+
+        var baseDirectory = GetBaseDirectory();
+        if (!string.Equals(baseDirectory.TrimEnd('\\'), StartupPath().TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+        {
+            yield return baseDirectory;
+        }
+    }
+
+    private static void TryMigrateLegacyFile(string legacyFileName, string targetPath)
+    {
+        if (File.Exists(targetPath))
+        {
+            return;
+        }
+
+        foreach (var root in GetLegacyDataRoots())
+        {
+            var sourcePath = Path.Combine(root, legacyFileName);
+            if (!File.Exists(sourcePath))
+            {
+                continue;
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(targetPath) ?? GetUserDataPath());
+            File.Copy(sourcePath, targetPath, true);
+            return;
+        }
+    }
+
+    private static void TryMigrateLegacyDirectory(string legacyDirectoryName, string targetPath)
+    {
+        if (Directory.Exists(targetPath) && Directory.EnumerateFileSystemEntries(targetPath).Any())
+        {
+            return;
+        }
+
+        foreach (var root in GetLegacyDataRoots())
+        {
+            var sourcePath = Path.Combine(root, legacyDirectoryName);
+            if (!Directory.Exists(sourcePath))
+            {
+                continue;
+            }
+
+            CopyDirectoryContents(sourcePath, targetPath);
+            return;
+        }
+    }
+
+    private static void CopyDirectoryContents(string sourcePath, string targetPath)
+    {
+        Directory.CreateDirectory(targetPath);
+
+        foreach (var directory in Directory.GetDirectories(sourcePath, "*", SearchOption.AllDirectories))
+        {
+            var relativePath = Path.GetRelativePath(sourcePath, directory);
+            Directory.CreateDirectory(Path.Combine(targetPath, relativePath));
+        }
+
+        foreach (var file in Directory.GetFiles(sourcePath, "*", SearchOption.AllDirectories))
+        {
+            var relativePath = Path.GetRelativePath(sourcePath, file);
+            var destinationPath = Path.Combine(targetPath, relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(destinationPath) ?? targetPath);
+            File.Copy(file, destinationPath, true);
         }
     }
 

@@ -77,6 +77,7 @@ public class GUIItem
     public string? ZapretPath { get; set; }
     public string? LastZapretConfig { get; set; }
     public bool ZapretEnabled { get; set; }
+    public bool HasCompletedOnboarding { get; set; }
 }
 
 [Serializable]

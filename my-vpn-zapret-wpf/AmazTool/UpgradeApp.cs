@@ -11,8 +11,10 @@ internal class UpgradeApp
         "binConfigs",
         "guiBackups",
         "guiConfigs",
+        "guiFonts",
         "guiLogs",
         "guiTemps",
+        "userdata",
     };
 
     private static readonly HashSet<string> _preservedFiles = new(StringComparer.OrdinalIgnoreCase)

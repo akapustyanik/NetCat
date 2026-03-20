@@ -298,17 +298,12 @@ public class CheckUpdateViewModel : MyReactiveObject
         var targetDir = Utils.GetTempPath($"updater-{Utils.GetGuid()}");
         Directory.CreateDirectory(targetDir);
 
-        foreach (var file in Directory.GetFiles(sourceDir, "AmazTool*"))
+        foreach (var file in Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories))
         {
-            File.Copy(file, Path.Combine(targetDir, Path.GetFileName(file)), true);
-        }
-
-        foreach (var resourceFile in Directory.GetFiles(sourceDir, "AmazTool.resources.dll", SearchOption.AllDirectories))
-        {
-            var relativePath = Path.GetRelativePath(sourceDir, resourceFile);
+            var relativePath = Path.GetRelativePath(sourceDir, file);
             var targetPath = Path.Combine(targetDir, relativePath);
             Directory.CreateDirectory(Path.GetDirectoryName(targetPath) ?? targetDir);
-            File.Copy(resourceFile, targetPath, true);
+            File.Copy(file, targetPath, true);
         }
 
         var stagedUpgradeFileName = Path.Combine(targetDir, Path.GetFileName(upgradeFileName));

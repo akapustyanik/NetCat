@@ -348,6 +348,42 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         set => SetField(ref _trayToolTip, value);
     }
 
+    private string _diagnosticOverview = string.Empty;
+    public string DiagnosticOverview
+    {
+        get => _diagnosticOverview;
+        set => SetField(ref _diagnosticOverview, value);
+    }
+
+    private string _dataLayoutSummary = string.Empty;
+    public string DataLayoutSummary
+    {
+        get => _dataLayoutSummary;
+        set => SetField(ref _dataLayoutSummary, value);
+    }
+
+    private string _onboardingSummary = string.Empty;
+    public string OnboardingSummary
+    {
+        get => _onboardingSummary;
+        set => SetField(ref _onboardingSummary, value);
+    }
+
+    private bool _showOnboarding;
+    public bool ShowOnboarding
+    {
+        get => _showOnboarding;
+        set
+        {
+            if (SetField(ref _showOnboarding, value))
+            {
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(OnboardingVisibility)));
+            }
+        }
+    }
+
+    public Visibility OnboardingVisibility => ShowOnboarding ? Visibility.Visible : Visibility.Collapsed;
+
     public string AppVersion => $"v{Utils.GetVersionInfo()}";
 
     public MainWindow()
@@ -396,6 +432,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         _ = RefreshProfilesAsync();
         UpdateTrayToolTip();
         _ = UpdateConnectionPingAsync();
+        _ = RefreshSupportSnapshotAsync(false);
     }
 
     protected override async void OnLoaded(object? sender, RoutedEventArgs e)
@@ -413,6 +450,12 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         }
 
         await RefreshZapretAsync();
+        await RefreshSupportSnapshotAsync(true);
+        if (ShowOnboarding)
+        {
+            MainTabs.SelectedIndex = Math.Max(MainTabs.Items.Count - 1, 0);
+            SetStatus("Open Settings to complete the first launch checklist.");
+        }
     }
 
     private void LoadQuickLists()
@@ -474,6 +517,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             ?? Profiles.FirstOrDefault(t => t.IsActive)
             ?? Profiles.FirstOrDefault();
         await UpdateConnectionPingAsync();
+        await RefreshSupportSnapshotAsync(false);
     }
 
     private async Task ApplyQuickRulesAsync(bool reload)
@@ -525,6 +569,88 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     private void SetZapretStatus(string message)
     {
         ZapretStatus = message;
+    }
+
+    private async Task RefreshSupportSnapshotAsync(bool refreshDebugLog)
+    {
+        DataLayoutSummary = BuildDataLayoutSummary();
+        DiagnosticOverview = await BuildDiagnosticOverviewAsync();
+        RefreshOnboardingState();
+
+        if (refreshDebugLog || string.IsNullOrWhiteSpace(DebugLog))
+        {
+            DebugLog = await BuildDebugInfoAsync();
+        }
+    }
+
+    private void RefreshOnboardingState()
+    {
+        ShowOnboarding = !_config.GuiItem.HasCompletedOnboarding && Profiles.Count == 0;
+        OnboardingSummary = BuildOnboardingSummary();
+    }
+
+    private string BuildDataLayoutSummary()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Mode: separated install and user data");
+        sb.AppendLine($"Install root: {Utils.StartupPath()}");
+        sb.AppendLine($"User data root: {Utils.GetUserDataPath()}");
+        sb.AppendLine($"Config file: {Utils.GetConfigPath(Global.ConfigFileName)}");
+        sb.AppendLine($"Log folder: {Utils.GetLogPath()}");
+        sb.AppendLine($"Temp folder: {Utils.GetTempPath()}");
+        sb.AppendLine($"Generated configs: {Utils.GetBinConfigPath()}");
+        sb.AppendLine($"Updater: {Utils.GetUpgradeAppPath()}");
+        return sb.ToString().TrimEnd();
+    }
+
+    private async Task<string> BuildDiagnosticOverviewAsync()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"Version: {AppVersion}");
+        sb.AppendLine($"Profiles: {Profiles.Count}");
+        sb.AppendLine($"VPN: {(VpnEnabled ? "enabled" : "disabled")}");
+        sb.AppendLine($"TUN: {(TunEnabled ? "enabled" : "disabled")}");
+        sb.AppendLine($"Zapret: {(ZapretRunning ? "running" : "stopped")}");
+        sb.AppendLine($"Updater: {(Utils.UpgradeAppExists(out var updaterPath) ? "ready" : "missing")}");
+        sb.AppendLine($"Updater path: {updaterPath}");
+        sb.AppendLine($"Xray core: {(await CoreExistsAsync(ECoreType.Xray) ? "ready" : "missing")}");
+        sb.AppendLine($"sing-box core: {(await CoreExistsAsync(ECoreType.sing_box) ? "ready" : "missing")}");
+        sb.AppendLine($"Zapret folder: {(ZapretPath.IsNullOrEmpty() ? "missing" : ZapretPath)}");
+        sb.AppendLine($"Connection: {ConnectionPing}");
+        return sb.ToString().TrimEnd();
+    }
+
+    private string BuildOnboardingSummary()
+    {
+        var xrayReady = CoreExists(ECoreType.Xray);
+        var singboxReady = CoreExists(ECoreType.sing_box);
+        var zapretReady = ZapretPath.IsNotEmpty() && ZapretConfigs.Count > 0;
+        var updaterReady = Utils.UpgradeAppExists(out _);
+
+        var sb = new StringBuilder();
+        sb.AppendLine(xrayReady ? "[OK] Xray core is available." : "[TODO] Xray core is missing.");
+        sb.AppendLine(singboxReady ? "[OK] sing-box core is available." : "[TODO] sing-box core is missing.");
+        sb.AppendLine(zapretReady ? "[OK] Zapret bundle is detected." : "[TODO] Select or install Zapret bundle.");
+        sb.AppendLine(updaterReady ? "[OK] App updater is available." : "[TODO] App updater is missing.");
+        sb.AppendLine(Profiles.Count > 0 ? "[OK] At least one profile is configured." : "[TODO] Add a VPN profile or subscription.");
+        sb.AppendLine("Recommended next steps:");
+        sb.AppendLine("1. Import a profile or subscription.");
+        sb.AppendLine("2. Open Update and check modules.");
+        sb.AppendLine("3. Run Diagnostics > Test Core and Test Proxy IP.");
+        sb.AppendLine("4. Configure Zapret only if you need direct bypass mode.");
+        return sb.ToString().TrimEnd();
+    }
+
+    private bool CoreExists(ECoreType coreType)
+    {
+        var coreInfo = CoreInfoManager.Instance.GetCoreInfo(coreType);
+        var coreExec = CoreInfoManager.Instance.GetCoreExecFile(coreInfo, out _);
+        return coreExec.IsNotEmpty() && File.Exists(coreExec);
+    }
+
+    private Task<bool> CoreExistsAsync(ECoreType coreType)
+    {
+        return Task.FromResult(CoreExists(coreType));
     }
 
     private async Task RefreshZapretAsync()
@@ -592,6 +718,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         }
 
         await Task.CompletedTask;
+        await RefreshSupportSnapshotAsync(false);
     }
 
     private async void MainWindow_Closing(object? sender, CancelEventArgs e)
@@ -1441,7 +1568,8 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 
     private async void OnRefreshDebug(object sender, RoutedEventArgs e)
     {
-        DebugLog = await BuildDebugInfoAsync();
+        await RefreshSupportSnapshotAsync(true);
+        SetStatus("Diagnostics refreshed");
     }
 
     private void OnCopyDebug(object sender, RoutedEventArgs e)
@@ -1459,14 +1587,70 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         SetStatus("Debug output cleared");
     }
 
+    private async void OnExportDiagnostics(object sender, RoutedEventArgs e)
+    {
+        await RefreshSupportSnapshotAsync(true);
+        var fileName = Utils.GetLogPath($"diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.txt");
+        var export = new StringBuilder();
+        export.AppendLine(DiagnosticOverview);
+        export.AppendLine();
+        export.AppendLine(DataLayoutSummary);
+        export.AppendLine();
+        export.AppendLine(DebugLog);
+        await File.WriteAllTextAsync(fileName, export.ToString());
+        SetStatus($"Diagnostics exported: {Path.GetFileName(fileName)}");
+        OpenPath(Path.GetDirectoryName(fileName) ?? Utils.GetLogPath());
+    }
+
+    private async void OnApplyRecommendedSetup(object sender, RoutedEventArgs e)
+    {
+        HideToTrayOnClose = true;
+        _config.UiItem.Hide2TrayWhenClose = true;
+        BypassPrivate = true;
+
+        await EnsureXrayCoreAsync();
+        await EnsureSingboxCoreAsync();
+        await ApplyQuickRulesAsync(reload: false);
+        await RefreshZapretAsync();
+        await ConfigHandler.SaveConfig(_config);
+        await RefreshSupportSnapshotAsync(true);
+        SetStatus("Recommended setup applied");
+    }
+
+    private async void OnDismissOnboarding(object sender, RoutedEventArgs e)
+    {
+        _config.GuiItem.HasCompletedOnboarding = true;
+        await ConfigHandler.SaveConfig(_config);
+        RefreshOnboardingState();
+        SetStatus("First launch checklist hidden");
+    }
+
+    private void OnOpenInstallFolder(object sender, RoutedEventArgs e)
+    {
+        OpenPath(Utils.StartupPath());
+    }
+
+    private void OnOpenUserDataFolder(object sender, RoutedEventArgs e)
+    {
+        OpenPath(Utils.GetUserDataPath());
+    }
+
+    private void OnOpenLogsFolder(object sender, RoutedEventArgs e)
+    {
+        OpenPath(Utils.GetLogPath());
+    }
+
     private async Task<string> BuildDebugInfoAsync()
     {
         var sb = new StringBuilder();
         sb.AppendLine(Utils.GetRuntimeInfo());
         sb.AppendLine($"Version: {Utils.GetVersion()}");
-        sb.AppendLine($"StartupPath: {Utils.StartupPath()}");
+        sb.AppendLine($"InstallPath: {Utils.StartupPath()}");
+        sb.AppendLine($"UserDataPath: {Utils.GetUserDataPath()}");
         sb.AppendLine($"BinPath: {Utils.GetBinPath("")}");
         sb.AppendLine($"ConfigPath: {Utils.GetConfigPath(Global.ConfigFileName)}");
+        sb.AppendLine($"LogPath: {Utils.GetLogPath()}");
+        sb.AppendLine($"UpdaterPath: {Utils.GetUpgradeAppPath()}");
         sb.AppendLine($"CoreConfig: {Utils.GetBinConfigPath(Global.CoreConfigFileName)}");
         sb.AppendLine($"SystemProxyType: {_config.SystemProxyItem.SysProxyType}");
         sb.AppendLine($"SystemProxyAdvancedProtocol: {_config.SystemProxyItem.SystemProxyAdvancedProtocol}");
@@ -1491,6 +1675,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         sb.AppendLine($"BlockDomains: {BlockDomains.Count}");
         sb.AppendLine($"ProxyOnlyMode: {ProxyOnlyMode}");
         sb.AppendLine($"BypassPrivate: {BypassPrivate}");
+        sb.AppendLine($"OnboardingCompleted: {_config.GuiItem.HasCompletedOnboarding}");
 
         var defaultProfile = SelectedProfile != null
             ? await AppManager.Instance.GetProfileItem(SelectedProfile.IndexId)
@@ -2680,6 +2865,28 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         var tunState = TunEnabled ? "ON" : "OFF";
         var zapretState = ZapretEnabled ? "ON" : "OFF";
         TrayToolTip = $"NetCat | VPN: {vpnState} | TUN: {tunState} | Zapret: {zapretState}{Environment.NewLine}{ConnectionPing}";
+    }
+
+    private void OpenPath(string path)
+    {
+        if (path.IsNullOrEmpty())
+        {
+            return;
+        }
+
+        try
+        {
+            Directory.CreateDirectory(path);
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = path,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Failed to open path: {ex.Message}");
+        }
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

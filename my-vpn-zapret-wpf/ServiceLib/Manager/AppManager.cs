@@ -59,6 +59,7 @@ public sealed class AppManager
             Environment.SetEnvironmentVariable(Global.LocalAppData, "1", EnvironmentVariableTarget.Process);
         }
 
+        Utils.EnsureUserDataLayout();
         Logging.Setup();
         var config = ConfigHandler.LoadConfig();
         if (config == null)

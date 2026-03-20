@@ -2,7 +2,8 @@ param(
     [string]$Configuration = "Release",
     [string]$Runtime = "win-x64",
     [string]$Label = "local",
-    [string]$Version = ""
+    [string]$Version = "",
+    [string]$SourcePublishDir = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -55,7 +56,8 @@ try {
         -Configuration $Configuration `
         -Runtime $Runtime `
         -OutputDir $outputDir `
-        -ZipPath $zipPath
+        -ZipPath $zipPath `
+        -SourcePublishDir $SourcePublishDir
 
     Write-Host "Pre-release folder: $outputDir"
     Write-Host "Pre-release zip: $zipPath"
