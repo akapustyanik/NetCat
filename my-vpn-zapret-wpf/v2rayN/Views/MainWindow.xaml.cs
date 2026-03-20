@@ -12,6 +12,8 @@ using System.Net.Http;
 using System.Windows.Threading;
 using System.Windows.Media;
 using System.Windows.Data;
+using System.Windows.Controls;
+using System.Windows.Media.Imaging;
 using H.NotifyIcon;
 using MaterialDesignColors;
 using MaterialDesignColors.ColorManipulation;
@@ -31,6 +33,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 {
     private const double CustomColorPlaneWidth = 260;
     private const double CustomColorPlaneHeight = 160;
+    private const int SecretAutoRunClickThreshold = 7;
 
     private readonly Config _config;
     private readonly PaletteHelper _paletteHelper = new();
@@ -44,6 +47,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     private bool _isAutoTestingZapret;
     private bool _startupUiHandled;
     private bool _startupZapretRestorePending = true;
+    private int _autoRunSecretClickCount;
     private CancellationTokenSource? _zapretAutoTestCts;
     private Task? _zapretAutoTestTask;
     private RegisteredWaitHandle? _singleInstanceWaitHandle;
@@ -753,6 +757,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         await AutoStartupHandler.UpdateTask(_config);
         await ConfigHandler.SaveConfig(_config);
         SetStatus(AutoRun ? "Autostart enabled" : "Autostart disabled");
+        TryShowAutoRunSecret();
     }
 
     private async void HideToTrayOnClose_Checked(object sender, RoutedEventArgs e)
@@ -2886,6 +2891,76 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         catch (Exception ex)
         {
             SetStatus($"Failed to open path: {ex.Message}");
+        }
+    }
+
+    private void TryShowAutoRunSecret()
+    {
+        if (!IsLoaded)
+        {
+            return;
+        }
+
+        _autoRunSecretClickCount++;
+        if (_autoRunSecretClickCount < SecretAutoRunClickThreshold)
+        {
+            return;
+        }
+
+        _autoRunSecretClickCount = 0;
+        var secretImagePath = Utils.GetPath("secret.png");
+        if (!File.Exists(secretImagePath))
+        {
+            SetStatus("secret.png not found");
+            return;
+        }
+
+        try
+        {
+            var bitmap = new BitmapImage();
+            bitmap.BeginInit();
+            bitmap.CacheOption = BitmapCacheOption.OnLoad;
+            bitmap.UriSource = new Uri(secretImagePath, UriKind.Absolute);
+            bitmap.EndInit();
+            bitmap.Freeze();
+
+            var image = new Image
+            {
+                Source = bitmap,
+                Stretch = Stretch.Uniform,
+                Margin = new Thickness(12)
+            };
+
+            var window = new Window
+            {
+                Title = "Secret",
+                Owner = this,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Width = Math.Min(Math.Max(bitmap.PixelWidth + 48, 420), 1100),
+                Height = Math.Min(Math.Max(bitmap.PixelHeight + 72, 360), 900),
+                MinWidth = 360,
+                MinHeight = 280,
+                Icon = this.Icon,
+                Background = Brushes.Black,
+                Content = new Border
+                {
+                    Background = Brushes.Black,
+                    Padding = new Thickness(8),
+                    Child = new ScrollViewer
+                    {
+                        HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                        VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                        Content = image
+                    }
+                }
+            };
+
+            window.ShowDialog();
+            SetStatus("Secret unlocked");
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Failed to open secret: {ex.Message}");
         }
     }
 

@@ -41,17 +41,7 @@ internal class UpgradeApp
         try
         {
             var appExePath = Utils.GetAppExePath();
-            var existing = Process.GetProcessesByName(Utils.AppProcessName);
-            foreach (var pp in existing)
-            {
-                var path = pp.MainModule?.FileName ?? string.Empty;
-                if (string.Equals(path, appExePath, StringComparison.OrdinalIgnoreCase))
-                {
-                    Utils.Log($"Stopping running app instance: {path}");
-                    pp.Kill();
-                    pp.WaitForExit(1000);
-                }
-            }
+            TerminateRunningAppInstances(appExePath);
         }
         catch (Exception ex)
         {
@@ -64,6 +54,9 @@ internal class UpgradeApp
         var currentAppPath = Utils.GetAppExePath();
         var appBackupPath = $"{currentAppPath}.tmp";
         var currentUpdaterPath = Utils.GetExePath();
+        var targetUpdaterDirectory = Path.GetFullPath(Utils.GetPath("updater"));
+        var runningUpdaterDirectory = Path.GetFullPath(Path.GetDirectoryName(currentUpdaterPath) ?? Utils.StartupPath());
+        var skipTargetUpdaterReplacement = string.Equals(runningUpdaterDirectory.TrimEnd('\\'), targetUpdaterDirectory.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
         var appEntryUpdated = false;
         try
         {
@@ -98,6 +91,12 @@ internal class UpgradeApp
 
                     if (string.Equals(currentUpdaterPath, entryOutputPath, StringComparison.OrdinalIgnoreCase))
                     {
+                        continue;
+                    }
+
+                    if (skipTargetUpdaterReplacement && IsPathUnderDirectory(entryOutputPath, targetUpdaterDirectory))
+                    {
+                        Utils.Log($"Skipping updater file replacement for running in-place updater: {entryOutputPath}");
                         continue;
                     }
 
@@ -233,6 +232,40 @@ internal class UpgradeApp
         }
 
         return _preservedTopLevelDirectories.Contains(segments[0]);
+    }
+
+    private static void TerminateRunningAppInstances(string appExePath)
+    {
+        foreach (var process in Process.GetProcessesByName(Utils.AppProcessName))
+        {
+            try
+            {
+                var processPath = process.MainModule?.FileName ?? string.Empty;
+                if (!string.Equals(processPath, appExePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                Utils.Log($"Stopping running app instance: {processPath}");
+                process.Kill();
+                process.WaitForExit(1000);
+            }
+            catch (Exception ex)
+            {
+                Utils.Log($"Failed to inspect or terminate process {process.Id}: {ex.Message}");
+            }
+            finally
+            {
+                process.Dispose();
+            }
+        }
+    }
+
+    private static bool IsPathUnderDirectory(string filePath, string directoryPath)
+    {
+        var normalizedDirectory = Path.GetFullPath(directoryPath).TrimEnd('\\') + "\\";
+        var normalizedFilePath = Path.GetFullPath(filePath);
+        return normalizedFilePath.StartsWith(normalizedDirectory, StringComparison.OrdinalIgnoreCase);
     }
 
     private static void BackupCurrentApp(string currentAppPath, string appBackupPath)

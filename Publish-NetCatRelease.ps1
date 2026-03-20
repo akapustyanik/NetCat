@@ -38,6 +38,33 @@ function Get-TargetFramework {
     return $frameworkNode.Trim()
 }
 
+function Resolve-PublishOutputDirectory {
+    param(
+        [string]$RepoRoot,
+        [string]$Configuration,
+        [string]$TargetFramework,
+        [string]$Runtime,
+        [string]$ExplicitSourcePublishDir
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitSourcePublishDir)) {
+        return [System.IO.Path]::GetFullPath((Join-Path $RepoRoot $ExplicitSourcePublishDir))
+    }
+
+    $candidateDirs = @(
+        (Join-Path $RepoRoot "my-vpn-zapret-wpf\v2rayN\bin\$Configuration\$TargetFramework\$Runtime\publish"),
+        (Join-Path $RepoRoot "my-vpn-zapret-wpf\v2rayN\bin\$Configuration\$TargetFramework\$Runtime")
+    )
+
+    foreach ($candidate in $candidateDirs) {
+        if (Test-Path (Join-Path $candidate "NetCat.exe")) {
+            return $candidate
+        }
+    }
+
+    return $candidateDirs[0]
+}
+
 Push-Location $repoRoot
 try {
     $env:DOTNET_CLI_HOME = Join-Path $repoRoot ".dotnet-cli"
@@ -45,11 +72,12 @@ try {
     $projectPath = Join-Path $repoRoot "my-vpn-zapret-wpf\v2rayN\v2rayN.csproj"
     $targetFramework = Get-TargetFramework -ProjectPath $projectPath
     $stagingDir = Join-Path $repoRoot ".publish-staging"
-    $publishSourceDir = if ([string]::IsNullOrWhiteSpace($SourcePublishDir)) {
-        Join-Path $repoRoot "my-vpn-zapret-wpf\v2rayN\bin\$Configuration\$targetFramework\$Runtime\publish"
-    } else {
-        [System.IO.Path]::GetFullPath((Join-Path $repoRoot $SourcePublishDir))
-    }
+    $publishSourceDir = Resolve-PublishOutputDirectory `
+        -RepoRoot $repoRoot `
+        -Configuration $Configuration `
+        -TargetFramework $targetFramework `
+        -Runtime $Runtime `
+        -ExplicitSourcePublishDir $SourcePublishDir
 
     $version = Get-NetCatVersion -PropsPath (Join-Path $repoRoot "my-vpn-zapret-wpf\Directory.Build.props")
     if ([string]::IsNullOrWhiteSpace($OutputDir)) {
@@ -78,6 +106,12 @@ try {
             Remove-Item $publishSourceDir -Recurse -Force
         }
         dotnet publish $projectPath -c $Configuration -r $Runtime --self-contained false
+        $publishSourceDir = Resolve-PublishOutputDirectory `
+            -RepoRoot $repoRoot `
+            -Configuration $Configuration `
+            -TargetFramework $targetFramework `
+            -Runtime $Runtime `
+            -ExplicitSourcePublishDir $SourcePublishDir
         if (-not (Test-Path $publishSourceDir)) {
             throw "Publish output was not created: $publishSourceDir"
         }
