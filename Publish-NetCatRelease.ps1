@@ -73,6 +73,8 @@ try {
     $projectPath = Join-Path $repoRoot "my-vpn-zapret-wpf\v2rayN\v2rayN.csproj"
     $targetFramework = Get-TargetFramework -ProjectPath $projectPath
     $stagingDir = Join-Path $repoRoot ".publish-staging"
+    $zipStagingDir = Join-Path $repoRoot ".zip-staging"
+    $archiveRootName = "NetCat"
     $publishSourceDir = Resolve-PublishOutputDirectory `
         -RepoRoot $repoRoot `
         -Configuration $Configuration `
@@ -85,7 +87,7 @@ try {
         $OutputDir = ".\artifacts\NetCat-releaseV$version"
     }
     if ([string]::IsNullOrWhiteSpace($ZipPath)) {
-        $ZipPath = ".\artifacts\NetCat-releaseV$version.zip"
+        $ZipPath = ".\artifacts\NetCat-v$version.zip"
     }
 
     $OutputDir = [System.IO.Path]::GetFullPath($OutputDir)
@@ -101,6 +103,9 @@ try {
 
     if (Test-Path $stagingDir) {
         Remove-Item $stagingDir -Recurse -Force
+    }
+    if (Test-Path $zipStagingDir) {
+        Remove-Item $zipStagingDir -Recurse -Force
     }
     if ([string]::IsNullOrWhiteSpace($SourcePublishDir)) {
         if (Test-Path $publishSourceDir) {
@@ -141,12 +146,17 @@ try {
         runtime = $Runtime
         configuration = $Configuration
         built_at = (Get-Date).ToString("o")
-        package_root = [System.IO.Path]::GetFileName($OutputDir)
+        package_root = $archiveRootName
     } | ConvertTo-Json
     Set-Content -Path (Join-Path $OutputDir "release-manifest.json") -Value $manifest -Encoding UTF8
 
-    Compress-Archive -Path $OutputDir -DestinationPath $ZipPath -Force
+    $archiveRootPath = Join-Path $zipStagingDir $archiveRootName
+    New-Item -ItemType Directory -Path $zipStagingDir -Force | Out-Null
+    Copy-Item $OutputDir $archiveRootPath -Recurse
+
+    Compress-Archive -Path $archiveRootPath -DestinationPath $ZipPath -Force
     Remove-Item $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item $zipStagingDir -Recurse -Force -ErrorAction SilentlyContinue
 
     Write-Host "Published folder: $OutputDir"
     Write-Host "Release zip: $ZipPath"

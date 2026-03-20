@@ -3,8 +3,8 @@
 Релизный процесс:
 - локальная тестовая сборка: `pwsh -File .\Publish-NetCatPreRelease.ps1 -Label smoke`
 - финальная сборка релиза: `pwsh -File .\Publish-NetCatRelease.ps1`
-- итоговый архив всегда создаётся как `artifacts\NetCat-releaseV<version>.zip`
-- внутри релиза одна корневая папка и файл `release-manifest.json`
+- итоговый архив всегда создаётся как `artifacts\NetCat-v<version>.zip`
+- внутри релиза одна корневая папка `NetCat` и файл `release-manifest.json`
 
 Структура данных:
 - системные файлы приложения остаются в корне установки
