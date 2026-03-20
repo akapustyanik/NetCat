@@ -20,5 +20,6 @@ tmp-*.json
 *.suo
 *.cache
 
+Publish-NetCatPreRelease.ps1
 my-vpn-zapret/resources/v2rayn/v2rayN.exe
 my-vpn-zapret/

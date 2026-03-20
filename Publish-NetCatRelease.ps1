@@ -66,6 +66,67 @@ function Resolve-PublishOutputDirectory {
     return $candidateDirs[0]
 }
 
+function Test-CompleteBinLayout {
+    param([string]$PackageRoot)
+
+    $requiredPaths = @(
+        "bin\xray\xray.exe",
+        "bin\sing_box\sing-box.exe",
+        "bin\geoip.dat",
+        "bin\geosite.dat"
+    )
+
+    foreach ($relativePath in $requiredPaths) {
+        if (-not (Test-Path (Join-Path $PackageRoot $relativePath))) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
+function Resolve-BundledBinSourceDirectory {
+    param([string]$RepoRoot)
+
+    $searchRoots = @(
+        (Join-Path $RepoRoot "artifacts"),
+        (Join-Path $RepoRoot "pre-releases")
+    ) | Where-Object { Test-Path $_ }
+
+    $candidateRoots = foreach ($searchRoot in $searchRoots) {
+        Get-ChildItem -Path $searchRoot -Directory -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { Test-CompleteBinLayout -PackageRoot $_.FullName }
+    }
+
+    return $candidateRoots |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1 -ExpandProperty FullName
+}
+
+function Ensure-BundledBinLayout {
+    param(
+        [string]$RepoRoot,
+        [string]$OutputDir
+    )
+
+    if (Test-CompleteBinLayout -PackageRoot $OutputDir) {
+        return
+    }
+
+    $binSourceDir = Resolve-BundledBinSourceDirectory -RepoRoot $RepoRoot
+    if ([string]::IsNullOrWhiteSpace($binSourceDir)) {
+        throw "Failed to find a complete bundled bin source directory under artifacts/ or pre-releases/."
+    }
+
+    $sourceBinPath = Join-Path $binSourceDir "bin"
+    $targetBinPath = Join-Path $OutputDir "bin"
+    if (Test-Path $targetBinPath) {
+        Remove-Item $targetBinPath -Recurse -Force
+    }
+
+    Copy-Item $sourceBinPath $targetBinPath -Recurse
+}
+
 Push-Location $repoRoot
 try {
     $env:DOTNET_CLI_HOME = Join-Path $repoRoot ".dotnet-cli"
@@ -128,6 +189,7 @@ try {
 
     Copy-Item $publishSourceDir $stagingDir -Recurse
     Copy-Item $stagingDir $OutputDir -Recurse
+    Ensure-BundledBinLayout -RepoRoot $repoRoot -OutputDir $OutputDir
 
     $userDataDir = Join-Path $OutputDir "userdata"
     $defaultConfigPath = Join-Path $repoRoot "my-vpn-zapret\resources\v2rayn\guiConfigs\guiNConfig.json"
