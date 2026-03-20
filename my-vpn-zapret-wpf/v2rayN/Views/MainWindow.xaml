@@ -546,40 +546,6 @@
                 <TabItem Header="Settings">
                     <ScrollViewer VerticalScrollBarVisibility="Auto" common:SmoothScrollBehavior.IsEnabled="True">
                         <StackPanel Margin="12">
-                            <GroupBox Header="First Launch" Style="{StaticResource MyGroupBox}" Margin="0,0,0,12" Visibility="{Binding OnboardingVisibility}">
-                                <StackPanel Margin="12">
-                                    <TextBlock FontSize="12" Opacity="0.8" TextWrapping="Wrap">
-                                        Чек-лист первого запуска. Он помогает быстро понять, готова ли программа к работе и что нужно настроить перед подключением.
-                                    </TextBlock>
-                                    <TextBox
-                                        Margin="0,8,0,0"
-                                        Text="{Binding OnboardingSummary}"
-                                        IsReadOnly="True"
-                                        AcceptsReturn="True"
-                                        TextWrapping="Wrap"
-                                        VerticalScrollBarVisibility="Auto"
-                                        HorizontalScrollBarVisibility="Disabled"
-                                        common:SmoothScrollBehavior.IsEnabled="True"
-                                        MinHeight="140" />
-                                    <StackPanel Margin="0,10,0,0" Orientation="Horizontal">
-                                        <Button
-                                            Content="Apply Recommended Setup"
-                                            Style="{StaticResource DefButton}"
-                                            Click="OnApplyRecommendedSetup" />
-                                        <Button
-                                            Content="Open Update"
-                                            Style="{StaticResource DefButton}"
-                                            Margin="8,0,0,0"
-                                            Click="OnOpenUpdateWindow" />
-                                        <Button
-                                            Content="Hide"
-                                            Style="{StaticResource DefButton}"
-                                            Margin="8,0,0,0"
-                                            Click="OnDismissOnboarding" />
-                                    </StackPanel>
-                                </StackPanel>
-                            </GroupBox>
-
                             <GroupBox Header="Startup" Style="{StaticResource MyGroupBox}" Margin="0,0,0,12">
                                 <StackPanel Margin="12">
                                     <CheckBox

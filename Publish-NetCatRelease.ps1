@@ -53,7 +53,8 @@ function Resolve-PublishOutputDirectory {
 
     $candidateDirs = @(
         (Join-Path $RepoRoot "my-vpn-zapret-wpf\v2rayN\bin\$Configuration\$TargetFramework\$Runtime\publish"),
-        (Join-Path $RepoRoot "my-vpn-zapret-wpf\v2rayN\bin\$Configuration\$TargetFramework\$Runtime")
+        (Join-Path $RepoRoot "my-vpn-zapret-wpf\v2rayN\bin\$Configuration\$TargetFramework\$Runtime"),
+        (Join-Path $RepoRoot "my-vpn-zapret-wpf\v2rayN\bin\$Configuration\$TargetFramework")
     )
 
     foreach ($candidate in $candidateDirs) {

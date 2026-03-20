@@ -366,28 +366,6 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         set => SetField(ref _dataLayoutSummary, value);
     }
 
-    private string _onboardingSummary = string.Empty;
-    public string OnboardingSummary
-    {
-        get => _onboardingSummary;
-        set => SetField(ref _onboardingSummary, value);
-    }
-
-    private bool _showOnboarding;
-    public bool ShowOnboarding
-    {
-        get => _showOnboarding;
-        set
-        {
-            if (SetField(ref _showOnboarding, value))
-            {
-                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(OnboardingVisibility)));
-            }
-        }
-    }
-
-    public Visibility OnboardingVisibility => ShowOnboarding ? Visibility.Visible : Visibility.Collapsed;
-
     public string AppVersion => $"v{Utils.GetVersionInfo()}";
 
     public MainWindow()
@@ -455,11 +433,6 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 
         await RefreshZapretAsync();
         await RefreshSupportSnapshotAsync(true);
-        if (ShowOnboarding)
-        {
-            MainTabs.SelectedIndex = Math.Max(MainTabs.Items.Count - 1, 0);
-            SetStatus("Open Settings to complete the first launch checklist.");
-        }
     }
 
     private void LoadQuickLists()
@@ -579,18 +552,11 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     {
         DataLayoutSummary = BuildDataLayoutSummary();
         DiagnosticOverview = await BuildDiagnosticOverviewAsync();
-        RefreshOnboardingState();
 
         if (refreshDebugLog || string.IsNullOrWhiteSpace(DebugLog))
         {
             DebugLog = await BuildDebugInfoAsync();
         }
-    }
-
-    private void RefreshOnboardingState()
-    {
-        ShowOnboarding = !_config.GuiItem.HasCompletedOnboarding && Profiles.Count == 0;
-        OnboardingSummary = BuildOnboardingSummary();
     }
 
     private string BuildDataLayoutSummary()
@@ -621,27 +587,6 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         sb.AppendLine($"sing-box core: {(await CoreExistsAsync(ECoreType.sing_box) ? "ready" : "missing")}");
         sb.AppendLine($"Zapret folder: {(ZapretPath.IsNullOrEmpty() ? "missing" : ZapretPath)}");
         sb.AppendLine($"Connection: {ConnectionPing}");
-        return sb.ToString().TrimEnd();
-    }
-
-    private string BuildOnboardingSummary()
-    {
-        var xrayReady = CoreExists(ECoreType.Xray);
-        var singboxReady = CoreExists(ECoreType.sing_box);
-        var zapretReady = ZapretPath.IsNotEmpty() && ZapretConfigs.Count > 0;
-        var updaterReady = Utils.UpgradeAppExists(out _);
-
-        var sb = new StringBuilder();
-        sb.AppendLine(xrayReady ? "[OK] Xray core is available." : "[TODO] Xray core is missing.");
-        sb.AppendLine(singboxReady ? "[OK] sing-box core is available." : "[TODO] sing-box core is missing.");
-        sb.AppendLine(zapretReady ? "[OK] Zapret bundle is detected." : "[TODO] Select or install Zapret bundle.");
-        sb.AppendLine(updaterReady ? "[OK] App updater is available." : "[TODO] App updater is missing.");
-        sb.AppendLine(Profiles.Count > 0 ? "[OK] At least one profile is configured." : "[TODO] Add a VPN profile or subscription.");
-        sb.AppendLine("Recommended next steps:");
-        sb.AppendLine("1. Import a profile or subscription.");
-        sb.AppendLine("2. Open Update and check modules.");
-        sb.AppendLine("3. Run Diagnostics > Test Core and Test Proxy IP.");
-        sb.AppendLine("4. Configure Zapret only if you need direct bypass mode.");
         return sb.ToString().TrimEnd();
     }
 
@@ -1607,29 +1552,6 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         OpenPath(Path.GetDirectoryName(fileName) ?? Utils.GetLogPath());
     }
 
-    private async void OnApplyRecommendedSetup(object sender, RoutedEventArgs e)
-    {
-        HideToTrayOnClose = true;
-        _config.UiItem.Hide2TrayWhenClose = true;
-        BypassPrivate = true;
-
-        await EnsureXrayCoreAsync();
-        await EnsureSingboxCoreAsync();
-        await ApplyQuickRulesAsync(reload: false);
-        await RefreshZapretAsync();
-        await ConfigHandler.SaveConfig(_config);
-        await RefreshSupportSnapshotAsync(true);
-        SetStatus("Recommended setup applied");
-    }
-
-    private async void OnDismissOnboarding(object sender, RoutedEventArgs e)
-    {
-        _config.GuiItem.HasCompletedOnboarding = true;
-        await ConfigHandler.SaveConfig(_config);
-        RefreshOnboardingState();
-        SetStatus("First launch checklist hidden");
-    }
-
     private void OnOpenInstallFolder(object sender, RoutedEventArgs e)
     {
         OpenPath(Utils.StartupPath());
@@ -1680,8 +1602,6 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         sb.AppendLine($"BlockDomains: {BlockDomains.Count}");
         sb.AppendLine($"ProxyOnlyMode: {ProxyOnlyMode}");
         sb.AppendLine($"BypassPrivate: {BypassPrivate}");
-        sb.AppendLine($"OnboardingCompleted: {_config.GuiItem.HasCompletedOnboarding}");
-
         var defaultProfile = SelectedProfile != null
             ? await AppManager.Instance.GetProfileItem(SelectedProfile.IndexId)
             : await ConfigHandler.GetDefaultServer(_config);
