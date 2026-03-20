@@ -324,6 +324,12 @@
   <data name="MsgDownloadGeoFileSuccessfully" xml:space="preserve">
     <value>Downloaded GeoFile: {0} successfully</value>
   </data>
+  <data name="MsgGeoFileAlreadyUpToDate" xml:space="preserve">
+    <value>Geo file {0} is already up to date.</value>
+  </data>
+  <data name="MsgGeoFilesAlreadyUpToDate" xml:space="preserve">
+    <value>GeoFiles are already up to date.</value>
+  </data>
   <data name="MsgInformationTitle" xml:space="preserve">
     <value>Information</value>
   </data>
@@ -1271,6 +1277,30 @@
   </data>
   <data name="TbSettingsGeoFilesSource" xml:space="preserve">
     <value>Geo files source (optional)</value>
+  </data>
+  <data name="UpdateHintNetCat" xml:space="preserve">
+    <value>Main application update from GitHub Releases.</value>
+  </data>
+  <data name="UpdateHintZapret" xml:space="preserve">
+    <value>Zapret bundle with winws, service.bat and bundled DPI bypass presets.</value>
+  </data>
+  <data name="MsgZapretAlreadyUpToDate" xml:space="preserve">
+    <value>Zapret {0} is already up to date.</value>
+  </data>
+  <data name="MsgUpdateZapretSuccessfully" xml:space="preserve">
+    <value>Updated Zapret successfully ({0}).</value>
+  </data>
+  <data name="UpdateHintXray" xml:space="preserve">
+    <value>Xray core used for proxy protocols and connections.</value>
+  </data>
+  <data name="UpdateHintMihomo" xml:space="preserve">
+    <value>Mihomo core used for Clash-compatible profiles and rule processing.</value>
+  </data>
+  <data name="UpdateHintSingBox" xml:space="preserve">
+    <value>sing-box core used for sing-box profiles, DNS and rule sets.</value>
+  </data>
+  <data name="UpdateHintGeoFiles" xml:space="preserve">
+    <value>Geo databases and sing-box rule sets used by routing and DNS.</value>
   </data>
   <data name="TbSettingsSrsFilesSource" xml:space="preserve">
     <value>sing-box ruleset files source (optional)</value>

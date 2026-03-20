@@ -3,6 +3,7 @@ namespace ServiceLib.ViewModels;
 public class CheckUpdateViewModel : MyReactiveObject
 {
     private const string _geo = "GeoFiles";
+    private const string _zapret = "Zapret";
     private readonly string _v2rayN = ECoreType.v2rayN.ToString();
     private List<CheckUpdateModel> _lstUpdated = [];
     private static readonly string _tag = "CheckUpdateViewModel";
@@ -48,6 +49,7 @@ public class CheckUpdateViewModel : MyReactiveObject
                 CheckUpdateModels.Add(GetCheckUpdateModel(ECoreType.sing_box.ToString()));
             }
         }
+        CheckUpdateModels.Add(GetCheckUpdateModel(_zapret));
         CheckUpdateModels.Add(GetCheckUpdateModel(_geo));
     }
 
@@ -59,6 +61,7 @@ public class CheckUpdateViewModel : MyReactiveObject
             {
                 IsSelected = false,
                 CoreType = coreType,
+                Hint = GetModuleHint(coreType),
                 Remarks = ResUI.menuCheckUpdate + " (Not Support)",
             };
         }
@@ -67,6 +70,7 @@ public class CheckUpdateViewModel : MyReactiveObject
         {
             IsSelected = _config.CheckUpdateItem.SelectedCoreTypes?.Contains(coreType) ?? true,
             CoreType = coreType,
+            Hint = GetModuleHint(coreType),
             Remarks = ResUI.menuCheckUpdate,
         };
     }
@@ -85,8 +89,6 @@ public class CheckUpdateViewModel : MyReactiveObject
     private async Task CheckUpdateTask()
     {
         _lstUpdated.Clear();
-        _lstUpdated = CheckUpdateModels.Where(x => x.IsSelected == true)
-                .Select(x => new CheckUpdateModel() { CoreType = x.CoreType }).ToList();
         await SaveSelectedCoreTypes();
 
         for (var k = CheckUpdateModels.Count - 1; k >= 0; k--)
@@ -101,6 +103,10 @@ public class CheckUpdateViewModel : MyReactiveObject
             if (item.CoreType == _geo)
             {
                 await CheckUpdateGeo();
+            }
+            else if (item.CoreType == _zapret)
+            {
+                await CheckUpdateZapret();
             }
             else if (item.CoreType == _v2rayN)
             {
@@ -129,7 +135,8 @@ public class CheckUpdateViewModel : MyReactiveObject
         var item = _lstUpdated.FirstOrDefault(x => x.CoreType == coreType);
         if (item == null)
         {
-            return;
+            item = new CheckUpdateModel() { CoreType = coreType };
+            _lstUpdated.Add(item);
         }
         item.IsFinished = true;
         if (!fileName.IsNullOrEmpty())
@@ -148,8 +155,21 @@ public class CheckUpdateViewModel : MyReactiveObject
                 UpdatedPlusPlus(_geo, "");
             }
         }
-        await new UpdateService(_config, _updateUI).UpdateGeoFileAll()
-            .ContinueWith(t => UpdatedPlusPlus(_geo, ""));
+        await new UpdateService(_config, _updateUI).UpdateGeoFileAll();
+    }
+
+    private async Task CheckUpdateZapret()
+    {
+        async Task _updateUI(bool success, string msg)
+        {
+            await UpdateView(_zapret, msg);
+            if (success)
+            {
+                UpdatedPlusPlus(_zapret, "");
+            }
+        }
+
+        await new UpdateService(_config, _updateUI).CheckUpdateZapret();
     }
 
     private async Task CheckUpdateN(bool preRelease)
@@ -163,8 +183,7 @@ public class CheckUpdateViewModel : MyReactiveObject
                 UpdatedPlusPlus(_v2rayN, msg);
             }
         }
-        await new UpdateService(_config, _updateUI).CheckUpdateGuiN(preRelease)
-            .ContinueWith(t => UpdatedPlusPlus(_v2rayN, ""));
+        await new UpdateService(_config, _updateUI).CheckUpdateGuiN(preRelease);
     }
 
     private async Task CheckUpdateCore(CheckUpdateModel model, bool preRelease)
@@ -180,25 +199,31 @@ public class CheckUpdateViewModel : MyReactiveObject
             }
         }
         var type = (ECoreType)Enum.Parse(typeof(ECoreType), model.CoreType);
-        await new UpdateService(_config, _updateUI).CheckUpdateCore(type, preRelease)
-            .ContinueWith(t => UpdatedPlusPlus(model.CoreType, ""));
+        await new UpdateService(_config, _updateUI).CheckUpdateCore(type, preRelease);
     }
 
     private async Task UpdateFinished()
     {
         if (_lstUpdated.Count > 0 && _lstUpdated.Count(x => x.IsFinished == true) == _lstUpdated.Count)
         {
-            await UpdateFinishedSub(false);
-            await Task.Delay(2000);
-            await UpgradeCore();
+            var requiresCoreReload = _lstUpdated.Any(x => x.CoreType != _v2rayN && x.CoreType != _zapret);
+            if (requiresCoreReload)
+            {
+                await UpdateFinishedSub(false);
+                await Task.Delay(2000);
+                await UpgradeCore();
+            }
 
             if (_lstUpdated.Any(x => x.CoreType == _v2rayN && x.IsFinished == true))
             {
                 await Task.Delay(1000);
                 await UpgradeN();
             }
-            await Task.Delay(1000);
-            await UpdateFinishedSub(true);
+            else if (requiresCoreReload)
+            {
+                await Task.Delay(1000);
+                await UpdateFinishedSub(true);
+            }
         }
     }
 
@@ -334,5 +359,23 @@ public class CheckUpdateViewModel : MyReactiveObject
         }
         found.Remarks = model.Remarks;
         await Task.CompletedTask;
+    }
+
+    private static string GetModuleHint(string coreType)
+    {
+        return coreType switch
+        {
+            "GeoFiles" => GetResourceText("UpdateHintGeoFiles", "Geo databases and sing-box rule sets used by routing and DNS."),
+            "Zapret" => GetResourceText("UpdateHintZapret", "Zapret bundle with winws, service.bat and bundled DPI bypass presets."),
+            "Xray" => GetResourceText("UpdateHintXray", "Xray core used for proxy protocols and connections."),
+            "mihomo" => GetResourceText("UpdateHintMihomo", "Mihomo core used for Clash-compatible profiles and rule processing."),
+            "sing_box" => GetResourceText("UpdateHintSingBox", "sing-box core used for sing-box profiles, DNS and rule sets."),
+            _ => GetResourceText("UpdateHintNetCat", "Main application update from GitHub Releases.")
+        };
+    }
+
+    private static string GetResourceText(string resourceKey, string fallback)
+    {
+        return ResUI.ResourceManager.GetString(resourceKey, ResUI.Culture) ?? fallback;
     }
 }

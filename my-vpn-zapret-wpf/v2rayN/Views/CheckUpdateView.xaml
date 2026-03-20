@@ -65,6 +65,7 @@
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="1*" />
                                     <ColumnDefinition Width="1*" />
+                                    <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="3*" />
                                 </Grid.ColumnDefinitions>
                                 <ToggleButton
@@ -77,9 +78,20 @@
                                 <TextBlock
                                     Grid.Column="1"
                                     Style="{StaticResource ListItemTitle}"
-                                    Text="{Binding CoreType}" />
+                                    Text="{Binding CoreType}"
+                                    ToolTip="{Binding Hint}"
+                                    ToolTipService.ShowDuration="60000" />
                                 <TextBlock
                                     Grid.Column="2"
+                                    Margin="{StaticResource Margin8}"
+                                    VerticalAlignment="Center"
+                                    FontWeight="Bold"
+                                    Foreground="{DynamicResource MaterialDesignBodyLight}"
+                                    Text="?"
+                                    ToolTip="{Binding Hint}"
+                                    ToolTipService.ShowDuration="60000" />
+                                <TextBlock
+                                    Grid.Column="3"
                                     Style="{StaticResource ListItemSubTitle}"
                                     Text="{Binding Remarks}"
                                     TextWrapping="WrapWithOverflow" />

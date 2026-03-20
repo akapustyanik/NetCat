@@ -7,6 +7,14 @@ namespace ServiceLib.Services;
 /// </summary>
 public class DownloadService
 {
+    public sealed class RemoteFileMetadata
+    {
+        public string? FinalUrl { get; init; }
+        public long? ContentLength { get; init; }
+        public string? ETag { get; init; }
+        public DateTimeOffset? LastModified { get; init; }
+    }
+
     public event EventHandler<UpdateResult>? UpdateCompleted;
 
     public event ErrorEventHandler? Error;
@@ -127,6 +135,17 @@ public class DownloadService
         return null;
     }
 
+    public async Task<RemoteFileMetadata?> GetRemoteFileMetadataAsync(string url, bool blProxy, string userAgent)
+    {
+        var metadata = await SendMetadataRequestAsync(url, blProxy, userAgent, HttpMethod.Head);
+        if (metadata != null)
+        {
+            return metadata;
+        }
+
+        return await SendMetadataRequestAsync(url, blProxy, userAgent, HttpMethod.Get);
+    }
+
     /// <summary>
     /// DownloadString
     /// </summary>
@@ -227,6 +246,49 @@ public class DownloadService
         catch (Exception)
         {
             return false;
+        }
+    }
+
+    private async Task<RemoteFileMetadata?> SendMetadataRequestAsync(string url, bool blProxy, string userAgent, HttpMethod method)
+    {
+        try
+        {
+            var webProxy = await GetWebProxy(blProxy);
+            using var client = new HttpClient(new SocketsHttpHandler()
+            {
+                AllowAutoRedirect = true,
+                Proxy = webProxy,
+                UseProxy = webProxy != null
+            });
+
+            if (userAgent.IsNullOrEmpty())
+            {
+                userAgent = Utils.GetVersion(false);
+            }
+            client.DefaultRequestHeaders.UserAgent.TryParseAdd(userAgent);
+
+            Uri uri = new(url);
+            if (uri.UserInfo.IsNotEmpty())
+            {
+                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", Utils.Base64Encode(uri.UserInfo));
+            }
+
+            using var request = new HttpRequestMessage(method, url);
+            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead);
+            response.EnsureSuccessStatusCode();
+
+            return new RemoteFileMetadata
+            {
+                FinalUrl = response.RequestMessage?.RequestUri?.ToString(),
+                ContentLength = response.Content.Headers.ContentLength,
+                ETag = response.Headers.ETag?.Tag ?? response.Headers.ETag?.ToString(),
+                LastModified = response.Content.Headers.LastModified
+            };
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog(_tag, ex);
+            return null;
         }
     }
 }
