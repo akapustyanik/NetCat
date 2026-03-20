@@ -348,6 +348,8 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         set => SetField(ref _trayToolTip, value);
     }
 
+    public string AppVersion => $"v{Utils.GetVersionInfo()}";
+
     public MainWindow()
     {
         InitializeComponent();
@@ -647,6 +649,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             Width = 760,
             Height = 520,
+            Icon = this.Icon,
             Content = new CheckUpdateView()
         };
 
