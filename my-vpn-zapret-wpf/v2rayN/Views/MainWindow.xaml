@@ -1,0 +1,728 @@
+<base:WindowBase
+    x:Class="v2rayN.Views.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:base="clr-namespace:v2rayN.Base"
+    xmlns:common="clr-namespace:v2rayN.Common"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:tb="clr-namespace:H.NotifyIcon;assembly=H.NotifyIcon.Wpf"
+    xmlns:vms="clr-namespace:ServiceLib.ViewModels;assembly=ServiceLib"
+    Title="NetCat"
+    Width="1000"
+    Height="720"
+    MinWidth="900"
+    x:TypeArguments="vms:MainWindowViewModel"
+    Icon="/Resources/v2rayN.ico"
+    ResizeMode="CanResize"
+    ShowInTaskbar="True"
+    Style="{StaticResource WindowGlobal}"
+    WindowStartupLocation="CenterScreen"
+    mc:Ignorable="d">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock FontSize="20" FontWeight="SemiBold" Text="NetCat" />
+                <WrapPanel Margin="24,0,0,0" VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal" Margin="0,0,12,0" VerticalAlignment="Center">
+                        <TextBlock Text="VPN" Margin="0,0,6,0" VerticalAlignment="Center" />
+                        <ToggleButton
+                            IsChecked="{Binding VpnEnabled, Mode=TwoWay}"
+                            Style="{StaticResource MaterialDesignSwitchToggleButton}"
+                            Checked="OnToggleVpn"
+                            Unchecked="OnToggleVpn" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,12,0" VerticalAlignment="Center">
+                        <TextBlock Text="TUN" Margin="0,0,6,0" VerticalAlignment="Center" />
+                        <ToggleButton
+                            IsChecked="{Binding TunEnabled, Mode=TwoWay}"
+                            Style="{StaticResource MaterialDesignSwitchToggleButton}"
+                            Checked="OnToggleTun"
+                            Unchecked="OnToggleTun" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,12,0" VerticalAlignment="Center">
+                        <TextBlock Text="Zapret" Margin="0,0,6,0" VerticalAlignment="Center" />
+                        <ToggleButton
+                            IsChecked="{Binding ZapretEnabled, Mode=TwoWay}"
+                            Style="{StaticResource MaterialDesignSwitchToggleButton}"
+                            Checked="OnToggleZapret"
+                            Unchecked="OnToggleZapret" />
+                    </StackPanel>
+                    <CheckBox
+                        Content="Обходить локальную сеть"
+                        IsChecked="{Binding BypassPrivate, Mode=TwoWay}"
+                        Margin="0,0,16,0"
+                        ToolTip="Локальные и приватные адреса идут напрямую, минуя VPN: geosite:private и geoip:private."
+                        Checked="BypassPrivate_Checked"
+                        Unchecked="BypassPrivate_Checked" />
+                </WrapPanel>
+            </StackPanel>
+
+            <TextBlock Margin="0,8,0,0" FontSize="12" Opacity="0.7"
+                       Text="VPN управляет системным прокси. TUN включает полное туннелирование и может работать отдельно." />
+        </StackPanel>
+
+        <ScrollViewer
+            x:Name="MainContentScrollViewer"
+            Grid.Row="1"
+            Margin="0,16,0,16"
+            VerticalScrollBarVisibility="Auto"
+            HorizontalScrollBarVisibility="Disabled"
+            CanContentScroll="False"
+            common:SmoothScrollBehavior.IsEnabled="True"
+            common:SmoothScrollBehavior.MouseWheelMultiplier="1.5">
+            <Grid Width="{Binding ElementName=MainContentScrollViewer, Path=ViewportWidth}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="2*" />
+                    <ColumnDefinition Width="16" />
+                    <ColumnDefinition Width="3*" />
+                </Grid.ColumnDefinitions>
+
+            <Grid Grid.Column="0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <GroupBox Header="Add Configuration" Style="{StaticResource MyGroupBox}" Margin="0,0,0,12">
+                    <StackPanel Margin="12">
+                        <TextBox
+                            Style="{StaticResource MyOutlinedTextBox}"
+                            Text="{Binding InputLink, UpdateSourceTrigger=PropertyChanged}"
+                            MinHeight="40"
+                            VerticalContentAlignment="Center"
+                            ToolTip="Ссылка подписки или vless:// ссылка" />
+                        <Button
+                            Content="Add URL or Link"
+                            Style="{StaticResource DefButton}"
+                            Margin="0,8,0,0"
+                            Click="OnAddLink" />
+                    </StackPanel>
+                </GroupBox>
+
+                <GroupBox Grid.Row="1" Header="Configurations" Style="{StaticResource MyGroupBox}">
+                    <DockPanel Margin="12">
+                        <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Button
+                                    Grid.Row="0"
+                                    Grid.Column="0"
+                                    Content="Set Active"
+                                    Style="{StaticResource DefButton}"
+                                    Click="OnSetActive" />
+                                <Button
+                                    Grid.Row="0"
+                                    Grid.Column="1"
+                                    Content="Ping Server"
+                                    Style="{StaticResource DefButton}"
+                                    Margin="8,0,0,0"
+                                    Click="OnPingServer" />
+                                <Button
+                                    Grid.Row="0"
+                                    Grid.Column="2"
+                                    Content="Edit"
+                                    Style="{StaticResource DefButton}"
+                                    Margin="8,0,0,0"
+                                    Click="OnEditProfile" />
+                                <Button
+                                    Grid.Row="1"
+                                    Grid.Column="0"
+                                    Content="Duplicate"
+                                    Style="{StaticResource DefButton}"
+                                    Margin="0,8,0,0"
+                                    Click="OnDuplicateProfile" />
+                                <Button
+                                    Grid.Row="1"
+                                    Grid.Column="1"
+                                    Content="Delete"
+                                    Style="{StaticResource DefButton}"
+                                    Margin="8,8,0,0"
+                                    Click="OnDeleteProfile" />
+                            </Grid>
+                            <TextBlock Margin="0,6,0,0" FontSize="12" Opacity="0.7" Text="{Binding ServerPing}" />
+                        </StackPanel>
+                        <ListBox
+                            ItemsSource="{Binding Profiles}"
+                            SelectedItem="{Binding SelectedProfile}"
+                            MouseDoubleClick="OnProfilesMouseDoubleClick"
+                            ScrollViewer.VerticalScrollBarVisibility="Auto"
+                            ScrollViewer.CanContentScroll="False"
+                            common:SmoothScrollBehavior.IsEnabled="True"
+                            MinHeight="170"
+                            MaxHeight="220">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="OverridesDefaultStyle" Value="True" />
+                                    <Setter Property="Padding" Value="0" />
+                                    <Setter Property="Margin" Value="0,0,0,8" />
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                    <Setter Property="Background" Value="Transparent" />
+                                    <Setter Property="BorderBrush" Value="Transparent" />
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="ListBoxItem">
+                                                <Border Background="Transparent" BorderBrush="Transparent" BorderThickness="0">
+                                                    <ContentPresenter />
+                                                </Border>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Border
+                                        x:Name="ProfileCard"
+                                        Padding="10"
+                                        Background="{DynamicResource MaterialDesignPaper}"
+                                        BorderBrush="{DynamicResource MaterialDesignDivider}"
+                                        BorderThickness="1"
+                                        CornerRadius="0">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel>
+                                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                    <TextBlock FontWeight="SemiBold" Text="{Binding Remarks}" />
+                                                    <Border
+                                                        x:Name="ActiveBadge"
+                                                        Margin="8,0,0,0"
+                                                        Padding="6,2"
+                                                        Background="{DynamicResource MaterialDesign.Brush.Primary.Light}"
+                                                        CornerRadius="0"
+                                                        Visibility="Collapsed">
+                                                        <TextBlock FontSize="11" FontWeight="SemiBold" Foreground="Black" Text="ACTIVE" />
+                                                    </Border>
+                                                </StackPanel>
+                                                <TextBlock Margin="0,4,0,0" FontSize="12" Opacity="0.7" Text="{Binding Address}" />
+                                            </StackPanel>
+                                            <TextBlock
+                                                x:Name="SelectedMarker"
+                                                Grid.Column="1"
+                                                Margin="12,0,0,0"
+                                                VerticalAlignment="Center"
+                                                FontSize="12"
+                                                FontWeight="SemiBold"
+                                                Opacity="0.8"
+                                                Text="Selected"
+                                                Visibility="Collapsed" />
+                                        </Grid>
+                                    </Border>
+                                    <DataTemplate.Triggers>
+                                        <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                            <Setter TargetName="ActiveBadge" Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=IsSelected}" Value="True">
+                                            <Setter TargetName="ProfileCard" Property="BorderBrush" Value="{DynamicResource MaterialDesign.Brush.Primary.Light}" />
+                                            <Setter TargetName="ProfileCard" Property="BorderThickness" Value="2" />
+                                            <Setter TargetName="SelectedMarker" Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </DataTemplate.Triggers>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </DockPanel>
+                </GroupBox>
+            </Grid>
+
+            <TabControl Grid.Column="2">
+                <TabItem Header="Zapret">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" common:SmoothScrollBehavior.IsEnabled="True">
+                        <StackPanel Margin="12">
+                            <StackPanel Orientation="Horizontal">
+                                <Button
+                                    Content="Refresh"
+                                    Style="{StaticResource DefButton}"
+                                    Click="OnZapretRefresh" />
+                                <Button
+                                    Content="Select Folder"
+                                    Style="{StaticResource DefButton}"
+                                    Margin="8,0,0,0"
+                                    Click="OnSelectZapretFolder" />
+                                <Button
+                                    Content="Test YouTube"
+                                    Style="{StaticResource DefButton}"
+                                    Margin="8,0,0,0"
+                                    Click="OnTestZapret" />
+                                <Button
+                                    Content="Test Discord"
+                                    Style="{StaticResource DefButton}"
+                                    Margin="8,0,0,0"
+                                    Click="OnTestZapretDiscord" />
+                                <Button
+                                    Content="Auto Test"
+                                    Style="{StaticResource DefButton}"
+                                    Margin="8,0,0,0"
+                                    Click="OnAutoTestZapret" />
+                            </StackPanel>
+                            <TextBlock Margin="0,6,0,0" FontSize="12" Opacity="0.7" Text="{Binding ZapretPath}" />
+                            <ListBox
+                                ItemsSource="{Binding ZapretConfigs}"
+                                SelectedItem="{Binding SelectedZapretConfig}"
+                                ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                ScrollViewer.CanContentScroll="False"
+                                common:SmoothScrollBehavior.IsEnabled="True"
+                                Margin="0,8,0,0"
+                                MinHeight="200"
+                                MaxHeight="260">
+                                <ListBox.ItemContainerStyle>
+                                    <Style TargetType="ListBoxItem">
+                                        <Setter Property="OverridesDefaultStyle" Value="True" />
+                                        <Setter Property="Padding" Value="0" />
+                                        <Setter Property="Margin" Value="0,0,0,8" />
+                                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="ListBoxItem">
+                                                    <Border Background="Transparent" BorderBrush="Transparent" BorderThickness="0">
+                                                        <ContentPresenter />
+                                                    </Border>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </ListBox.ItemContainerStyle>
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border
+                                            x:Name="ZapretCard"
+                                            Padding="10"
+                                            Background="{DynamicResource MaterialDesignPaper}"
+                                            BorderBrush="{DynamicResource MaterialDesignDivider}"
+                                            BorderThickness="1"
+                                            CornerRadius="0">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel>
+                                                    <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                                                    <TextBlock Margin="0,4,0,0" FontSize="12" Opacity="0.8" Text="{Binding YouTubeLabel}" />
+                                                    <TextBlock Margin="0,2,0,0" FontSize="12" Opacity="0.8" Text="{Binding DiscordLabel}" />
+                                                </StackPanel>
+                                                <TextBlock
+                                                    x:Name="ZapretSelectedMarker"
+                                                    Grid.Column="1"
+                                                    Margin="12,0,0,0"
+                                                    VerticalAlignment="Center"
+                                                    FontSize="12"
+                                                    FontWeight="SemiBold"
+                                                    Opacity="0.85"
+                                                    Text="Selected"
+                                                    Visibility="Collapsed" />
+                                            </Grid>
+                                        </Border>
+                                        <DataTemplate.Triggers>
+                                            <DataTrigger Binding="{Binding HasTestResult}" Value="True">
+                                                <Setter TargetName="ZapretCard" Property="BorderBrush" Value="#5A707070" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=IsSelected}" Value="True">
+                                                <Setter TargetName="ZapretCard" Property="BorderThickness" Value="2" />
+                                                <Setter TargetName="ZapretSelectedMarker" Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding IsPassing}" Value="True">
+                                                <Setter TargetName="ZapretCard" Property="Background" Value="#1F2E7D32" />
+                                                <Setter TargetName="ZapretCard" Property="BorderBrush" Value="#4CAF50" />
+                                                <Setter TargetName="ZapretCard" Property="BorderThickness" Value="2" />
+                                            </DataTrigger>
+                                        </DataTemplate.Triggers>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                            <TextBlock Margin="0,6,0,0" FontSize="12" Opacity="0.7" TextWrapping="Wrap" Text="{Binding ZapretStatus}" />
+                            <TextBlock Margin="0,6,0,0" FontSize="12" Opacity="0.7" TextWrapping="Wrap">
+                                Автотест выбирает конфиг с лучшей худшей задержкой сразу для YouTube и Discord.
+                            </TextBlock>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <TabItem Header="Whitelist">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" common:SmoothScrollBehavior.IsEnabled="True">
+                        <StackPanel Margin="12">
+                            <GroupBox Header="Direct Apps (bypass proxy)" Style="{StaticResource MyGroupBox}" Margin="0,0,0,12">
+                                <StackPanel Margin="12">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button
+                                            Content="Add EXE"
+                                            Style="{StaticResource DefButton}"
+                                            Click="OnAddApp" />
+                                        <Button
+                                            Content="Add Running App"
+                                            Style="{StaticResource DefButton}"
+                                            Margin="8,0,0,0"
+                                            Click="OnAddRunningProcess" />
+                                        <Button
+                                            Content="Refresh Running"
+                                            Style="{StaticResource DefButton}"
+                                            Margin="8,0,0,0"
+                                            Click="OnRefreshRunningProcesses" />
+                                        <Button
+                                            Content="Remove"
+                                            Style="{StaticResource DefButton}"
+                                            Margin="8,0,0,0"
+                                            Click="OnRemoveApp" />
+                                    </StackPanel>
+                                    <TextBox
+                                        Style="{StaticResource MyOutlinedTextBox}"
+                                        Text="{Binding RunningProcessSearchText, UpdateSourceTrigger=PropertyChanged}"
+                                        Margin="0,8,0,0"
+                                        MinHeight="40"
+                                        VerticalContentAlignment="Center"
+                                        ToolTip="Введите имя процесса, заголовок окна или путь к exe для фильтрации" />
+                                    <ComboBox
+                                        ItemsSource="{Binding RunningProcessesView}"
+                                        SelectedItem="{Binding SelectedRunningProcess}"
+                                        DisplayMemberPath="DisplayName"
+                                        Style="{StaticResource DefComboBox}"
+                                        Margin="0,8,0,0"
+                                        MinWidth="320" />
+                                    <TextBlock Margin="0,6,0,0" FontSize="12" Opacity="0.7" TextWrapping="Wrap" Text="{Binding SelectedRunningProcess.FilePath}" />
+                                    <ListBox
+                                        ItemsSource="{Binding DirectApps}"
+                                        SelectedItem="{Binding SelectedApp}"
+                                        ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                        ScrollViewer.CanContentScroll="False"
+                                        common:SmoothScrollBehavior.IsEnabled="True"
+                                        Margin="0,8,0,0"
+                                        MinHeight="160"
+                                        MaxHeight="220" />
+                                </StackPanel>
+                            </GroupBox>
+
+                            <GroupBox Header="Whitelist Domains (direct)" Style="{StaticResource MyGroupBox}" Margin="0,0,0,12">
+                                <StackPanel Margin="12">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBox
+                                            Style="{StaticResource MyOutlinedTextBox}"
+                                            Text="{Binding NewDomain, UpdateSourceTrigger=PropertyChanged}"
+                                            MinWidth="260"
+                                            MinHeight="40"
+                                            VerticalContentAlignment="Center"
+                                            ToolTip="Например: example.com, geosite:category-ru" />
+                                        <Button
+                                            Content="Add"
+                                            Style="{StaticResource DefButton}"
+                                            Margin="8,0,0,0"
+                                            Click="OnAddDomain" />
+                                        <Button
+                                            Content="Remove"
+                                            Style="{StaticResource DefButton}"
+                                            Margin="8,0,0,0"
+                                            Click="OnRemoveDomain" />
+                                        <Button
+                                            Content="Add RU preset"
+                                            Style="{StaticResource DefButton}"
+                                            Margin="8,0,0,0"
+                                            Click="OnAddRussianWhitelistPreset" />
+                                    </StackPanel>
+                                    <ListBox
+                                        ItemsSource="{Binding DirectDomains}"
+                                        SelectedItem="{Binding SelectedDomain}"
+                                        ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                        ScrollViewer.CanContentScroll="False"
+                                        common:SmoothScrollBehavior.IsEnabled="True"
+                                        Margin="0,8,0,0"
+                                        MinHeight="160"
+                                        MaxHeight="220" />
+                                    <TextBlock Margin="0,6,0,0" FontSize="12" Opacity="0.7">
+                                        YouTube всегда идёт напрямую через zapret. Telegram всегда идёт через прокси.
+                                    </TextBlock>
+                                </StackPanel>
+                            </GroupBox>
+
+                            <GroupBox Header="VPN Domains (proxy only when listed)" Style="{StaticResource MyGroupBox}" Margin="0,0,0,12">
+                                <StackPanel Margin="12">
+                                    <CheckBox
+                                        Content="Enable selective VPN mode"
+                                        IsChecked="{Binding ProxyOnlyMode, Mode=TwoWay}"
+                                        Checked="ProxyOnlyMode_Checked"
+                                        Unchecked="ProxyOnlyMode_Checked" />
+                                    <CheckBox
+                                        Content="Подключать список из domains.lst"
+                                        IsChecked="{Binding UseProxyDomainsPreset, Mode=TwoWay}"
+                                        Margin="0,8,0,0"
+                                        ToolTip="Готовый список из заблокированных доменов."
+                                        Checked="UseProxyDomainsPreset_Checked"
+                                        Unchecked="UseProxyDomainsPreset_Checked" />
+                                    <TextBlock Margin="0,6,0,0" FontSize="12" Opacity="0.7" TextWrapping="Wrap">
+                                        В этом режиме VPN используется только для доменов из этого списка. Всё остальное идёт напрямую, кроме Telegram, который всё равно использует прокси.
+                                    </TextBlock>
+                                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                        <TextBox
+                                            Style="{StaticResource MyOutlinedTextBox}"
+                                            Text="{Binding NewProxyDomain, UpdateSourceTrigger=PropertyChanged}"
+                                            MinWidth="260"
+                                            MinHeight="40"
+                                            VerticalContentAlignment="Center"
+                                            ToolTip="Например: example.com, geosite:netflix, domain:example.com" />
+                                        <Button
+                                            Content="Add"
+                                            Style="{StaticResource DefButton}"
+                                            Margin="8,0,0,0"
+                                            Click="OnAddProxyDomain" />
+                                        <Button
+                                            Content="Remove"
+                                            Style="{StaticResource DefButton}"
+                                            Margin="8,0,0,0"
+                                            Click="OnRemoveProxyDomain" />
+                                    </StackPanel>
+                                    <ListBox
+                                        ItemsSource="{Binding ProxyDomains}"
+                                        SelectedItem="{Binding SelectedProxyDomain}"
+                                        ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                        ScrollViewer.CanContentScroll="False"
+                                        common:SmoothScrollBehavior.IsEnabled="True"
+                                        Margin="0,8,0,0"
+                                        MinHeight="140"
+                                        MaxHeight="220" />
+                                </StackPanel>
+                            </GroupBox>
+
+                            <GroupBox Header="Блокировка доменов" Style="{StaticResource MyGroupBox}">
+                                <StackPanel Margin="12">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBox
+                                            Style="{StaticResource MyOutlinedTextBox}"
+                                            Text="{Binding NewBlockedDomain, UpdateSourceTrigger=PropertyChanged}"
+                                            MinWidth="260"
+                                            MinHeight="40"
+                                            VerticalContentAlignment="Center" />
+                                        <Button
+                                            Content="Add"
+                                            Style="{StaticResource DefButton}"
+                                            Margin="8,0,0,0"
+                                            Click="OnAddBlockedDomain" />
+                                        <Button
+                                            Content="Remove"
+                                            Style="{StaticResource DefButton}"
+                                            Margin="8,0,0,0"
+                                            Click="OnRemoveBlockedDomain" />
+                                        <Button
+                                            Content="Add Ads preset"
+                                            Style="{StaticResource DefButton}"
+                                            Margin="8,0,0,0"
+                                            Click="OnAddAdsBlacklistPreset" />
+                                    </StackPanel>
+                                    <ListBox
+                                        ItemsSource="{Binding BlockDomains}"
+                                        SelectedItem="{Binding SelectedBlockedDomain}"
+                                        ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                        ScrollViewer.CanContentScroll="False"
+                                        common:SmoothScrollBehavior.IsEnabled="True"
+                                        Margin="0,8,0,0"
+                                        MinHeight="140"
+                                        MaxHeight="220" />
+                                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                        <Button
+                                            Content="Apply Routing"
+                                            Style="{StaticResource DefButton}"
+                                            Click="OnApplyRouting" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </GroupBox>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <TabItem Header="Settings">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" common:SmoothScrollBehavior.IsEnabled="True">
+                        <StackPanel Margin="12">
+                            <GroupBox Header="Startup" Style="{StaticResource MyGroupBox}" Margin="0,0,0,12">
+                                <StackPanel Margin="12">
+                                    <CheckBox
+                                        Content="Autostart"
+                                        IsChecked="{Binding AutoRun, Mode=TwoWay}"
+                                        Checked="AutoRun_Checked"
+                                        Unchecked="AutoRun_Checked" />
+                                    <TextBlock Margin="0,4,0,0" FontSize="12" Opacity="0.7" TextWrapping="Wrap">
+                                        Запускает программу вместе с Windows.
+                                    </TextBlock>
+                                    <CheckBox
+                                        Content="Hide to tray when closing window"
+                                        IsChecked="{Binding HideToTrayOnClose, Mode=TwoWay}"
+                                        Margin="0,8,0,0"
+                                        Checked="HideToTrayOnClose_Checked"
+                                        Unchecked="HideToTrayOnClose_Checked" />
+                                    <TextBlock Margin="0,4,0,0" FontSize="12" Opacity="0.7" TextWrapping="Wrap">
+                                        При закрытии крестиком окно прячется в трей и программа продолжает работать в фоне.
+                                    </TextBlock>
+                                    <Button
+                                        Content="Update"
+                                        Style="{StaticResource DefButton}"
+                                        Margin="0,12,0,0"
+                                        Click="OnOpenUpdateWindow" />
+                                    <TextBlock Margin="0,4,0,0" FontSize="12" Opacity="0.7" TextWrapping="Wrap">
+                                        Проверяет GitHub Releases репозитория NetCat, скачивает zip-релиз и применяет обновление автоматически.
+                                    </TextBlock>
+                                </StackPanel>
+                            </GroupBox>
+
+                            <GroupBox Header="Appearance" Style="{StaticResource MyGroupBox}" Margin="0,0,0,12">
+                                <StackPanel Margin="12">
+                                    <TextBlock FontSize="12" Opacity="0.7" Text="Выбор собственного цвета и яркости" />
+                                    <Grid
+                                        x:Name="CustomColorPlane"
+                                        Width="260"
+                                        Height="160"
+                                        Margin="0,8,0,0"
+                                        MouseLeftButtonDown="OnCustomColorPlaneMouseDown"
+                                        MouseMove="OnCustomColorPlaneMouseMove"
+                                        MouseLeftButtonUp="OnCustomColorPlaneMouseUp">
+                                        <Rectangle Fill="{Binding CustomPrimaryBaseBrush}" />
+                                        <Rectangle>
+                                            <Rectangle.Fill>
+                                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                                    <GradientStop Color="#FFFFFFFF" Offset="0" />
+                                                    <GradientStop Color="#00FFFFFF" Offset="1" />
+                                                </LinearGradientBrush>
+                                            </Rectangle.Fill>
+                                        </Rectangle>
+                                        <Rectangle>
+                                            <Rectangle.Fill>
+                                                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                                    <GradientStop Color="#00000000" Offset="0" />
+                                                    <GradientStop Color="#FF000000" Offset="1" />
+                                                </LinearGradientBrush>
+                                            </Rectangle.Fill>
+                                        </Rectangle>
+                                        <Canvas IsHitTestVisible="False">
+                                            <Ellipse
+                                                Width="12"
+                                                Height="12"
+                                                Stroke="White"
+                                                StrokeThickness="2"
+                                                Fill="Transparent"
+                                                Canvas.Left="{Binding CustomColorCursorLeft}"
+                                                Canvas.Top="{Binding CustomColorCursorTop}" />
+                                        </Canvas>
+                                    </Grid>
+                                    <TextBlock Margin="0,8,0,0" FontSize="12" Opacity="0.7" Text="Оттенок" />
+                                    <Slider
+                                        Minimum="0"
+                                        Maximum="360"
+                                        Value="{Binding CustomHue, Mode=TwoWay}"
+                                        TickFrequency="30"
+                                        IsSnapToTickEnabled="False"
+                                        ValueChanged="OnCustomHueChanged" />
+                                    <TextBlock Margin="0,8,0,0" FontSize="12" Opacity="0.7" Text="{Binding CustomPrimaryColorHex}" />
+                                    <TextBlock Margin="0,6,0,0" FontSize="12" Opacity="0.7" TextWrapping="Wrap">
+                                        Меняет основной цвет кнопок, акцентов и выделений интерфейса.
+                                    </TextBlock>
+                                </StackPanel>
+                            </GroupBox>
+
+                            <GroupBox Header="Diagnostics" Style="{StaticResource MyGroupBox}">
+                                <StackPanel Margin="12">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button
+                                            Content="Refresh Debug"
+                                            Style="{StaticResource DefButton}"
+                                            Click="OnRefreshDebug" />
+                                        <Button
+                                            Content="Test Core"
+                                            Style="{StaticResource DefButton}"
+                                            Margin="8,0,0,0"
+                                            Click="OnTestCore" />
+                                        <Button
+                                            Content="Test Config"
+                                            Style="{StaticResource DefButton}"
+                                            Margin="8,0,0,0"
+                                            Click="OnTestConfig" />
+                                        <Button
+                                            Content="Test Proxy IP"
+                                            Style="{StaticResource DefButton}"
+                                            Margin="8,0,0,0"
+                                            Click="OnTestProxy" />
+                                        <Button
+                                            Content="Copy"
+                                            Style="{StaticResource DefButton}"
+                                            Margin="8,0,0,0"
+                                            Click="OnCopyDebug" />
+                                        <Button
+                                            Content="Clear"
+                                            Style="{StaticResource DefButton}"
+                                            Margin="8,0,0,0"
+                                            Click="OnClearDebug" />
+                                    </StackPanel>
+                                    <TextBox
+                                        Text="{Binding DebugLog}"
+                                        IsReadOnly="True"
+                                        AcceptsReturn="True"
+                                        TextWrapping="Wrap"
+                                        VerticalScrollBarVisibility="Auto"
+                                        HorizontalScrollBarVisibility="Auto"
+                                        common:SmoothScrollBehavior.IsEnabled="True"
+                                        Margin="0,8,0,0"
+                                        MinHeight="240" />
+                                </StackPanel>
+                            </GroupBox>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+            </TabControl>
+            </Grid>
+        </ScrollViewer>
+
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" Text="{Binding StatusMessage}" FontSize="12" Opacity="0.8" />
+            <TextBlock Grid.Column="1" Margin="16,0,0,0" Text="{Binding ConnectionPing}" FontSize="12" Opacity="0.85" />
+        </Grid>
+
+        <tb:TaskbarIcon
+            x:Name="TrayIcon"
+            IconSource="/Resources/v2rayN.ico"
+            ToolTipText="{Binding TrayToolTip}"
+            NoLeftClickDelay="True"
+            TrayLeftMouseUp="TrayIcon_TrayLeftMouseUp">
+            <tb:TaskbarIcon.ContextMenu>
+                <ContextMenu>
+                    <MenuItem
+                        Header="VPN"
+                        IsCheckable="True"
+                        IsChecked="{Binding VpnEnabled, Mode=OneWay}"
+                        Click="OnTrayToggleVpn" />
+                    <MenuItem
+                        Header="TUN"
+                        IsCheckable="True"
+                        IsChecked="{Binding TunEnabled, Mode=OneWay}"
+                        Click="OnTrayToggleTun" />
+                    <MenuItem
+                        Header="Zapret"
+                        IsCheckable="True"
+                        IsChecked="{Binding ZapretEnabled, Mode=OneWay}"
+                        Click="OnTrayToggleZapret" />
+                    <Separator />
+                    <MenuItem
+                        Header="{Binding ConnectionPing}"
+                        IsEnabled="False" />
+                    <Separator />
+                    <MenuItem Header="Открыть" Click="OnTrayOpen" />
+                    <MenuItem Header="Выход" Click="OnTrayExit" />
+                </ContextMenu>
+            </tb:TaskbarIcon.ContextMenu>
+        </tb:TaskbarIcon>
+    </Grid>
+</base:WindowBase>

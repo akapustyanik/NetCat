@@ -1,0 +1,91 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>WinExe</OutputType>
+		<TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+		<GenerateSatelliteAssembliesForCore>true</GenerateSatelliteAssembliesForCore>
+		<UseWPF>true</UseWPF>
+		<AssemblyName>NetCat</AssemblyName>
+		<Product>NetCat</Product>
+		<Title>NetCat</Title>
+		<ApplicationIcon>Resources\v2rayN.ico</ApplicationIcon>
+		<ApplicationManifest>app.manifest</ApplicationManifest>
+		<SupportedOSPlatformVersion>7.0</SupportedOSPlatformVersion>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="MaterialDesignThemes" />
+		<PackageReference Include="H.NotifyIcon.Wpf" />
+		<PackageReference Include="ReactiveUI.Fody">
+			<TreatAsUsed>true</TreatAsUsed>
+		</PackageReference>
+		<PackageReference Include="ReactiveUI.WPF" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<AdditionalFiles Include="app.manifest" />
+		<EmbeddedResource Include="Resources\v2rayN.ico">
+			<CopyToOutputDirectory>Never</CopyToOutputDirectory>
+		</EmbeddedResource>
+		<Resource Include="Resources\NotifyIcon1.ico" />
+		<Resource Include="Resources\NotifyIcon2.ico" />
+		<Resource Include="Resources\NotifyIcon3.ico" />
+		<Resource Include="Resources\NotifyIcon4.ico" />
+		<Resource Include="Resources\v2rayN.ico" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\AmazTool\AmazTool.csproj" ReferenceOutputAssembly="false" />
+		<ProjectReference Include="..\ServiceLib\ServiceLib.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<Content Include="..\..\domains.lst">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+			<Link>domains.lst</Link>
+		</Content>
+		<Content Include="..\..\my-vpn-zapret\resources\v2rayn\guiConfigs\guiNConfig.json">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+			<Link>guiNConfig.json</Link>
+		</Content>
+	</ItemGroup>
+
+	<ItemGroup>
+		<Content Include="..\..\zapret\**\*">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+			<Link>zapret\%(RecursiveDir)%(Filename)%(Extension)</Link>
+		</Content>
+	</ItemGroup>
+
+	<ItemGroup>
+		<Content Include="..\..\my-vpn-zapret\resources\xray\**\*">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+			<Link>resources\xray\%(RecursiveDir)%(Filename)%(Extension)</Link>
+		</Content>
+		<Content Include="..\..\my-vpn-zapret\resources\v2rayn\bin\sing_box\**\*">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+			<Link>resources\v2rayn\bin\sing_box\%(RecursiveDir)%(Filename)%(Extension)</Link>
+		</Content>
+	</ItemGroup>
+
+	<Target Name="CopyAmazToolToPublish" AfterTargets="Publish">
+		<ItemGroup>
+			<AmazToolPublishFile Include="..\AmazTool\bin\$(Configuration)\net8.0\$(RuntimeIdentifier)\AmazTool.exe" Condition="Exists('..\AmazTool\bin\$(Configuration)\net8.0\$(RuntimeIdentifier)\AmazTool.exe')" />
+			<AmazToolPublishFile Include="..\AmazTool\bin\$(Configuration)\net8.0\$(RuntimeIdentifier)\AmazTool.dll" Condition="Exists('..\AmazTool\bin\$(Configuration)\net8.0\$(RuntimeIdentifier)\AmazTool.dll')" />
+			<AmazToolPublishFile Include="..\AmazTool\bin\$(Configuration)\net8.0\$(RuntimeIdentifier)\AmazTool.deps.json" Condition="Exists('..\AmazTool\bin\$(Configuration)\net8.0\$(RuntimeIdentifier)\AmazTool.deps.json')" />
+			<AmazToolPublishFile Include="..\AmazTool\bin\$(Configuration)\net8.0\$(RuntimeIdentifier)\AmazTool.runtimeconfig.json" Condition="Exists('..\AmazTool\bin\$(Configuration)\net8.0\$(RuntimeIdentifier)\AmazTool.runtimeconfig.json')" />
+			<AmazToolPublishFile Include="..\AmazTool\bin\$(Configuration)\net8.0\$(RuntimeIdentifier)\zh-*\AmazTool.resources.dll" Condition="Exists('..\AmazTool\bin\$(Configuration)\net8.0\$(RuntimeIdentifier)')" />
+		</ItemGroup>
+
+		<Copy
+			SourceFiles="@(AmazToolPublishFile)"
+			DestinationFiles="@(AmazToolPublishFile->'$(PublishDir)%(RecursiveDir)%(Filename)%(Extension)')"
+			SkipUnchangedFiles="true" />
+	</Target>
+
+</Project>

@@ -1,0 +1,2695 @@
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.IO;
+using System.Linq;
+using System.Net.Sockets;
+using System.Runtime.CompilerServices;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Text;
+using System.Net;
+using System.Net.Http;
+using System.Windows.Threading;
+using System.Windows.Media;
+using System.Windows.Data;
+using H.NotifyIcon;
+using MaterialDesignColors;
+using MaterialDesignColors.ColorManipulation;
+using MaterialDesignThemes.Wpf;
+using Microsoft.Win32;
+using ServiceLib.Handler;
+using ServiceLib.Handler.SysProxy;
+using ServiceLib.Manager;
+using ServiceLib.Models;
+using ServiceLib.ViewModels;
+using v2rayN.Base;
+using v2rayN.Models;
+
+namespace v2rayN.Views;
+
+public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyPropertyChanged
+{
+    private const double CustomColorPlaneWidth = 260;
+    private const double CustomColorPlaneHeight = 160;
+
+    private readonly Config _config;
+    private readonly PaletteHelper _paletteHelper = new();
+    private QuickRuleConfig _quickRules;
+    private readonly DispatcherTimer _connectionPingTimer;
+    private bool _closing;
+    private bool _isPickingCustomColor;
+    private bool _isUpdatingConnectionPing;
+    private bool _isRefreshingZapretConfigs;
+    private bool _isSwitchingZapretConfig;
+    private bool _isAutoTestingZapret;
+    private bool _startupUiHandled;
+    private bool _startupZapretRestorePending = true;
+    private CancellationTokenSource? _zapretAutoTestCts;
+    private Task? _zapretAutoTestTask;
+    private RegisteredWaitHandle? _singleInstanceWaitHandle;
+
+    public ObservableCollection<ProfileItemModel> Profiles { get; } = new();
+    public ObservableCollection<string> DirectApps { get; } = new();
+    public ObservableCollection<string> DirectDomains { get; } = new();
+    public ObservableCollection<string> ProxyDomains { get; } = new();
+    public ObservableCollection<string> BlockDomains { get; } = new();
+    public ObservableCollection<ZapretConfigItem> ZapretConfigs { get; } = new();
+    public ObservableCollection<RunningProcessItem> RunningProcesses { get; } = new();
+    public ObservableCollection<PrimaryColorOption> PrimaryColors { get; } = new();
+    public ICollectionView RunningProcessesView { get; }
+
+    private ProfileItemModel? _selectedProfile;
+    public ProfileItemModel? SelectedProfile
+    {
+        get => _selectedProfile;
+        set => SetField(ref _selectedProfile, value);
+    }
+
+    private string? _selectedApp;
+    public string? SelectedApp
+    {
+        get => _selectedApp;
+        set => SetField(ref _selectedApp, value);
+    }
+
+    private string? _selectedDomain;
+    public string? SelectedDomain
+    {
+        get => _selectedDomain;
+        set => SetField(ref _selectedDomain, value);
+    }
+
+    private string? _selectedBlockedDomain;
+    public string? SelectedBlockedDomain
+    {
+        get => _selectedBlockedDomain;
+        set => SetField(ref _selectedBlockedDomain, value);
+    }
+
+    private string? _selectedProxyDomain;
+    public string? SelectedProxyDomain
+    {
+        get => _selectedProxyDomain;
+        set => SetField(ref _selectedProxyDomain, value);
+    }
+
+    private string _inputLink = string.Empty;
+    public string InputLink
+    {
+        get => _inputLink;
+        set => SetField(ref _inputLink, value);
+    }
+
+    private string _newDomain = string.Empty;
+    public string NewDomain
+    {
+        get => _newDomain;
+        set => SetField(ref _newDomain, value);
+    }
+
+    private string _newBlockedDomain = string.Empty;
+    public string NewBlockedDomain
+    {
+        get => _newBlockedDomain;
+        set => SetField(ref _newBlockedDomain, value);
+    }
+
+    private string _newProxyDomain = string.Empty;
+    public string NewProxyDomain
+    {
+        get => _newProxyDomain;
+        set => SetField(ref _newProxyDomain, value);
+    }
+
+    private string _statusMessage = string.Empty;
+    public string StatusMessage
+    {
+        get => _statusMessage;
+        set => SetField(ref _statusMessage, value);
+    }
+
+    private string _serverPing = string.Empty;
+    public string ServerPing
+    {
+        get => _serverPing;
+        set => SetField(ref _serverPing, value);
+    }
+
+    private string _debugLog = string.Empty;
+    public string DebugLog
+    {
+        get => _debugLog;
+        set => SetField(ref _debugLog, value);
+    }
+
+    private string _zapretStatus = string.Empty;
+    public string ZapretStatus
+    {
+        get => _zapretStatus;
+        set => SetField(ref _zapretStatus, value);
+    }
+
+    private string _zapretPath = string.Empty;
+    public string ZapretPath
+    {
+        get => _zapretPath;
+        set => SetField(ref _zapretPath, value);
+    }
+
+    private ZapretConfigItem? _selectedZapretConfig;
+    public ZapretConfigItem? SelectedZapretConfig
+    {
+        get => _selectedZapretConfig;
+        set
+        {
+            if (SetField(ref _selectedZapretConfig, value)
+                && !_isRefreshingZapretConfigs
+                && !_isSwitchingZapretConfig
+                && IsLoaded
+                && ZapretRunning
+                && value?.Name.IsNullOrEmpty() == false)
+            {
+                _ = SwitchZapretConfigAsync(value.Name);
+            }
+        }
+    }
+
+    private RunningProcessItem? _selectedRunningProcess;
+    public RunningProcessItem? SelectedRunningProcess
+    {
+        get => _selectedRunningProcess;
+        set => SetField(ref _selectedRunningProcess, value);
+    }
+
+    private string _runningProcessSearchText = string.Empty;
+    public string RunningProcessSearchText
+    {
+        get => _runningProcessSearchText;
+        set
+        {
+            if (SetField(ref _runningProcessSearchText, value))
+            {
+                ApplyRunningProcessFilter();
+            }
+        }
+    }
+
+    private bool _zapretRunning;
+    public bool ZapretRunning
+    {
+        get => _zapretRunning;
+        set => SetField(ref _zapretRunning, value);
+    }
+
+    private bool _autoRun;
+    public bool AutoRun
+    {
+        get => _autoRun;
+        set => SetField(ref _autoRun, value);
+    }
+
+    private bool _hideToTrayOnClose;
+    public bool HideToTrayOnClose
+    {
+        get => _hideToTrayOnClose;
+        set => SetField(ref _hideToTrayOnClose, value);
+    }
+
+    private bool _bypassPrivate = true;
+    public bool BypassPrivate
+    {
+        get => _bypassPrivate;
+        set => SetField(ref _bypassPrivate, value);
+    }
+
+    private bool _proxyOnlyMode;
+    public bool ProxyOnlyMode
+    {
+        get => _proxyOnlyMode;
+        set => SetField(ref _proxyOnlyMode, value);
+    }
+
+    private bool _useProxyDomainsPreset;
+    public bool UseProxyDomainsPreset
+    {
+        get => _useProxyDomainsPreset;
+        set => SetField(ref _useProxyDomainsPreset, value);
+    }
+
+    private bool _vpnEnabled;
+    public bool VpnEnabled
+    {
+        get => _vpnEnabled;
+        set => SetField(ref _vpnEnabled, value);
+    }
+
+    private bool _tunEnabled;
+    public bool TunEnabled
+    {
+        get => _tunEnabled;
+        set => SetField(ref _tunEnabled, value);
+    }
+
+    private bool _zapretEnabled;
+    public bool ZapretEnabled
+    {
+        get => _zapretEnabled;
+        set => SetField(ref _zapretEnabled, value);
+    }
+
+    private PrimaryColorOption? _selectedPrimaryColor;
+    public PrimaryColorOption? SelectedPrimaryColor
+    {
+        get => _selectedPrimaryColor;
+        set
+        {
+            if (SetField(ref _selectedPrimaryColor, value))
+            {
+                NotifyCustomColorStateChanged();
+            }
+        }
+    }
+
+    private bool _useCustomPrimaryColor;
+    public bool UseCustomPrimaryColor
+    {
+        get => _useCustomPrimaryColor;
+        set
+        {
+            if (SetField(ref _useCustomPrimaryColor, value))
+            {
+                NotifyCustomColorStateChanged();
+            }
+        }
+    }
+
+    private double _customHue = 220;
+    public double CustomHue
+    {
+        get => _customHue;
+        set
+        {
+            if (SetField(ref _customHue, value))
+            {
+                NotifyCustomColorStateChanged();
+            }
+        }
+    }
+
+    private double _customSaturation = 1;
+    public double CustomSaturation
+    {
+        get => _customSaturation;
+        set
+        {
+            if (SetField(ref _customSaturation, value))
+            {
+                NotifyCustomColorStateChanged();
+            }
+        }
+    }
+
+    private double _customValue = 1;
+    public double CustomValue
+    {
+        get => _customValue;
+        set
+        {
+            if (SetField(ref _customValue, value))
+            {
+                NotifyCustomColorStateChanged();
+            }
+        }
+    }
+
+    public Brush CustomPrimaryBaseBrush => new SolidColorBrush(ColorFromHsv(CustomHue, 1, 1));
+    public Brush CustomPrimaryPreviewBrush => new SolidColorBrush(GetSelectedPrimaryColor());
+    public string CustomPrimaryColorHex => $"#{GetSelectedPrimaryColor().R:X2}{GetSelectedPrimaryColor().G:X2}{GetSelectedPrimaryColor().B:X2}";
+    public double CustomColorCursorLeft => Math.Clamp(CustomSaturation * CustomColorPlaneWidth - 6, -6, CustomColorPlaneWidth - 6);
+    public double CustomColorCursorTop => Math.Clamp((1 - CustomValue) * CustomColorPlaneHeight - 6, -6, CustomColorPlaneHeight - 6);
+
+    private string _connectionPing = "Connection ping: --";
+    public string ConnectionPing
+    {
+        get => _connectionPing;
+        set
+        {
+            if (SetField(ref _connectionPing, value))
+            {
+                UpdateTrayToolTip();
+            }
+        }
+    }
+
+    private string _trayToolTip = "NetCat";
+    public string TrayToolTip
+    {
+        get => _trayToolTip;
+        set => SetField(ref _trayToolTip, value);
+    }
+
+    public MainWindow()
+    {
+        InitializeComponent();
+
+        _config = AppManager.Instance.Config;
+        _quickRules = QuickRuleHandler.Load();
+        RunningProcessesView = CollectionViewSource.GetDefaultView(RunningProcesses);
+        RunningProcessesView.Filter = FilterRunningProcess;
+
+        ViewModel = new MainWindowViewModel((_, _) => Task.FromResult(false));
+        DataContext = this;
+
+        AutoRun = _config.GuiItem.AutoRun;
+        HideToTrayOnClose = _config.UiItem.Hide2TrayWhenClose;
+        BypassPrivate = _quickRules.BypassPrivate;
+        ProxyOnlyMode = _quickRules.ProxyOnlyMode;
+        UseProxyDomainsPreset = _quickRules.UseProxyDomainsPreset;
+        TunEnabled = _config.TunModeItem.EnableTun;
+        LoadAppearanceOptions();
+        var preferredColor = _config.UiItem.ColorPrimaryName.IsNullOrEmpty() ? "Blue" : _config.UiItem.ColorPrimaryName;
+        SelectedPrimaryColor = PrimaryColors.FirstOrDefault(t => string.Equals(t.Name, preferredColor, StringComparison.OrdinalIgnoreCase))
+            ?? PrimaryColors.FirstOrDefault();
+        LoadCustomAppearance();
+        ApplyAppearance();
+        LoadQuickLists();
+        RefreshRunningProcesses();
+        VpnEnabled = _config.SystemProxyItem.SysProxyType == ESysProxyType.ForcedChange;
+        if (ShouldHideWindowOnStartup())
+        {
+            WindowState = WindowState.Minimized;
+        }
+
+        _ = ApplyQuickRulesAsync(reload: false);
+        _ = RefreshZapretAsync();
+        Closing += MainWindow_Closing;
+        Closed += MainWindow_Closed;
+        _connectionPingTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(8)
+        };
+        _connectionPingTimer.Tick += ConnectionPingTimer_Tick;
+        _connectionPingTimer.Start();
+        RegisterSingleInstanceRestore();
+        _ = RefreshProfilesAsync();
+        UpdateTrayToolTip();
+        _ = UpdateConnectionPingAsync();
+    }
+
+    protected override async void OnLoaded(object? sender, RoutedEventArgs e)
+    {
+        base.OnLoaded(sender, e);
+        if (_startupUiHandled)
+        {
+            return;
+        }
+
+        _startupUiHandled = true;
+        if (ShouldHideWindowOnStartup())
+        {
+            HideWindowToTray();
+        }
+
+        await RefreshZapretAsync();
+    }
+
+    private void LoadQuickLists()
+    {
+        DirectApps.Clear();
+        DirectDomains.Clear();
+        ProxyDomains.Clear();
+        BlockDomains.Clear();
+
+        foreach (var app in _quickRules.DirectProcesses.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!string.IsNullOrWhiteSpace(app))
+            {
+                DirectApps.Add(app);
+            }
+        }
+
+        foreach (var domain in _quickRules.DirectDomains.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!string.IsNullOrWhiteSpace(domain))
+            {
+                DirectDomains.Add(domain);
+            }
+        }
+
+        foreach (var domain in _quickRules.BlockDomains.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!string.IsNullOrWhiteSpace(domain))
+            {
+                BlockDomains.Add(domain);
+            }
+        }
+
+        foreach (var domain in _quickRules.ProxyDomains.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!string.IsNullOrWhiteSpace(domain))
+            {
+                ProxyDomains.Add(domain);
+            }
+        }
+    }
+
+    private async Task RefreshProfilesAsync()
+    {
+        var items = await AppManager.Instance.ProfileModels("", "") ?? new List<ProfileItemModel>();
+        var preferredIndexId = SelectedProfile?.IndexId ?? _config.IndexId;
+        foreach (var item in items)
+        {
+            item.IsActive = item.IndexId == _config.IndexId;
+        }
+
+        Profiles.Clear();
+        foreach (var item in items.OrderBy(t => t.Sort))
+        {
+            Profiles.Add(item);
+        }
+
+        SelectedProfile = Profiles.FirstOrDefault(t => t.IndexId == preferredIndexId)
+            ?? Profiles.FirstOrDefault(t => t.IsActive)
+            ?? Profiles.FirstOrDefault();
+        await UpdateConnectionPingAsync();
+    }
+
+    private async Task ApplyQuickRulesAsync(bool reload)
+    {
+        _quickRules.DirectProcesses = DirectApps
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Select(t => t.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        _quickRules.DirectDomains = DirectDomains
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Select(t => t.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        _quickRules.BlockDomains = BlockDomains
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Select(t => t.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        _quickRules.ProxyDomains = ProxyDomains
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Select(t => t.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        _quickRules.UseProxyDomainsPreset = UseProxyDomainsPreset;
+        _quickRules.ProxyOnlyMode = ProxyOnlyMode;
+        _quickRules.BypassPrivate = BypassPrivate;
+
+        await QuickRuleHandler.Apply(_config, _quickRules);
+
+        if (reload)
+        {
+            if (VpnEnabled || TunEnabled)
+            {
+                await CoreManager.Instance.CoreStop();
+                await Task.Delay(400);
+            }
+
+            await ViewModel.Reload();
+        }
+    }
+
+    private void SetStatus(string message)
+    {
+        StatusMessage = message;
+        UpdateTrayToolTip();
+    }
+
+    private void SetZapretStatus(string message)
+    {
+        ZapretStatus = message;
+    }
+
+    private async Task RefreshZapretAsync()
+    {
+        _isRefreshingZapretConfigs = true;
+        try
+        {
+            var preferred = _config.GuiItem.ZapretPath;
+            var selectedName = SelectedZapretConfig?.Name;
+            var preferredConfigName = _config.GuiItem.LastZapretConfig;
+            var existing = ZapretConfigs.ToDictionary(t => t.Name, StringComparer.OrdinalIgnoreCase);
+            ZapretPath = ZapretHandler.FindZapretPath(preferred) ?? string.Empty;
+            ZapretConfigs.Clear();
+            if (!ZapretPath.IsNullOrEmpty())
+            {
+                foreach (var cfg in ZapretHandler.GetBatFiles(ZapretPath))
+                {
+                    if (!existing.TryGetValue(cfg, out var item))
+                    {
+                        item = new ZapretConfigItem { Name = cfg };
+                    }
+
+                    ZapretConfigs.Add(item);
+                }
+            }
+
+            if (!selectedName.IsNullOrEmpty())
+            {
+                SelectedZapretConfig = ZapretConfigs.FirstOrDefault(t => string.Equals(t.Name, selectedName, StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (SelectedZapretConfig == null && !preferredConfigName.IsNullOrEmpty())
+            {
+                SelectedZapretConfig = ZapretConfigs.FirstOrDefault(t => string.Equals(t.Name, preferredConfigName, StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (SelectedZapretConfig == null && ZapretConfigs.Count > 0)
+            {
+                SelectedZapretConfig = ZapretConfigs[0];
+            }
+
+            ZapretRunning = ZapretHandler.IsRunning();
+            ZapretEnabled = ZapretRunning;
+            if (ZapretPath.IsNullOrEmpty() && !preferred.IsNullOrEmpty())
+            {
+                SetZapretStatus("Zapret path not found. Select folder or place zapret рядом с программой.");
+            }
+            else
+            {
+                SetZapretStatus(ZapretPath.IsNullOrEmpty() ? "Zapret not found" : "Zapret ready");
+            }
+        }
+        finally
+        {
+            _isRefreshingZapretConfigs = false;
+        }
+
+        var shouldRestoreZapret = _startupZapretRestorePending
+            && _config.GuiItem.ZapretEnabled
+            && !ZapretRunning;
+        _startupZapretRestorePending = false;
+        if (shouldRestoreZapret)
+        {
+            await StartZapretAsync(persistEnabledState: false, initialStatus: "Restoring zapret...");
+        }
+
+        await Task.CompletedTask;
+    }
+
+    private async void MainWindow_Closing(object? sender, CancelEventArgs e)
+    {
+        if (!_closing && HideToTrayOnClose)
+        {
+            e.Cancel = true;
+            HideWindowToTray();
+            return;
+        }
+
+        if (_closing)
+        {
+            return;
+        }
+
+        _closing = true;
+        e.Cancel = true;
+        await AppManager.Instance.AppExitAsync(true);
+    }
+
+    private void MainWindow_Closed(object? sender, EventArgs e)
+    {
+        _singleInstanceWaitHandle?.Unregister(null);
+        _connectionPingTimer.Stop();
+        TrayIcon?.Dispose();
+    }
+
+    private async void AutoRun_Checked(object sender, RoutedEventArgs e)
+    {
+        _config.GuiItem.AutoRun = AutoRun;
+        await AutoStartupHandler.UpdateTask(_config);
+        await ConfigHandler.SaveConfig(_config);
+        SetStatus(AutoRun ? "Autostart enabled" : "Autostart disabled");
+    }
+
+    private async void HideToTrayOnClose_Checked(object sender, RoutedEventArgs e)
+    {
+        _config.UiItem.Hide2TrayWhenClose = HideToTrayOnClose;
+        if (AutoRun)
+        {
+            await AutoStartupHandler.UpdateTask(_config);
+        }
+
+        await ConfigHandler.SaveConfig(_config);
+        SetStatus(HideToTrayOnClose ? "Hide to tray enabled" : "Hide to tray disabled");
+    }
+
+    private void OnOpenUpdateWindow(object sender, RoutedEventArgs e)
+    {
+        var window = new Window
+        {
+            Title = "NetCat Update",
+            Owner = this,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Width = 760,
+            Height = 520,
+            Content = new CheckUpdateView()
+        };
+
+        window.ShowDialog();
+    }
+
+    private async void BypassPrivate_Checked(object sender, RoutedEventArgs e)
+    {
+        await ApplyQuickRulesAsync(reload: true);
+        SetStatus("Routing updated");
+    }
+
+    private async void ProxyOnlyMode_Checked(object sender, RoutedEventArgs e)
+    {
+        await ApplyQuickRulesAsync(reload: true);
+        SetStatus(ProxyOnlyMode ? "Selective VPN mode enabled" : "Full VPN mode enabled");
+    }
+
+    private async void UseProxyDomainsPreset_Checked(object sender, RoutedEventArgs e)
+    {
+        await ApplyQuickRulesAsync(reload: true);
+        SetStatus(UseProxyDomainsPreset
+            ? "Preset blocked domains list enabled"
+            : "Preset blocked domains list disabled");
+    }
+
+    private async void OnPrimaryColorChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (SelectedPrimaryColor == null)
+        {
+            return;
+        }
+
+        if (UseCustomPrimaryColor)
+        {
+            return;
+        }
+
+        ApplyAppearance();
+        await ConfigHandler.SaveConfig(_config);
+        SetStatus($"Primary color set to {SelectedPrimaryColor.Name}");
+    }
+
+    private async void OnUseCustomPrimaryColorChanged(object sender, RoutedEventArgs e)
+    {
+        ApplyAppearance();
+        await ConfigHandler.SaveConfig(_config);
+        SetStatus(UseCustomPrimaryColor
+            ? $"Custom primary color set to {CustomPrimaryColorHex}"
+            : $"Primary color set to {SelectedPrimaryColor?.Name ?? "Blue"}");
+    }
+
+    private async void OnCustomHueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!IsLoaded)
+        {
+            return;
+        }
+
+        if (!UseCustomPrimaryColor)
+        {
+            return;
+        }
+
+        ApplyAppearance();
+        await ConfigHandler.SaveConfig(_config);
+    }
+
+    private async void OnCustomColorPlaneMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        _isPickingCustomColor = true;
+        if (sender is IInputElement inputElement)
+        {
+            Mouse.Capture(inputElement);
+        }
+
+        UpdateCustomColorFromPoint(e.GetPosition(CustomColorPlane));
+        UseCustomPrimaryColor = true;
+        ApplyAppearance();
+        await ConfigHandler.SaveConfig(_config);
+    }
+
+    private async void OnCustomColorPlaneMouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_isPickingCustomColor)
+        {
+            return;
+        }
+
+        UpdateCustomColorFromPoint(e.GetPosition(CustomColorPlane));
+        if (!UseCustomPrimaryColor)
+        {
+            UseCustomPrimaryColor = true;
+        }
+
+        ApplyAppearance();
+        await ConfigHandler.SaveConfig(_config);
+    }
+
+    private void OnCustomColorPlaneMouseUp(object sender, MouseButtonEventArgs e)
+    {
+        _isPickingCustomColor = false;
+        Mouse.Capture(null);
+    }
+
+    private async void OnToggleVpn(object sender, RoutedEventArgs e)
+    {
+        if (VpnEnabled)
+        {
+            var ready = await EnsureActiveCoreReadyAsync();
+
+            if (!ready)
+            {
+                VpnEnabled = false;
+                return;
+            }
+
+            await EnsureInboundPortAvailableAsync();
+
+            _config.SystemProxyItem.SysProxyType = ESysProxyType.ForcedChange;
+            await ConfigHandler.SaveConfig(_config);
+            await ViewModel.Reload();
+            await SysProxyHandler.UpdateSysProxy(_config, false);
+            await Task.Delay(800);
+            var running = Process.GetProcessesByName("xray").Length > 0
+                          || Process.GetProcessesByName("sing-box").Length > 0
+                          || Process.GetProcessesByName("mihomo").Length > 0;
+            await UpdateConnectionPingAsync();
+            SetStatus(running ? "VPN enabled" : "VPN enabled, but core not running");
+        }
+        else
+        {
+            _config.SystemProxyItem.SysProxyType = ESysProxyType.ForcedClear;
+            await ConfigHandler.SaveConfig(_config);
+
+            if (TunEnabled)
+            {
+                await ViewModel.Reload();
+            }
+            else
+            {
+                await CoreManager.Instance.CoreStop();
+            }
+
+            await SysProxyHandler.UpdateSysProxy(_config, true);
+            await UpdateConnectionPingAsync();
+            SetStatus(TunEnabled ? "VPN disabled, TUN stays active" : "VPN disabled");
+        }
+    }
+
+    private async void OnAddLink(object sender, RoutedEventArgs e)
+    {
+        var link = InputLink?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(link))
+        {
+            SetStatus("Введите ссылку или подписку");
+            return;
+        }
+
+        try
+        {
+            if (link.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+            {
+                var subscriptionExists = (await AppManager.Instance.SubItems())
+                    .Any(t => string.Equals(t.Url, link, StringComparison.OrdinalIgnoreCase));
+                var ret = await ConfigHandler.AddSubItem(_config, link);
+                if (ret == 0)
+                {
+                    await SubscriptionHandler.UpdateProcess(_config, "", false, (_, _) => Task.CompletedTask);
+                    SetStatus(subscriptionExists ? "Subscription updated" : "Subscription added and updated");
+                }
+                else
+                {
+                    SetStatus("Failed to add subscription");
+                }
+            }
+            else
+            {
+                var ret = await ConfigHandler.AddBatchServers(_config, link, _config.SubIndexId, false);
+                SetStatus(ret > 0 ? "Link imported" : "Failed to import link");
+            }
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Error: {ex.Message}");
+        }
+        finally
+        {
+            InputLink = string.Empty;
+        }
+
+        await RefreshProfilesAsync();
+    }
+
+    private async void OnSetActive(object sender, RoutedEventArgs e)
+    {
+        if (SelectedProfile == null)
+        {
+            SetStatus("Select a profile first");
+            return;
+        }
+
+        await ConfigHandler.SetDefaultServerIndex(_config, SelectedProfile.IndexId);
+        await ViewModel.Reload();
+        await RefreshProfilesAsync();
+        await UpdateConnectionPingAsync();
+        SetStatus("Active profile updated");
+    }
+
+    private async void OnProfilesMouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (SelectedProfile == null)
+        {
+            return;
+        }
+
+        OnEditProfile(sender, e);
+        await Task.CompletedTask;
+    }
+
+    private async void OnEditProfile(object sender, RoutedEventArgs e)
+    {
+        if (SelectedProfile == null)
+        {
+            SetStatus("Select a profile first");
+            return;
+        }
+
+        var item = await AppManager.Instance.GetProfileItem(SelectedProfile.IndexId);
+        if (item == null)
+        {
+            SetStatus("Configuration not found");
+            return;
+        }
+
+        bool? result;
+        if (item.ConfigType == EConfigType.Custom)
+        {
+            result = new AddServer2Window(item).ShowDialog();
+        }
+        else if (item.ConfigType.IsGroupType())
+        {
+            result = new AddGroupServerWindow(item).ShowDialog();
+        }
+        else
+        {
+            result = new AddServerWindow(item).ShowDialog();
+        }
+
+        if (result != true)
+        {
+            return;
+        }
+
+        await RefreshProfilesAsync();
+        if (item.IndexId == _config.IndexId)
+        {
+            await ViewModel.Reload();
+        }
+
+        SetStatus("Configuration updated");
+    }
+
+    private async void OnDeleteProfile(object sender, RoutedEventArgs e)
+    {
+        if (SelectedProfile == null)
+        {
+            SetStatus("Select a profile first");
+            return;
+        }
+
+        var item = await AppManager.Instance.GetProfileItem(SelectedProfile.IndexId);
+        if (item == null)
+        {
+            SetStatus("Configuration not found");
+            return;
+        }
+
+        if (UI.ShowYesNo(ResUI.RemoveServer) == MessageBoxResult.No)
+        {
+            return;
+        }
+
+        var wasActive = item.IndexId == _config.IndexId;
+        await ConfigHandler.RemoveServers(_config, new List<ProfileItem> { item });
+        await RefreshProfilesAsync();
+
+        if (wasActive)
+        {
+            await ViewModel.Reload();
+        }
+
+        SetStatus("Configuration deleted");
+    }
+
+    private async void OnDuplicateProfile(object sender, RoutedEventArgs e)
+    {
+        if (SelectedProfile == null)
+        {
+            SetStatus("Select a profile first");
+            return;
+        }
+
+        var item = await AppManager.Instance.GetProfileItem(SelectedProfile.IndexId);
+        if (item == null)
+        {
+            SetStatus("Configuration not found");
+            return;
+        }
+
+        await ConfigHandler.CopyServer(_config, new List<ProfileItem> { item });
+        await RefreshProfilesAsync();
+        SetStatus("Configuration duplicated");
+    }
+
+    private async void OnAddApp(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Filter = "Executable (*.exe)|*.exe|All files (*.*)|*.*",
+            CheckFileExists = true,
+            Title = "Select application executable"
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        var fullPath = dialog.FileName;
+        if (string.IsNullOrWhiteSpace(fullPath))
+        {
+            return;
+        }
+
+        AddDirectAppEntries(fullPath);
+        await ApplyQuickRulesAsync(reload: true);
+        SetStatus("App added to direct list");
+    }
+
+    private async void OnRefreshRunningProcesses(object sender, RoutedEventArgs e)
+    {
+        RefreshRunningProcesses();
+        await Task.CompletedTask;
+        SetStatus("Running processes refreshed");
+    }
+
+    private async void OnAddRunningProcess(object sender, RoutedEventArgs e)
+    {
+        if (SelectedRunningProcess == null || SelectedRunningProcess.FilePath.IsNullOrEmpty())
+        {
+            SetStatus("Select a running process first");
+            return;
+        }
+
+        AddDirectAppEntries(SelectedRunningProcess.FilePath);
+        await ApplyQuickRulesAsync(reload: true);
+        SetStatus($"Added running app: {Path.GetFileName(SelectedRunningProcess.FilePath)}");
+    }
+
+    private async void OnRemoveApp(object sender, RoutedEventArgs e)
+    {
+        if (SelectedApp == null)
+        {
+            return;
+        }
+
+        DirectApps.Remove(SelectedApp);
+        await ApplyQuickRulesAsync(reload: true);
+        SetStatus("App removed");
+    }
+
+    private async void OnAddDomain(object sender, RoutedEventArgs e)
+    {
+        var domain = NewDomain?.Trim();
+        if (string.IsNullOrWhiteSpace(domain))
+        {
+            SetStatus("Введите домен");
+            return;
+        }
+
+        var normalized = NormalizeDomainRule(domain);
+        if (DirectDomains.Any(t => string.Equals(t, normalized, StringComparison.OrdinalIgnoreCase)))
+        {
+            SetStatus("Domain already in list");
+            return;
+        }
+
+        DirectDomains.Add(normalized);
+        NewDomain = string.Empty;
+        await ApplyQuickRulesAsync(reload: true);
+        SetStatus("Domain added");
+    }
+
+    private async void OnRemoveDomain(object sender, RoutedEventArgs e)
+    {
+        if (SelectedDomain == null)
+        {
+            return;
+        }
+
+        DirectDomains.Remove(SelectedDomain);
+        await ApplyQuickRulesAsync(reload: true);
+        SetStatus("Domain removed");
+    }
+
+    private async void OnAddRussianWhitelistPreset(object sender, RoutedEventArgs e)
+    {
+        var presetRules = new[]
+        {
+            "geosite:category-ru",
+            "domain:vk.com"
+        };
+
+        var added = 0;
+        foreach (var rule in presetRules)
+        {
+            if (DirectDomains.Any(t => string.Equals(t, rule, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            DirectDomains.Add(rule);
+            added++;
+        }
+
+        if (added == 0)
+        {
+            SetStatus("RU preset is already in whitelist");
+            return;
+        }
+
+        await ApplyQuickRulesAsync(reload: true);
+        SetStatus("Added RU sites preset to whitelist");
+    }
+
+    private async void OnApplyRouting(object sender, RoutedEventArgs e)
+    {
+        await ApplyQuickRulesAsync(reload: true);
+        SetStatus("Routing applied");
+    }
+
+    private async void OnAddBlockedDomain(object sender, RoutedEventArgs e)
+    {
+        var domain = NewBlockedDomain?.Trim();
+        if (string.IsNullOrWhiteSpace(domain))
+        {
+            SetStatus("Введите домен для блокировки");
+            return;
+        }
+
+        var normalized = NormalizeDomainRule(domain);
+        if (BlockDomains.Any(t => string.Equals(t, normalized, StringComparison.OrdinalIgnoreCase)))
+        {
+            SetStatus("Blocked domain already in list");
+            return;
+        }
+
+        BlockDomains.Add(normalized);
+        NewBlockedDomain = string.Empty;
+        await ApplyQuickRulesAsync(reload: true);
+        SetStatus("Blocked domain added");
+    }
+
+    private async void OnRemoveBlockedDomain(object sender, RoutedEventArgs e)
+    {
+        if (SelectedBlockedDomain == null)
+        {
+            return;
+        }
+
+        BlockDomains.Remove(SelectedBlockedDomain);
+        await ApplyQuickRulesAsync(reload: true);
+        SetStatus("Blocked domain removed");
+    }
+
+    private async void OnAddAdsBlacklistPreset(object sender, RoutedEventArgs e)
+    {
+        const string presetRule = "geosite:category-ads-all";
+        if (BlockDomains.Any(t => string.Equals(t, presetRule, StringComparison.OrdinalIgnoreCase)))
+        {
+            SetStatus("Ads preset is already in blacklist");
+            return;
+        }
+
+        BlockDomains.Add(presetRule);
+        await ApplyQuickRulesAsync(reload: true);
+        SetStatus("Added ads preset to blacklist");
+    }
+
+    private async void OnAddProxyDomain(object sender, RoutedEventArgs e)
+    {
+        var domain = NewProxyDomain?.Trim();
+        if (string.IsNullOrWhiteSpace(domain))
+        {
+            SetStatus("Введите домен для VPN");
+            return;
+        }
+
+        var normalized = NormalizeDomainRule(domain);
+        if (ProxyDomains.Any(t => string.Equals(t, normalized, StringComparison.OrdinalIgnoreCase)))
+        {
+            SetStatus("VPN domain already in list");
+            return;
+        }
+
+        ProxyDomains.Add(normalized);
+        NewProxyDomain = string.Empty;
+        await ApplyQuickRulesAsync(reload: true);
+        SetStatus("VPN domain added");
+    }
+
+    private async void OnRemoveProxyDomain(object sender, RoutedEventArgs e)
+    {
+        if (SelectedProxyDomain == null)
+        {
+            return;
+        }
+
+        ProxyDomains.Remove(SelectedProxyDomain);
+        await ApplyQuickRulesAsync(reload: true);
+        SetStatus("VPN domain removed");
+    }
+
+    private async void OnZapretRefresh(object sender, RoutedEventArgs e)
+    {
+        await RefreshZapretAsync();
+    }
+
+    private async void OnSelectZapretFolder(object sender, RoutedEventArgs e)
+    {
+        if (UI.OpenZapretDialog(out var folderPath) != true)
+        {
+            return;
+        }
+
+        var resolvedPath = folderPath;
+        if (!ZapretHandler.IsValidZapretPath(resolvedPath))
+        {
+            var candidate = Path.Combine(folderPath, "zapret");
+            if (ZapretHandler.IsValidZapretPath(candidate))
+            {
+                resolvedPath = candidate;
+            }
+        }
+
+        if (!ZapretHandler.IsValidZapretPath(resolvedPath))
+        {
+            SetZapretStatus("Selected folder is not zapret (bin\\winws.exe not found)");
+            return;
+        }
+
+        _config.GuiItem.ZapretPath = resolvedPath;
+        await ConfigHandler.SaveConfig(_config);
+        await RefreshZapretAsync();
+        SetZapretStatus("Zapret path updated");
+    }
+
+    private async void OnStartZapret(object sender, RoutedEventArgs e)
+    {
+        await StartZapretAsync();
+    }
+
+    private async void OnStopZapret(object sender, RoutedEventArgs e)
+    {
+        await StopZapretAsync();
+    }
+
+    private async Task SwitchZapretConfigAsync(string configName)
+    {
+        if (_isSwitchingZapretConfig || ZapretPath.IsNullOrEmpty())
+        {
+            return;
+        }
+
+        _isSwitchingZapretConfig = true;
+        try
+        {
+            SetZapretStatus($"Switching to {configName}...");
+            ZapretHandler.Stop();
+            await Task.Delay(800);
+
+            if (ZapretHandler.IsRunning())
+            {
+                SetZapretStatus("Failed to stop current zapret config");
+                return;
+            }
+
+            if (!ZapretHandler.Start(ZapretPath, configName, out var error))
+            {
+                ZapretRunning = false;
+                ZapretEnabled = false;
+                SetZapretStatus(error);
+                return;
+            }
+
+            ZapretRunning = true;
+            ZapretEnabled = true;
+            await PersistZapretEnabledAsync(true);
+            await RememberLastZapretConfigAsync(configName);
+            SetZapretStatus($"Started: {configName}");
+        }
+        finally
+        {
+            _isSwitchingZapretConfig = false;
+        }
+    }
+
+    private async Task RememberLastZapretConfigAsync(string? configName)
+    {
+        if (configName.IsNullOrEmpty() || string.Equals(_config.GuiItem.LastZapretConfig, configName, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        _config.GuiItem.LastZapretConfig = configName;
+        await ConfigHandler.SaveConfig(_config);
+    }
+
+    private async Task PersistZapretEnabledAsync(bool enabled)
+    {
+        if (_config.GuiItem.ZapretEnabled == enabled)
+        {
+            return;
+        }
+
+        _config.GuiItem.ZapretEnabled = enabled;
+        await ConfigHandler.SaveConfig(_config);
+    }
+
+    private async Task StartZapretAsync(bool persistEnabledState = true, string initialStatus = "Starting...")
+    {
+        if (ZapretRunning)
+        {
+            if (persistEnabledState)
+            {
+                await PersistZapretEnabledAsync(true);
+            }
+
+            SetZapretStatus("Zapret already running");
+            return;
+        }
+
+        if (ZapretPath.IsNullOrEmpty() || SelectedZapretConfig?.Name.IsNullOrEmpty() != false)
+        {
+            if (persistEnabledState)
+            {
+                await PersistZapretEnabledAsync(false);
+            }
+
+            ZapretEnabled = false;
+            SetZapretStatus("Select config");
+            return;
+        }
+
+        SetZapretStatus(initialStatus);
+        if (ZapretHandler.Start(ZapretPath, SelectedZapretConfig.Name, out var error))
+        {
+            ZapretRunning = true;
+            ZapretEnabled = true;
+            if (persistEnabledState)
+            {
+                await PersistZapretEnabledAsync(true);
+            }
+
+            await RememberLastZapretConfigAsync(SelectedZapretConfig.Name);
+            SetZapretStatus($"Started: {SelectedZapretConfig.Name}");
+            return;
+        }
+
+        if (persistEnabledState)
+        {
+            await PersistZapretEnabledAsync(false);
+        }
+
+        ZapretEnabled = false;
+        SetZapretStatus(error);
+    }
+
+    private async Task StopZapretAsync()
+    {
+        ZapretHandler.Stop();
+        await Task.Delay(500);
+        ZapretRunning = ZapretHandler.IsRunning();
+        ZapretEnabled = ZapretRunning;
+        await PersistZapretEnabledAsync(ZapretRunning);
+        SetZapretStatus(ZapretRunning ? "Failed to stop" : "Stopped");
+    }
+
+    private async void OnTestZapret(object sender, RoutedEventArgs e)
+    {
+        var result = await RunZapretTestAsync("Testing YouTube", keepRunning: true);
+        if (result == null)
+        {
+            return;
+        }
+
+        UpdateZapretConfigResult(SelectedZapretConfig?.Name, result);
+        SetZapretStatus($"YouTube: {result.YoutubeMessage}");
+    }
+
+    private async void OnTestZapretDiscord(object sender, RoutedEventArgs e)
+    {
+        var result = await RunZapretTestAsync("Testing Discord", keepRunning: true);
+        if (result == null)
+        {
+            return;
+        }
+
+        UpdateZapretConfigResult(SelectedZapretConfig?.Name, result);
+        SetZapretStatus($"Discord: {result.DiscordMessage}");
+    }
+
+    private async void OnAutoTestZapret(object sender, RoutedEventArgs e)
+    {
+        if (ZapretPath.IsNullOrEmpty() || ZapretConfigs.Count == 0)
+        {
+            SetZapretStatus("Zapret not found");
+            return;
+        }
+
+        if (ZapretRunning)
+        {
+            SetZapretStatus("Stop Zapret before testing");
+            return;
+        }
+
+        await CancelZapretAutoTestAsync();
+        _zapretAutoTestCts = new CancellationTokenSource();
+        _zapretAutoTestTask = RunAutoTestZapretAsync(_zapretAutoTestCts.Token);
+        try
+        {
+            await _zapretAutoTestTask;
+        }
+        catch (OperationCanceledException)
+        {
+            SetZapretStatus("Auto test stopped");
+        }
+        finally
+        {
+            _zapretAutoTestCts?.Dispose();
+            _zapretAutoTestCts = null;
+            _zapretAutoTestTask = null;
+            _isAutoTestingZapret = false;
+        }
+    }
+
+    private async Task RunAutoTestZapretAsync(CancellationToken cancellationToken)
+    {
+        _isAutoTestingZapret = true;
+        long best = long.MaxValue;
+        ZapretConfigItem? bestCfg = null;
+        ZapretTestResult? bestResult = null;
+
+        foreach (var cfg in ZapretConfigs)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SetZapretStatus($"Testing {cfg.Name} for YouTube + Discord...");
+            var result = await ZapretHandler.TestConfigAsync(ZapretPath, cfg.Name, keepRunning: false, cancellationToken);
+            UpdateZapretConfigResult(cfg.Name, result);
+            if (result.Success && result.TimeMs.HasValue && result.TimeMs.Value < best)
+            {
+                best = result.TimeMs.Value;
+                bestCfg = cfg;
+                bestResult = result;
+            }
+        }
+
+        if (bestCfg != null)
+        {
+            SelectedZapretConfig = bestCfg;
+            SetZapretStatus(
+                $"Best: {bestCfg.Name} | YouTube: {bestResult?.YoutubeMessage} | Discord: {bestResult?.DiscordMessage} | score {best} ms");
+            return;
+        }
+
+        SetZapretStatus("No config passed both YouTube and Discord");
+    }
+
+    private async void OnPingServer(object sender, RoutedEventArgs e)
+    {
+        var profile = SelectedProfile ?? Profiles.FirstOrDefault(t => t.IsActive);
+        var label = await GetProfilePingLabelAsync(profile);
+        ServerPing = label;
+        ConnectionPing = label.StartsWith("Connection ping:", StringComparison.OrdinalIgnoreCase)
+            ? label
+            : $"Connection ping: {label}";
+    }
+
+    private async void OnRefreshDebug(object sender, RoutedEventArgs e)
+    {
+        DebugLog = await BuildDebugInfoAsync();
+    }
+
+    private void OnCopyDebug(object sender, RoutedEventArgs e)
+    {
+        if (!string.IsNullOrWhiteSpace(DebugLog))
+        {
+            Clipboard.SetText(DebugLog);
+            SetStatus("Debug copied to clipboard");
+        }
+    }
+
+    private void OnClearDebug(object sender, RoutedEventArgs e)
+    {
+        DebugLog = string.Empty;
+        SetStatus("Debug output cleared");
+    }
+
+    private async Task<string> BuildDebugInfoAsync()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine(Utils.GetRuntimeInfo());
+        sb.AppendLine($"Version: {Utils.GetVersion()}");
+        sb.AppendLine($"StartupPath: {Utils.StartupPath()}");
+        sb.AppendLine($"BinPath: {Utils.GetBinPath("")}");
+        sb.AppendLine($"ConfigPath: {Utils.GetConfigPath(Global.ConfigFileName)}");
+        sb.AppendLine($"CoreConfig: {Utils.GetBinConfigPath(Global.CoreConfigFileName)}");
+        sb.AppendLine($"SystemProxyType: {_config.SystemProxyItem.SysProxyType}");
+        sb.AppendLine($"SystemProxyAdvancedProtocol: {_config.SystemProxyItem.SystemProxyAdvancedProtocol}");
+        sb.AppendLine($"SystemProxyNotProxyLocal: {_config.SystemProxyItem.NotProxyLocalAddress}");
+        sb.AppendLine($"SystemProxyExceptions: {_config.SystemProxyItem.SystemProxyExceptions}");
+        sb.AppendLine($"TunEnabled: {_config.TunModeItem.EnableTun}");
+        sb.AppendLine($"VpnEnabled: {VpnEnabled}");
+        var localPort = AppManager.Instance.GetLocalPort(EInboundProtocol.socks);
+        var localPortFree = Utils.GetFreePort(localPort) == localPort;
+        var xrayRunning = Process.GetProcessesByName("xray").Length > 0
+                          || Process.GetProcessesByName("sing-box").Length > 0
+                          || Process.GetProcessesByName("mihomo").Length > 0;
+        sb.AppendLine($"LocalSocksPort: {localPort}");
+        sb.AppendLine($"LocalSocksPortFree: {localPortFree} (xray running: {xrayRunning})");
+        sb.AppendLine($"ZapretPath: {ZapretPath}");
+        sb.AppendLine($"ZapretConfig: {SelectedZapretConfig?.Name}");
+        sb.AppendLine($"ZapretRunning: {ZapretRunning}");
+        sb.AppendLine($"DirectApps: {DirectApps.Count}");
+        sb.AppendLine($"DirectDomains: {DirectDomains.Count}");
+        sb.AppendLine($"ProxyDomains: {ProxyDomains.Count}");
+        sb.AppendLine($"UseProxyDomainsPreset: {UseProxyDomainsPreset}");
+        sb.AppendLine($"BlockDomains: {BlockDomains.Count}");
+        sb.AppendLine($"ProxyOnlyMode: {ProxyOnlyMode}");
+        sb.AppendLine($"BypassPrivate: {BypassPrivate}");
+
+        var defaultProfile = SelectedProfile != null
+            ? await AppManager.Instance.GetProfileItem(SelectedProfile.IndexId)
+            : await ConfigHandler.GetDefaultServer(_config);
+
+        if (defaultProfile != null)
+        {
+            sb.AppendLine($"ActiveProfile: {defaultProfile.GetSummary()}");
+            var coreType = AppManager.Instance.GetCoreType(defaultProfile, defaultProfile.ConfigType);
+            sb.AppendLine($"CoreType: {coreType}");
+
+            var coreInfo = CoreInfoManager.Instance.GetCoreInfo(coreType);
+            var coreExec = CoreInfoManager.Instance.GetCoreExecFile(coreInfo, out var msg);
+            sb.AppendLine($"CoreExec: {coreExec}");
+            if (!string.IsNullOrWhiteSpace(msg))
+            {
+                sb.AppendLine($"CoreExecMsg: {msg}");
+            }
+        }
+        else
+        {
+            sb.AppendLine("ActiveProfile: none");
+        }
+
+        var xrayDir = Utils.GetBinPath("", ECoreType.Xray.ToString());
+        sb.AppendLine($"XrayDir: {xrayDir}");
+        var binDir = Utils.GetBinPath("");
+        sb.AppendLine($"BinRoot: {binDir}");
+        foreach (var name in new[] { "geoip.dat", "geosite.dat" })
+        {
+            var path = Path.Combine(binDir, name);
+            sb.AppendLine(File.Exists(path) ? $"BinAsset: {name} OK" : $"BinAsset: {name} MISSING");
+        }
+        foreach (var name in new[] { "xray.exe", "geoip.dat", "geosite.dat" })
+        {
+            var path = Path.Combine(xrayDir, name);
+            if (File.Exists(path))
+            {
+                var info = new FileInfo(path);
+                sb.AppendLine($"XrayFile: {name} {info.Length} bytes {info.LastWriteTime}");
+            }
+            else
+            {
+                sb.AppendLine($"XrayFile: {name} MISSING");
+            }
+        }
+
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Internet Settings", false);
+            if (key != null)
+            {
+                var proxyEnable = key.GetValue("ProxyEnable");
+                var proxyServer = key.GetValue("ProxyServer");
+                var proxyOverride = key.GetValue("ProxyOverride");
+                var autoConfig = key.GetValue("AutoConfigURL");
+                sb.AppendLine($"Registry ProxyEnable: {proxyEnable}");
+                sb.AppendLine($"Registry ProxyServer: {proxyServer}");
+                sb.AppendLine($"Registry ProxyOverride: {proxyOverride}");
+                sb.AppendLine($"Registry AutoConfigURL: {autoConfig}");
+            }
+        }
+        catch (Exception ex)
+        {
+            sb.AppendLine($"RegistryReadError: {ex.Message}");
+        }
+
+        var coreConfigPath = Utils.GetBinConfigPath(Global.CoreConfigFileName);
+        if (File.Exists(coreConfigPath))
+        {
+            var info = new FileInfo(coreConfigPath);
+            sb.AppendLine($"CoreConfigSize: {info.Length}");
+        }
+        else
+        {
+            sb.AppendLine("CoreConfigMissing");
+        }
+
+        sb.AppendLine($"Process xray: {Process.GetProcessesByName("xray").Length}");
+        sb.AppendLine($"Process v2ray: {Process.GetProcessesByName("v2ray").Length}");
+        sb.AppendLine($"Process sing-box: {Process.GetProcessesByName("sing-box").Length}");
+        sb.AppendLine($"Process mihomo: {Process.GetProcessesByName("mihomo").Length}");
+
+        if (!VpnEnabled && Process.GetProcessesByName("xray").Length > 0)
+        {
+            sb.AppendLine("Warning: xray is running while VPN/system proxy is OFF");
+        }
+
+        var logDir = Utils.GetLogPath();
+        sb.AppendLine($"LogDir: {logDir}");
+        try
+        {
+            var latestLog = Directory.GetFiles(logDir)
+                .Select(path => new FileInfo(path))
+                .OrderByDescending(info => info.LastWriteTimeUtc)
+                .FirstOrDefault();
+
+            if (latestLog != null)
+            {
+                sb.AppendLine($"LatestLog: {latestLog.FullName}");
+                using var stream = new FileStream(latestLog.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var reader = new StreamReader(stream);
+                var lines = new List<string>();
+                while (!reader.EndOfStream)
+                {
+                    var line = await reader.ReadLineAsync();
+                    if (line != null)
+                    {
+                        lines.Add(line);
+                    }
+                }
+                var tail = lines.Skip(Math.Max(0, lines.Count - 200));
+                sb.AppendLine("---- Log Tail ----");
+                foreach (var line in tail)
+                {
+                    sb.AppendLine(line);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            sb.AppendLine($"LogReadError: {ex.Message}");
+        }
+
+        return sb.ToString();
+    }
+
+    private async Task<bool> EnsureXrayCoreAsync()
+    {
+        var coreInfo = CoreInfoManager.Instance.GetCoreInfo(ECoreType.Xray);
+        var coreExec = CoreInfoManager.Instance.GetCoreExecFile(coreInfo, out _);
+        if (!coreExec.IsNullOrEmpty())
+        {
+            await EnsureXrayAssetsAsync();
+            return true;
+        }
+
+        var targetDir = Utils.GetBinPath("", ECoreType.Xray.ToString());
+        var candidateDirs = new List<string>();
+
+        var current = new DirectoryInfo(Utils.StartupPath());
+        for (var i = 0; i < 6 && current != null; i++)
+        {
+            candidateDirs.Add(Path.Combine(current.FullName, "my-vpn-zapret", "resources", "xray"));
+            candidateDirs.Add(Path.Combine(current.FullName, "resources", "xray"));
+            candidateDirs.Add(Path.Combine(current.FullName, "xray"));
+            current = current.Parent;
+        }
+
+        var sourceDir = candidateDirs.FirstOrDefault(dir => File.Exists(Path.Combine(dir, "xray.exe")));
+        if (sourceDir.IsNullOrEmpty())
+        {
+            return false;
+        }
+
+        Directory.CreateDirectory(targetDir);
+        foreach (var file in Directory.GetFiles(sourceDir))
+        {
+            var dest = Path.Combine(targetDir, Path.GetFileName(file));
+            File.Copy(file, dest, true);
+        }
+
+        await EnsureXrayAssetsAsync();
+        return File.Exists(Path.Combine(targetDir, "xray.exe"));
+    }
+
+    private async Task<bool> EnsureSingboxCoreAsync()
+    {
+        var coreInfo = CoreInfoManager.Instance.GetCoreInfo(ECoreType.sing_box);
+        var coreExec = CoreInfoManager.Instance.GetCoreExecFile(coreInfo, out _);
+        if (!coreExec.IsNullOrEmpty())
+        {
+            return true;
+        }
+
+        var targetDir = Utils.GetBinPath("", ECoreType.sing_box.ToString());
+        var candidateDirs = new List<string>();
+
+        var current = new DirectoryInfo(Utils.StartupPath());
+        for (var i = 0; i < 6 && current != null; i++)
+        {
+            candidateDirs.Add(Path.Combine(current.FullName, "my-vpn-zapret", "resources", "v2rayn", "bin", "sing_box"));
+            candidateDirs.Add(Path.Combine(current.FullName, "resources", "v2rayn", "bin", "sing_box"));
+            candidateDirs.Add(Path.Combine(current.FullName, "v2rayn", "bin", "sing_box"));
+            candidateDirs.Add(Path.Combine(current.FullName, "sing_box"));
+            current = current.Parent;
+        }
+
+        var exeName = Utils.GetExeName("sing-box");
+        var sourceDir = candidateDirs.FirstOrDefault(dir => File.Exists(Path.Combine(dir, exeName)));
+        if (sourceDir.IsNullOrEmpty())
+        {
+            return false;
+        }
+
+        Directory.CreateDirectory(targetDir);
+        foreach (var file in Directory.GetFiles(sourceDir))
+        {
+            var dest = Path.Combine(targetDir, Path.GetFileName(file));
+            File.Copy(file, dest, true);
+        }
+
+        TryCopyWintun(targetDir, sourceDir);
+        return File.Exists(Path.Combine(targetDir, exeName));
+    }
+
+    private void TryCopyWintun(string targetDir, string sourceDir)
+    {
+        var wintunName = "wintun.dll";
+        var targetPath = Path.Combine(targetDir, wintunName);
+        if (File.Exists(targetPath))
+        {
+            return;
+        }
+
+        var candidates = new List<string>
+        {
+            Path.Combine(sourceDir, wintunName),
+            Path.Combine(Directory.GetParent(sourceDir)?.FullName ?? string.Empty, "xray", wintunName),
+            Path.Combine(Utils.GetBinPath("", ECoreType.Xray.ToString()), wintunName),
+            Path.Combine(Utils.GetBinPath(""), "xray", wintunName),
+        };
+
+        var current = new DirectoryInfo(Utils.StartupPath());
+        for (var i = 0; i < 6 && current != null; i++)
+        {
+            candidates.Add(Path.Combine(current.FullName, "my-vpn-zapret", "resources", "xray", wintunName));
+            candidates.Add(Path.Combine(current.FullName, "resources", "xray", wintunName));
+            candidates.Add(Path.Combine(current.FullName, "xray", wintunName));
+            current = current.Parent;
+        }
+
+        var source = candidates.FirstOrDefault(File.Exists);
+        if (!source.IsNullOrEmpty())
+        {
+            File.Copy(source, targetPath, true);
+        }
+    }
+
+    private async Task EnsureXrayAssetsAsync()
+    {
+        var assetTarget = Utils.GetBinPath("");
+        var sourceDir = Utils.GetBinPath("", ECoreType.Xray.ToString());
+        var files = new[] { "geoip.dat", "geosite.dat" };
+        foreach (var file in files)
+        {
+            var src = Path.Combine(sourceDir, file);
+            if (File.Exists(src))
+            {
+                var dest = Path.Combine(assetTarget, file);
+                if (!File.Exists(dest))
+                {
+                    File.Copy(src, dest, true);
+                }
+            }
+        }
+
+        await Task.CompletedTask;
+    }
+
+    private async Task EnsureInboundPortAvailableAsync()
+    {
+        var inbound = _config.Inbound.FirstOrDefault(t => t.Protocol == nameof(EInboundProtocol.socks));
+        if (inbound == null)
+        {
+            return;
+        }
+
+        var desired = inbound.LocalPort > 0 ? inbound.LocalPort : 10808;
+        var free = Utils.GetFreePort(desired);
+        if (free != desired)
+        {
+            inbound.LocalPort = free;
+            await ConfigHandler.SaveConfig(_config);
+            SetStatus($"Local port {desired} is busy. Switched to {free}.");
+        }
+    }
+
+    private async void OnTestCore(object sender, RoutedEventArgs e)
+    {
+        var coreType = TunEnabled ? ECoreType.sing_box : ECoreType.Xray;
+        var ready = TunEnabled ? await EnsureSingboxCoreAsync() : await EnsureXrayCoreAsync();
+        if (!ready)
+        {
+            SetStatus(TunEnabled ? "sing-box core not found" : "Xray core not found");
+            return;
+        }
+
+        var coreInfo = CoreInfoManager.Instance.GetCoreInfo(coreType);
+        var coreExec = CoreInfoManager.Instance.GetCoreExecFile(coreInfo, out _);
+        if (coreExec.IsNullOrEmpty())
+        {
+            SetStatus(TunEnabled ? "sing-box core not found" : "Xray core not found");
+            return;
+        }
+
+        var versionArg = coreInfo?.VersionArg.IsNullOrEmpty() == true ? "-version" : coreInfo?.VersionArg ?? "-version";
+
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = coreExec,
+                Arguments = versionArg,
+                WorkingDirectory = Path.GetDirectoryName(coreExec) ?? Utils.GetBinPath(""),
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            if (coreType == ECoreType.Xray)
+            {
+                startInfo.EnvironmentVariables[Global.XrayLocalAsset] = Utils.GetBinPath("");
+                startInfo.EnvironmentVariables[Global.XrayLocalCert] = Utils.GetBinPath("");
+            }
+
+            using var proc = Process.Start(startInfo);
+            if (proc == null)
+            {
+                SetStatus("Failed to start core");
+                return;
+            }
+            var output = await proc.StandardOutput.ReadToEndAsync();
+            var error = await proc.StandardError.ReadToEndAsync();
+            await proc.WaitForExitAsync();
+
+            var result = string.IsNullOrWhiteSpace(output) ? error : output;
+            DebugLog = $"{DebugLog}\n---- Core Test ----\n{result}".Trim();
+            SetStatus("Core test done");
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Core test failed: {ex.Message}");
+        }
+    }
+
+    private async void OnTestConfig(object sender, RoutedEventArgs e)
+    {
+        if (Process.GetProcessesByName("xray").Length > 0
+            || Process.GetProcessesByName("sing-box").Length > 0
+            || Process.GetProcessesByName("mihomo").Length > 0)
+        {
+            SetStatus("Stop VPN before config test");
+            return;
+        }
+
+        var coreType = TunEnabled ? ECoreType.sing_box : ECoreType.Xray;
+        var ready = TunEnabled ? await EnsureSingboxCoreAsync() : await EnsureXrayCoreAsync();
+        if (!ready)
+        {
+            SetStatus(TunEnabled ? "sing-box core not found" : "Xray core not found");
+            return;
+        }
+
+        var coreInfo = CoreInfoManager.Instance.GetCoreInfo(coreType);
+        var coreExec = CoreInfoManager.Instance.GetCoreExecFile(coreInfo, out _);
+        if (coreExec.IsNullOrEmpty())
+        {
+            SetStatus(TunEnabled ? "sing-box core not found" : "Xray core not found");
+            return;
+        }
+
+        var configPath = Utils.GetBinConfigPath(Global.CoreConfigFileName);
+        if (!File.Exists(configPath))
+        {
+            SetStatus("Core config not found");
+            return;
+        }
+
+        try
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = coreExec,
+                Arguments = coreType == ECoreType.sing_box
+                    ? $"run -c \"{configPath}\" --disable-color"
+                    : $"run -c \"{configPath}\"",
+                WorkingDirectory = Path.GetDirectoryName(coreExec) ?? Utils.GetBinPath(""),
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            if (coreType == ECoreType.Xray)
+            {
+                startInfo.EnvironmentVariables[Global.XrayLocalAsset] = Utils.GetBinPath("");
+                startInfo.EnvironmentVariables[Global.XrayLocalCert] = Utils.GetBinPath("");
+            }
+
+            using var proc = Process.Start(startInfo);
+            if (proc == null)
+            {
+                SetStatus("Failed to start xray");
+                return;
+            }
+
+            var outputTask = proc.StandardOutput.ReadToEndAsync();
+            var errorTask = proc.StandardError.ReadToEndAsync();
+
+            var exited = await Task.Run(() => proc.WaitForExit(2000));
+            if (!exited)
+            {
+                try
+                {
+                    proc.Kill(true);
+                }
+                catch { }
+                SetStatus("Config test: core started");
+                return;
+            }
+
+            var output = await outputTask;
+            var error = await errorTask;
+            var result = string.IsNullOrWhiteSpace(error) ? output : error;
+            DebugLog = $"{DebugLog}\n---- Config Test ----\n{result}".Trim();
+            SetStatus("Config test finished");
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Config test failed: {ex.Message}");
+        }
+    }
+
+    private async void OnTestProxy(object sender, RoutedEventArgs e)
+    {
+        var port = AppManager.Instance.GetLocalPort(EInboundProtocol.socks);
+        var result = await TestProxyIpAsync(port);
+        DebugLog = $"{DebugLog}\n---- Proxy Test ----\n{result}".Trim();
+        SetStatus("Proxy test finished");
+    }
+
+    private static async Task<string> TestProxyIpAsync(int port)
+    {
+        var proxyUri = new Uri($"http://{Global.Loopback}:{port}");
+        var target = "https://api64.ipify.org";
+
+        var direct = await FetchIpAsync(target, proxy: null);
+        var proxied = await FetchIpAsync(target, proxy: new WebProxy(proxyUri));
+        var match = string.Equals(direct.Ip, proxied.Ip, StringComparison.OrdinalIgnoreCase);
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"direct: {direct}");
+        sb.AppendLine($"proxy:  {proxied}");
+        sb.AppendLine($"match:  {match}");
+        return sb.ToString().Trim();
+    }
+
+    private static async Task<(bool Ok, string Ip, string Detail)> FetchIpAsync(string target, WebProxy? proxy)
+    {
+        var handler = new HttpClientHandler
+        {
+            Proxy = proxy,
+            UseProxy = proxy != null
+        };
+
+        using var client = new HttpClient(handler)
+        {
+            Timeout = TimeSpan.FromSeconds(8)
+        };
+
+        try
+        {
+            var response = await client.GetAsync(target);
+            var body = (await response.Content.ReadAsStringAsync()).Trim();
+            return (response.IsSuccessStatusCode, body, $"{(int)response.StatusCode} {response.ReasonPhrase}");
+        }
+        catch (Exception ex)
+        {
+            return (false, string.Empty, ex.Message);
+        }
+    }
+
+    private static string NormalizeDomainRule(string input)
+    {
+        var trimmed = input.Trim();
+        if (trimmed.IsNullOrEmpty())
+        {
+            return trimmed;
+        }
+
+        if (trimmed.Contains(':'))
+        {
+            return trimmed;
+        }
+
+        var value = trimmed.TrimStart('*').TrimStart('.');
+        if (value.IsNullOrEmpty())
+        {
+            return trimmed;
+        }
+
+        return $"domain:{value}";
+    }
+
+    private async void OnToggleTun(object sender, RoutedEventArgs e)
+    {
+        if (!TunEnabled)
+        {
+            _config.TunModeItem.EnableTun = false;
+            await ConfigHandler.SaveConfig(_config);
+
+            if (VpnEnabled)
+            {
+                if (!await EnsureActiveCoreReadyAsync())
+                {
+                    TunEnabled = true;
+                    _config.TunModeItem.EnableTun = true;
+                    await ConfigHandler.SaveConfig(_config);
+                    SetStatus("Active core not found. TUN was restored.");
+                    return;
+                }
+
+                await ViewModel.Reload();
+                SetStatus("TUN disabled");
+                return;
+            }
+
+            await CoreManager.Instance.CoreStop();
+            SetStatus("TUN disabled");
+            return;
+        }
+
+        if (!await EnsureTunReadyAsync())
+        {
+            return;
+        }
+
+        await ViewModel.Reload();
+        await UpdateConnectionPingAsync();
+        SetStatus(VpnEnabled ? "TUN enabled" : "TUN enabled as full tunnel");
+    }
+
+    private async Task<bool> EnsureTunReadyAsync()
+    {
+        _config.TunModeItem.EnableTun = TunEnabled;
+        if (Utils.IsWindows() && !Utils.IsAdministrator())
+        {
+            TunEnabled = false;
+            _config.TunModeItem.EnableTun = false;
+            await ConfigHandler.SaveConfig(_config);
+            SetStatus("TUN requires administrator privileges");
+            return false;
+        }
+
+        _config.TunModeItem.AutoRoute = true;
+        _config.TunModeItem.StrictRoute = true;
+        if (_config.TunModeItem.Mtu <= 0)
+        {
+            _config.TunModeItem.Mtu = Global.TunMtus.First();
+        }
+        if (_config.TunModeItem.Stack.IsNullOrEmpty() || ZapretEnabled)
+        {
+            _config.TunModeItem.Stack = "system";
+        }
+
+        var ready = await EnsureSingboxCoreAsync();
+        if (!ready)
+        {
+            TunEnabled = false;
+            _config.TunModeItem.EnableTun = false;
+            await ConfigHandler.SaveConfig(_config);
+            SetStatus("sing-box core not found. Put sing-box.exe into bin\\sing_box or use resources.");
+            return false;
+        }
+
+        await ConfigHandler.SaveConfig(_config);
+        return true;
+    }
+
+    private async Task<bool> EnsureActiveCoreReadyAsync()
+    {
+        if (TunEnabled)
+        {
+            return await EnsureTunReadyAsync();
+        }
+
+        var profile = SelectedProfile != null
+            ? await AppManager.Instance.GetProfileItem(SelectedProfile.IndexId)
+            : await ConfigHandler.GetDefaultServer(_config);
+
+        if (profile == null)
+        {
+            SetStatus("Select a profile first");
+            return false;
+        }
+
+        var coreType = AppManager.Instance.GetCoreType(profile, profile.ConfigType);
+        return coreType switch
+        {
+            ECoreType.sing_box or ECoreType.mihomo => await EnsureSingboxCoreAsync(),
+            _ => await EnsureXrayCoreAsync()
+        };
+    }
+
+    private async void OnToggleZapret(object sender, RoutedEventArgs e)
+    {
+        if (ZapretEnabled)
+        {
+            await CancelZapretAutoTestAsync();
+            if (TunEnabled && !_config.TunModeItem.Stack.Equals("system", StringComparison.OrdinalIgnoreCase))
+            {
+                _config.TunModeItem.Stack = "system";
+                _ = ConfigHandler.SaveConfig(_config);
+                if (VpnEnabled)
+                {
+                    _ = ViewModel.Reload();
+                }
+            }
+            OnStartZapret(sender, e);
+        }
+        else
+        {
+            OnStopZapret(sender, e);
+        }
+    }
+
+    private async Task CancelZapretAutoTestAsync()
+    {
+        if (_zapretAutoTestTask == null || !_isAutoTestingZapret)
+        {
+            return;
+        }
+
+        _zapretAutoTestCts?.Cancel();
+        try
+        {
+            await _zapretAutoTestTask;
+        }
+        catch (OperationCanceledException)
+        {
+            // ignore cancellation
+        }
+    }
+
+    private void LoadAppearanceOptions()
+    {
+        PrimaryColors.Clear();
+        var colors = new SwatchesProvider().Swatches
+            .Where(t => !t.Name.IsNullOrEmpty() && t.ExemplarHue?.Color != null)
+            .OrderBy(t => t.Name, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var color in colors)
+        {
+            PrimaryColors.Add(new PrimaryColorOption
+            {
+                Name = color.Name,
+                Brush = new SolidColorBrush(color.ExemplarHue.Color)
+            });
+        }
+    }
+
+    private void LoadCustomAppearance()
+    {
+        UseCustomPrimaryColor = true;
+
+        var customColor = TryParseColor(_config.UiItem.CustomPrimaryColor);
+        if (customColor.HasValue)
+        {
+            var hsv = ColorToHsv(customColor.Value);
+            _customHue = hsv.Hue;
+            _customSaturation = hsv.Saturation;
+            _customValue = hsv.Value;
+        }
+        else
+        {
+            var fallback = SelectedPrimaryColor is null
+                ? Colors.Blue
+                : ((SolidColorBrush)SelectedPrimaryColor.Brush).Color;
+            var hsv = ColorToHsv(fallback);
+            _customHue = hsv.Hue;
+            _customSaturation = hsv.Saturation;
+            _customValue = hsv.Value;
+        }
+    }
+
+    private void ApplyAppearance()
+    {
+        _config.UiItem.CurrentTheme = nameof(ETheme.Dark);
+        _config.UiItem.ColorPrimaryName = SelectedPrimaryColor?.Name ?? "Blue";
+        _config.UiItem.UseCustomPrimaryColor = true;
+        _config.UiItem.CustomPrimaryColor = CustomPrimaryColorHex;
+
+        var theme = _paletteHelper.GetTheme();
+        theme.SetBaseTheme(BaseTheme.Dark);
+
+        var color = GetSelectedPrimaryColor();
+        theme.PrimaryLight = new ColorPair(color.Lighten());
+        theme.PrimaryMid = new ColorPair(color);
+        theme.PrimaryDark = new ColorPair(color.Darken());
+        _paletteHelper.SetTheme(theme);
+
+        WindowsUtils.SetDarkBorder(this, _config.UiItem.CurrentTheme);
+    }
+
+    private Color GetSelectedPrimaryColor()
+    {
+        return ColorFromHsv(CustomHue, CustomSaturation, CustomValue);
+    }
+
+    private void UpdateCustomColorFromPoint(Point point)
+    {
+        var x = Math.Clamp(point.X, 0, CustomColorPlaneWidth);
+        var y = Math.Clamp(point.Y, 0, CustomColorPlaneHeight);
+        CustomSaturation = x / CustomColorPlaneWidth;
+        CustomValue = 1 - (y / CustomColorPlaneHeight);
+    }
+
+    private void NotifyCustomColorStateChanged()
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CustomPrimaryBaseBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CustomPrimaryPreviewBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CustomPrimaryColorHex)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CustomColorCursorLeft)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CustomColorCursorTop)));
+    }
+
+    private static Color? TryParseColor(string? value)
+    {
+        if (value.IsNullOrEmpty())
+        {
+            return null;
+        }
+
+        try
+        {
+            var converted = ColorConverter.ConvertFromString(value);
+            if (converted is Color color)
+            {
+                return color;
+            }
+        }
+        catch
+        {
+            // ignore parse errors
+        }
+
+        return null;
+    }
+
+    private static Color ColorFromHsv(double hue, double saturation, double value)
+    {
+        hue = ((hue % 360) + 360) % 360;
+        saturation = Math.Clamp(saturation, 0, 1);
+        value = Math.Clamp(value, 0, 1);
+
+        var chroma = value * saturation;
+        var x = chroma * (1 - Math.Abs((hue / 60.0 % 2) - 1));
+        var m = value - chroma;
+
+        (double r, double g, double b) = hue switch
+        {
+            < 60 => (chroma, x, 0d),
+            < 120 => (x, chroma, 0d),
+            < 180 => (0d, chroma, x),
+            < 240 => (0d, x, chroma),
+            < 300 => (x, 0d, chroma),
+            _ => (chroma, 0d, x),
+        };
+
+        return Color.FromRgb(
+            (byte)Math.Round((r + m) * 255),
+            (byte)Math.Round((g + m) * 255),
+            (byte)Math.Round((b + m) * 255));
+    }
+
+    private static (double Hue, double Saturation, double Value) ColorToHsv(Color color)
+    {
+        var r = color.R / 255d;
+        var g = color.G / 255d;
+        var b = color.B / 255d;
+
+        var max = Math.Max(r, Math.Max(g, b));
+        var min = Math.Min(r, Math.Min(g, b));
+        var delta = max - min;
+
+        double hue;
+        if (delta == 0)
+        {
+            hue = 0;
+        }
+        else if (max == r)
+        {
+            hue = 60 * (((g - b) / delta) % 6);
+        }
+        else if (max == g)
+        {
+            hue = 60 * (((b - r) / delta) + 2);
+        }
+        else
+        {
+            hue = 60 * (((r - g) / delta) + 4);
+        }
+
+        if (hue < 0)
+        {
+            hue += 360;
+        }
+
+        var saturation = max == 0 ? 0 : delta / max;
+        return (hue, saturation, max);
+    }
+
+    private async Task<ZapretTestResult?> RunZapretTestAsync(string title, bool keepRunning)
+    {
+        if (ZapretPath.IsNullOrEmpty() || SelectedZapretConfig?.Name.IsNullOrEmpty() != false)
+        {
+            SetZapretStatus("Select config");
+            return null;
+        }
+
+        SetZapretStatus($"{title}...");
+        await Task.Delay(100);
+        try
+        {
+            var result = await ZapretHandler.TestConfigAsync(ZapretPath, SelectedZapretConfig.Name, keepRunning);
+            ZapretRunning = ZapretHandler.IsRunning();
+            ZapretEnabled = ZapretRunning;
+            return result;
+        }
+        catch (Exception ex)
+        {
+            SetZapretStatus($"Test failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    private void RefreshRunningProcesses()
+    {
+        var previousPath = SelectedRunningProcess?.FilePath;
+        RunningProcesses.Clear();
+
+        var items = Process.GetProcesses()
+            .Select(TryCreateRunningProcessItem)
+            .Where(t => t != null)
+            .Cast<RunningProcessItem>()
+            .GroupBy(t => t.FilePath, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .OrderBy(t => t.ProcessName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(t => t.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        foreach (var item in items)
+        {
+            RunningProcesses.Add(item);
+        }
+
+        ApplyRunningProcessFilter();
+        SelectedRunningProcess = RunningProcesses
+            .FirstOrDefault(t => string.Equals(t.FilePath, previousPath, StringComparison.OrdinalIgnoreCase) && FilterRunningProcess(t))
+            ?? RunningProcesses.FirstOrDefault(t => FilterRunningProcess(t));
+    }
+
+    private void ApplyRunningProcessFilter()
+    {
+        RunningProcessesView.Refresh();
+
+        if (SelectedRunningProcess != null && FilterRunningProcess(SelectedRunningProcess))
+        {
+            return;
+        }
+
+        SelectedRunningProcess = RunningProcesses.FirstOrDefault(t => FilterRunningProcess(t));
+    }
+
+    private bool FilterRunningProcess(object? item)
+    {
+        if (item is not RunningProcessItem processItem)
+        {
+            return false;
+        }
+
+        var query = RunningProcessSearchText?.Trim();
+        if (query.IsNullOrEmpty())
+        {
+            return true;
+        }
+
+        return processItem.DisplayName.Contains(query, StringComparison.OrdinalIgnoreCase)
+               || processItem.ProcessName.Contains(query, StringComparison.OrdinalIgnoreCase)
+               || processItem.FilePath.Contains(query, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static RunningProcessItem? TryCreateRunningProcessItem(Process process)
+    {
+        try
+        {
+            if (process.HasExited)
+            {
+                return null;
+            }
+
+            var filePath = process.MainModule?.FileName ?? string.Empty;
+            if (filePath.IsNullOrEmpty() || !File.Exists(filePath))
+            {
+                return null;
+            }
+
+            var processName = process.ProcessName;
+            var fileName = Path.GetFileName(filePath);
+            var title = process.MainWindowTitle?.Trim();
+            var displayName = title.IsNullOrEmpty()
+                ? $"{fileName} (PID {process.Id})"
+                : $"{fileName} - {title} (PID {process.Id})";
+
+            return new RunningProcessItem
+            {
+                ProcessId = process.Id,
+                ProcessName = processName,
+                FilePath = filePath,
+                DisplayName = displayName
+            };
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            process.Dispose();
+        }
+    }
+
+    private void AddDirectAppEntries(string fullPath)
+    {
+        var fileName = Path.GetFileName(fullPath);
+        if (!fileName.IsNullOrEmpty()
+            && !DirectApps.Any(t => string.Equals(t, fileName, StringComparison.OrdinalIgnoreCase)))
+        {
+            DirectApps.Add(fileName);
+        }
+
+        if (!fullPath.IsNullOrEmpty()
+            && !DirectApps.Any(t => string.Equals(t, fullPath, StringComparison.OrdinalIgnoreCase)))
+        {
+            DirectApps.Add(fullPath);
+        }
+    }
+
+    private void UpdateZapretConfigResult(string? configName, ZapretTestResult result)
+    {
+        if (configName.IsNullOrEmpty())
+        {
+            return;
+        }
+
+        var item = ZapretConfigs.FirstOrDefault(t => string.Equals(t.Name, configName, StringComparison.OrdinalIgnoreCase));
+        if (item == null)
+        {
+            return;
+        }
+
+        item.HasTestResult = true;
+        item.IsPassing = result.Success;
+        item.YouTubeLabel = FormatZapretProbeLabel("YouTube", result.YoutubeSuccess, result.YoutubePingMs, result.YoutubeHttpMs);
+        item.DiscordLabel = FormatZapretProbeLabel("Discord", result.DiscordSuccess, result.DiscordPingMs, result.DiscordHttpMs);
+    }
+
+    private static string FormatZapretProbeLabel(string service, bool success, long? pingMs, long? httpMs)
+    {
+        var metric = httpMs ?? pingMs;
+
+        if (!success)
+        {
+            if (httpMs.HasValue)
+            {
+                return $"{service}: http {httpMs.Value} ms, failed";
+            }
+
+            if (pingMs.HasValue)
+            {
+                return $"{service}: ping {pingMs.Value} ms, failed";
+            }
+
+            return $"{service}: failed";
+        }
+
+        return metric.HasValue
+            ? $"{service}: http {metric.Value} ms"
+            : $"{service}: ok";
+    }
+
+    private void ConnectionPingTimer_Tick(object? sender, EventArgs e)
+    {
+        _ = UpdateConnectionPingAsync();
+    }
+
+    private async Task UpdateConnectionPingAsync()
+    {
+        if (_isUpdatingConnectionPing)
+        {
+            return;
+        }
+
+        _isUpdatingConnectionPing = true;
+        try
+        {
+            var activeProfile = Profiles.FirstOrDefault(t => t.IsActive) ?? SelectedProfile;
+            ConnectionPing = await GetProfilePingLabelAsync(activeProfile, includePrefix: true);
+        }
+        finally
+        {
+            _isUpdatingConnectionPing = false;
+        }
+    }
+
+    private async Task<string> GetProfilePingLabelAsync(ProfileItemModel? profile, bool includePrefix = false)
+    {
+        var prefix = includePrefix ? "Connection ping: " : string.Empty;
+        var proxyPing = await MeasureProxyPingAsync();
+        if (proxyPing.HasValue)
+        {
+            return $"{prefix}{proxyPing.Value} ms via proxy";
+        }
+
+        if (profile == null)
+        {
+            return $"{prefix}no active profile";
+        }
+
+        if (profile.Address.IsNullOrEmpty() || profile.Port <= 0)
+        {
+            return $"{prefix}n/a";
+        }
+
+        var pingMs = await MeasureTcpPingAsync(profile.Address, profile.Port);
+        if (pingMs.HasValue && pingMs.Value >= 0)
+        {
+            return $"{prefix}{profile.Address}:{profile.Port} {pingMs.Value} ms";
+        }
+
+        return $"{prefix}{profile.Address}:{profile.Port} unavailable";
+    }
+
+    private async Task<int?> MeasureProxyPingAsync()
+    {
+        var coreRunning = Process.GetProcessesByName("xray").Length > 0
+                          || Process.GetProcessesByName("sing-box").Length > 0
+                          || Process.GetProcessesByName("mihomo").Length > 0;
+        if (!coreRunning || (!VpnEnabled && !TunEnabled))
+        {
+            return null;
+        }
+
+        try
+        {
+            var port = AppManager.Instance.GetLocalPort(EInboundProtocol.socks);
+            var webProxy = new WebProxy($"socks5://{Global.Loopback}:{port}");
+            var url = _config.SpeedTestItem.SpeedPingTestUrl;
+            var delay = await ConnectionHandler.GetRealPingTime(url, webProxy, 10);
+            return delay > 0 ? delay : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static async Task<int?> MeasureTcpPingAsync(string host, int port)
+    {
+        if (host.IsNullOrEmpty() || port <= 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            IPAddress ipAddress;
+            if (!IPAddress.TryParse(host, out ipAddress!))
+            {
+                var hostEntry = await Dns.GetHostEntryAsync(host);
+                ipAddress = hostEntry.AddressList
+                    .FirstOrDefault(t => t.AddressFamily is AddressFamily.InterNetwork or AddressFamily.InterNetworkV6)
+                    ?? hostEntry.AddressList.First();
+            }
+
+            var endPoint = new IPEndPoint(ipAddress, port);
+            using var socket = new Socket(endPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var timer = Stopwatch.StartNew();
+            try
+            {
+                await socket.ConnectAsync(endPoint, cts.Token).ConfigureAwait(false);
+                timer.Stop();
+                return (int)timer.ElapsedMilliseconds;
+            }
+            finally
+            {
+                timer.Stop();
+            }
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private void RegisterSingleInstanceRestore()
+    {
+        if (App.ProgramStarted == null)
+        {
+            return;
+        }
+
+        _singleInstanceWaitHandle = ThreadPool.RegisterWaitForSingleObject(
+            App.ProgramStarted,
+            (_, _) =>
+            {
+                Dispatcher.BeginInvoke(new Action(RestoreWindowFromTray));
+            },
+            null,
+            Timeout.Infinite,
+            false);
+    }
+
+    private bool ShouldHideWindowOnStartup()
+    {
+        return App.StartMinimizedToTray || _config.UiItem.AutoHideStartup;
+    }
+
+    private void HideWindowToTray()
+    {
+        ShowInTaskbar = false;
+        WindowState = WindowState.Minimized;
+        Hide();
+        SetStatus("Application hidden to tray");
+    }
+
+    private void RestoreWindowFromTray()
+    {
+        ShowInTaskbar = true;
+        Show();
+        if (WindowState == WindowState.Minimized)
+        {
+            WindowState = WindowState.Normal;
+        }
+
+        Activate();
+        Topmost = true;
+        Topmost = false;
+        Focus();
+        UpdateTrayToolTip();
+    }
+
+    private void TrayIcon_TrayLeftMouseUp(object sender, RoutedEventArgs e)
+    {
+        RestoreWindowFromTray();
+    }
+
+    private void OnTrayOpen(object sender, RoutedEventArgs e)
+    {
+        RestoreWindowFromTray();
+    }
+
+    private void OnTrayToggleVpn(object sender, RoutedEventArgs e)
+    {
+        VpnEnabled = !VpnEnabled;
+        OnToggleVpn(sender, e);
+    }
+
+    private void OnTrayToggleTun(object sender, RoutedEventArgs e)
+    {
+        TunEnabled = !TunEnabled;
+        OnToggleTun(sender, e);
+    }
+
+    private void OnTrayToggleZapret(object sender, RoutedEventArgs e)
+    {
+        ZapretEnabled = !ZapretEnabled;
+        OnToggleZapret(sender, e);
+    }
+
+    private async void OnTrayExit(object sender, RoutedEventArgs e)
+    {
+        if (_closing)
+        {
+            return;
+        }
+
+        _closing = true;
+        TrayIcon.Dispose();
+        await AppManager.Instance.AppExitAsync(true);
+    }
+
+    private void UpdateTrayToolTip()
+    {
+        var vpnState = VpnEnabled ? "ON" : "OFF";
+        var tunState = TunEnabled ? "ON" : "OFF";
+        var zapretState = ZapretEnabled ? "ON" : "OFF";
+        TrayToolTip = $"NetCat | VPN: {vpnState} | TUN: {tunState} | Zapret: {zapretState}{Environment.NewLine}{ConnectionPing}";
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
+    {
+        if (EqualityComparer<T>.Default.Equals(field, value))
+        {
+            return false;
+        }
+
+        field = value;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        return true;
+    }
+}

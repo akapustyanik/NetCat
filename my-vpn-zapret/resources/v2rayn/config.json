@@ -1,0 +1,10 @@
+{
+  "inbound": {
+    "port": 10808,
+    "protocol": "socks"
+  },
+  "systemProxyEnabled": false,
+  "tunModeEnabled": false,
+  "routingRules": [],
+  "domainRules": []
+}
