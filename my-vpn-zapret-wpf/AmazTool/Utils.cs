@@ -31,18 +31,38 @@ internal class Utils
         return GetPath($"{AppProcessName}.exe");
     }
 
-    public static void StartApp()
+    public static bool StartApp(int retryCount = 5, int delayMs = 1000)
     {
-        Process process = new()
+        var appExePath = GetAppExePath();
+        for (var i = 1; i <= retryCount; i++)
         {
-            StartInfo = new()
+            try
             {
-                UseShellExecute = true,
-                FileName = GetAppExePath(),
-                WorkingDirectory = StartupPath()
+                if (!File.Exists(appExePath))
+                {
+                    Thread.Sleep(delayMs * i);
+                    continue;
+                }
+
+                Process process = new()
+                {
+                    StartInfo = new()
+                    {
+                        UseShellExecute = true,
+                        FileName = appExePath,
+                        WorkingDirectory = StartupPath()
+                    }
+                };
+                process.Start();
+                return true;
             }
-        };
-        process.Start();
+            catch
+            {
+                Thread.Sleep(delayMs * i);
+            }
+        }
+
+        return false;
     }
 
     public static void Waiting(int second)

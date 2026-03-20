@@ -72,7 +72,10 @@ internal static class Program
     {
         Console.WriteLine("Restarting application...");
         Thread.Sleep(1000);
-        Utils.StartApp();
+        if (!Utils.StartApp())
+        {
+            Console.WriteLine("Failed to restart application.");
+        }
     }
 
     /// <summary>

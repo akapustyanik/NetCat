@@ -55,12 +55,13 @@ internal class UpgradeApp
 
         Console.WriteLine(Resx.Resource.StartUnzipping);
         StringBuilder sb = new();
+        var currentAppPath = Utils.GetAppExePath();
+        var appBackupPath = $"{currentAppPath}.tmp";
+        var currentUpdaterPath = Utils.GetExePath();
+        var appEntryUpdated = false;
         try
         {
-            var currentAppPath = Utils.GetAppExePath();
-            var appBackupPath = $"{currentAppPath}.tmp";
-            var currentUpdaterPath = Utils.GetExePath();
-            File.Delete(appBackupPath);
+            DeleteFileIfExists(appBackupPath);
 
             using var archive = ZipFile.OpenRead(fileName);
             var archiveRootFolder = GetArchiveRootFolder(archive);
@@ -95,11 +96,15 @@ internal class UpgradeApp
 
                     if (string.Equals(currentAppPath, entryOutputPath, StringComparison.OrdinalIgnoreCase))
                     {
-                        File.Move(currentAppPath, appBackupPath, true);
+                        BackupCurrentApp(currentAppPath, appBackupPath);
+                        appEntryUpdated = true;
                     }
 
                     Directory.CreateDirectory(Path.GetDirectoryName(entryOutputPath)!);
-                    TryExtractToFile(entry, entryOutputPath);
+                    if (!TryExtractToFile(entry, entryOutputPath))
+                    {
+                        throw new IOException($"Failed to extract {entry.FullName} to {entryOutputPath}");
+                    }
 
                     Console.WriteLine(entryOutputPath);
                 }
@@ -108,21 +113,31 @@ internal class UpgradeApp
                     sb.Append(ex.StackTrace);
                 }
             }
+
+            if (appEntryUpdated)
+            {
+                FinalizeAppReplacement(currentAppPath, appBackupPath);
+            }
         }
         catch (Exception ex)
         {
             Console.WriteLine(Resx.Resource.FailedUpgrade + ex.StackTrace);
+            RestoreAppFromBackup(currentAppPath, appBackupPath);
         }
 
         if (sb.Length > 0)
         {
             Console.WriteLine(Resx.Resource.FailedUpgrade + sb);
+            RestoreAppFromBackup(currentAppPath, appBackupPath);
         }
 
         Console.WriteLine(Resx.Resource.Restartv2rayN);
         Utils.Waiting(2);
 
-        Utils.StartApp();
+        if (!Utils.StartApp())
+        {
+            Console.WriteLine("Failed to restart application after update.");
+        }
     }
 
     private static bool TryExtractToFile(ZipArchiveEntry entry, string outputPath)
@@ -205,5 +220,53 @@ internal class UpgradeApp
         }
 
         return _preservedTopLevelDirectories.Contains(segments[0]);
+    }
+
+    private static void BackupCurrentApp(string currentAppPath, string appBackupPath)
+    {
+        if (!File.Exists(currentAppPath))
+        {
+            return;
+        }
+
+        DeleteFileIfExists(appBackupPath);
+        File.Move(currentAppPath, appBackupPath, true);
+    }
+
+    private static void FinalizeAppReplacement(string currentAppPath, string appBackupPath)
+    {
+        if (!File.Exists(currentAppPath))
+        {
+            RestoreAppFromBackup(currentAppPath, appBackupPath);
+            throw new FileNotFoundException("Updated application executable was not created.", currentAppPath);
+        }
+
+        DeleteFileIfExists(appBackupPath);
+    }
+
+    private static void RestoreAppFromBackup(string currentAppPath, string appBackupPath)
+    {
+        try
+        {
+            if (!File.Exists(appBackupPath))
+            {
+                return;
+            }
+
+            DeleteFileIfExists(currentAppPath);
+            File.Move(appBackupPath, currentAppPath, true);
+        }
+        catch
+        {
+            // ignore restore failures, caller will print restart failure
+        }
+    }
+
+    private static void DeleteFileIfExists(string path)
+    {
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
     }
 }
