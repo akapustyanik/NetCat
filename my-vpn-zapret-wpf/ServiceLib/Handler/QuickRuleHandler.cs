@@ -175,6 +175,18 @@ public static class QuickRuleHandler
             });
         }
 
+        var proxyProcessList = NormalizeList(quick.ProxyProcesses);
+        if (proxyProcessList.Count > 0)
+        {
+            rules.Add(new RulesItem
+            {
+                Type = "field",
+                OutboundTag = Global.ProxyTag,
+                Process = proxyProcessList,
+                Remarks = "Proxy apps"
+            });
+        }
+
         rules.Add(new RulesItem
         {
             Type = "field",

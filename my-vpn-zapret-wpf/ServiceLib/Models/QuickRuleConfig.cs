@@ -4,6 +4,7 @@ public class QuickRuleConfig
 {
     public List<string> DirectProcesses { get; set; } = new();
     public List<string> DirectDomains { get; set; } = new();
+    public List<string> ProxyProcesses { get; set; } = new();
     public List<string> ProxyDomains { get; set; } = new();
     public List<string> BlockDomains { get; set; } = new();
     public bool UseProxyDomainsPreset { get; set; }

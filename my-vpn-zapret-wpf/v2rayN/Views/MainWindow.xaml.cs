@@ -55,6 +55,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     public ObservableCollection<ProfileItemModel> Profiles { get; } = new();
     public ObservableCollection<string> DirectApps { get; } = new();
     public ObservableCollection<string> DirectDomains { get; } = new();
+    public ObservableCollection<string> ProxyApps { get; } = new();
     public ObservableCollection<string> ProxyDomains { get; } = new();
     public ObservableCollection<string> BlockDomains { get; } = new();
     public ObservableCollection<ZapretConfigItem> ZapretConfigs { get; } = new();
@@ -95,6 +96,13 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     {
         get => _selectedProxyDomain;
         set => SetField(ref _selectedProxyDomain, value);
+    }
+
+    private string? _selectedProxyApp;
+    public string? SelectedProxyApp
+    {
+        get => _selectedProxyApp;
+        set => SetField(ref _selectedProxyApp, value);
     }
 
     private string _inputLink = string.Empty;
@@ -439,6 +447,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     {
         DirectApps.Clear();
         DirectDomains.Clear();
+        ProxyApps.Clear();
         ProxyDomains.Clear();
         BlockDomains.Clear();
 
@@ -463,6 +472,14 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             if (!string.IsNullOrWhiteSpace(domain))
             {
                 BlockDomains.Add(domain);
+            }
+        }
+
+        foreach (var app in _quickRules.ProxyProcesses.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!string.IsNullOrWhiteSpace(app))
+            {
+                ProxyApps.Add(app);
             }
         }
 
@@ -505,6 +522,11 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         _quickRules.DirectDomains = DirectDomains
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Select(t => t.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        _quickRules.ProxyProcesses = ProxyApps
             .Where(t => !string.IsNullOrWhiteSpace(t))
             .Select(t => t.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -1239,6 +1261,56 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         SetStatus("VPN domain added");
     }
 
+    private async void OnAddProxyApp(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Filter = "Executable (*.exe)|*.exe|All files (*.*)|*.*",
+            CheckFileExists = true,
+            Title = "Select application executable"
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        var fullPath = dialog.FileName;
+        if (string.IsNullOrWhiteSpace(fullPath))
+        {
+            return;
+        }
+
+        AddProxyAppEntries(fullPath);
+        await ApplyQuickRulesAsync(reload: true);
+        SetStatus("App added to VPN list");
+    }
+
+    private async void OnAddRunningProxyProcess(object sender, RoutedEventArgs e)
+    {
+        if (SelectedRunningProcess == null || SelectedRunningProcess.FilePath.IsNullOrEmpty())
+        {
+            SetStatus("Select a running process first");
+            return;
+        }
+
+        AddProxyAppEntries(SelectedRunningProcess.FilePath);
+        await ApplyQuickRulesAsync(reload: true);
+        SetStatus($"Added running app to VPN list: {Path.GetFileName(SelectedRunningProcess.FilePath)}");
+    }
+
+    private async void OnRemoveProxyApp(object sender, RoutedEventArgs e)
+    {
+        if (SelectedProxyApp == null)
+        {
+            return;
+        }
+
+        ProxyApps.Remove(SelectedProxyApp);
+        await ApplyQuickRulesAsync(reload: true);
+        SetStatus("VPN app removed");
+    }
+
     private async void OnRemoveProxyDomain(object sender, RoutedEventArgs e)
     {
         if (SelectedProxyDomain == null)
@@ -1597,6 +1669,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         sb.AppendLine($"ZapretRunning: {ZapretRunning}");
         sb.AppendLine($"DirectApps: {DirectApps.Count}");
         sb.AppendLine($"DirectDomains: {DirectDomains.Count}");
+        sb.AppendLine($"ProxyApps: {ProxyApps.Count}");
         sb.AppendLine($"ProxyDomains: {ProxyDomains.Count}");
         sb.AppendLine($"UseProxyDomainsPreset: {UseProxyDomainsPreset}");
         sb.AppendLine($"BlockDomains: {BlockDomains.Count}");
@@ -2536,6 +2609,22 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             && !DirectApps.Any(t => string.Equals(t, fullPath, StringComparison.OrdinalIgnoreCase)))
         {
             DirectApps.Add(fullPath);
+        }
+    }
+
+    private void AddProxyAppEntries(string fullPath)
+    {
+        var fileName = Path.GetFileName(fullPath);
+        if (!fileName.IsNullOrEmpty()
+            && !ProxyApps.Any(t => string.Equals(t, fileName, StringComparison.OrdinalIgnoreCase)))
+        {
+            ProxyApps.Add(fileName);
+        }
+
+        if (!fullPath.IsNullOrEmpty()
+            && !ProxyApps.Any(t => string.Equals(t, fullPath, StringComparison.OrdinalIgnoreCase)))
+        {
+            ProxyApps.Add(fullPath);
         }
     }
 
