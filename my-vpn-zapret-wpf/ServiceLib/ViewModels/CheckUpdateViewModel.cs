@@ -251,6 +251,7 @@ public class CheckUpdateViewModel : MyReactiveObject
 
     private async Task UpgradeN()
     {
+        string? stagedUpgradeFileName = null;
         try
         {
             var fileName = _lstUpdated.FirstOrDefault(x => x.CoreType == _v2rayN)?.FileName;
@@ -266,7 +267,7 @@ public class CheckUpdateViewModel : MyReactiveObject
                 return;
             }
 
-            var stagedUpgradeFileName = StageUpgradeApp(upgradeFileName);
+            stagedUpgradeFileName = StageUpgradeApp(upgradeFileName);
             Process proc = new()
             {
                 StartInfo = new ProcessStartInfo
@@ -284,9 +285,14 @@ public class CheckUpdateViewModel : MyReactiveObject
             {
                 await AppManager.Instance.AppExitAsync(true);
             }
+            else
+            {
+                CleanupStagedUpdater(stagedUpgradeFileName);
+            }
         }
         catch (Exception ex)
         {
+            CleanupStagedUpdater(stagedUpgradeFileName);
             await UpdateView(_v2rayN, ex.Message);
             Logging.SaveLog(_tag, ex);
         }
@@ -294,6 +300,8 @@ public class CheckUpdateViewModel : MyReactiveObject
 
     private static string StageUpgradeApp(string upgradeFileName)
     {
+        CleanupStaleStagedUpdaters();
+
         var sourceDir = Path.GetDirectoryName(upgradeFileName) ?? Utils.GetBaseDirectory();
         var targetDir = Utils.GetTempPath($"updater-{Utils.GetGuid()}");
         Directory.CreateDirectory(targetDir);
@@ -313,6 +321,39 @@ public class CheckUpdateViewModel : MyReactiveObject
         }
 
         return stagedUpgradeFileName;
+    }
+
+    private static void CleanupStaleStagedUpdaters()
+    {
+        try
+        {
+            foreach (var directoryPath in Directory.GetDirectories(Utils.GetTempPath(), "updater-*", SearchOption.TopDirectoryOnly))
+            {
+                Directory.Delete(directoryPath, true);
+            }
+        }
+        catch
+        {
+            // ignore temp cleanup failures
+        }
+    }
+
+    private static void CleanupStagedUpdater(string? stagedUpgradeFileName)
+    {
+        try
+        {
+            var stagedDirectory = Path.GetDirectoryName(stagedUpgradeFileName ?? string.Empty);
+            if (stagedDirectory.IsNullOrEmpty() || !Directory.Exists(stagedDirectory))
+            {
+                return;
+            }
+
+            Directory.Delete(stagedDirectory, true);
+        }
+        catch
+        {
+            // ignore temp cleanup failures
+        }
     }
 
     private async Task UpgradeCore()

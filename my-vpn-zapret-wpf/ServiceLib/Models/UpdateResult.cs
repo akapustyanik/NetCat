@@ -7,6 +7,7 @@ public class UpdateResult
     public SemanticVersion? Version { get; set; }
     public string? Url { get; set; }
     public GitHubRelease? Release { get; set; }
+    public GitHubReleaseAsset? Asset { get; set; }
 
     public UpdateResult(bool success, string? msg)
     {

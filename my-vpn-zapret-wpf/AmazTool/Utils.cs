@@ -112,4 +112,39 @@ internal class Utils
             // Ignore updater log failures to avoid breaking the update flow.
         }
     }
+
+    public static void ScheduleCleanup(string? packagePath, string? updaterDirectory, bool deletePackage)
+    {
+        try
+        {
+            List<string> cleanupCommands = [];
+            if (deletePackage && !string.IsNullOrWhiteSpace(packagePath))
+            {
+                cleanupCommands.Add($"del /f /q \"{packagePath}\" > nul 2>nul");
+            }
+
+            if (!string.IsNullOrWhiteSpace(updaterDirectory))
+            {
+                cleanupCommands.Add($"rmdir /s /q \"{updaterDirectory}\" > nul 2>nul");
+            }
+
+            if (cleanupCommands.Count == 0)
+            {
+                return;
+            }
+
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments = $"/c ping 127.0.0.1 -n 6 > nul & {string.Join(" & ", cleanupCommands)}",
+                CreateNoWindow = true,
+                UseShellExecute = false,
+                WindowStyle = ProcessWindowStyle.Hidden,
+            });
+        }
+        catch (Exception ex)
+        {
+            Log($"Failed to schedule updater cleanup: {ex.Message}");
+        }
+    }
 }

@@ -57,7 +57,10 @@ internal class UpgradeApp
         var targetUpdaterDirectory = Path.GetFullPath(Utils.GetPath("updater"));
         var runningUpdaterDirectory = Path.GetFullPath(Path.GetDirectoryName(currentUpdaterPath) ?? Utils.StartupPath());
         var skipTargetUpdaterReplacement = string.Equals(runningUpdaterDirectory.TrimEnd('\\'), targetUpdaterDirectory.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
+        var cleanupUpdaterDirectory = !skipTargetUpdaterReplacement
+            && Path.GetFileName(runningUpdaterDirectory).StartsWith("updater-", StringComparison.OrdinalIgnoreCase);
         var appEntryUpdated = false;
+        var hadFatalError = false;
         try
         {
             DeleteFileIfExists(appBackupPath);
@@ -129,6 +132,7 @@ internal class UpgradeApp
         }
         catch (Exception ex)
         {
+            hadFatalError = true;
             Utils.Log($"Upgrade failed: {ex}");
             Console.WriteLine(Resx.Resource.FailedUpgrade + ex.StackTrace);
             RestoreAppFromBackup(currentAppPath, appBackupPath);
@@ -140,6 +144,12 @@ internal class UpgradeApp
             Console.WriteLine(Resx.Resource.FailedUpgrade + sb);
             RestoreAppFromBackup(currentAppPath, appBackupPath);
         }
+
+        var upgradeSucceeded = !hadFatalError && sb.Length == 0;
+        Utils.ScheduleCleanup(
+            fileName,
+            cleanupUpdaterDirectory ? runningUpdaterDirectory : null,
+            deletePackage: upgradeSucceeded);
 
         Utils.Log("Restarting NetCat after update.");
         Console.WriteLine(Resx.Resource.Restartv2rayN);

@@ -20,6 +20,20 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
     private readonly int _timeout = 30;
     private static readonly string _tag = "UpdateService";
 
+    public async Task<UpdateResult> CheckGuiUpdateAvailability(bool preRelease)
+    {
+        try
+        {
+            var downloadHandle = new DownloadService();
+            return await CheckUpdateAsync(downloadHandle, ECoreType.v2rayN, preRelease);
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog(_tag, ex);
+            return new UpdateResult(false, ex.Message);
+        }
+    }
+
     public async Task CheckUpdateGuiN(bool preRelease)
     {
         var url = string.Empty;
@@ -51,7 +65,16 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
             await UpdateFunc(false, result.Msg);
 
             url = result.Url.ToString();
-            fileName = Utils.GetTempPath(Utils.GetGuid());
+            fileName = GetGuiUpdateArchivePath(result);
+            CleanupStaleGuiUpdateArtifacts(fileName);
+            if (TryUseCachedGuiUpdateArchive(fileName, result.Asset))
+            {
+                await UpdateFunc(false, "Using previously downloaded update package.");
+                await UpdateFunc(false, ResUI.MsgDownloadV2rayCoreSuccessfully);
+                await UpdateFunc(true, Utils.UrlEncode(fileName));
+                return;
+            }
+
             await downloadHandle.DownloadFileAsync(url, fileName, true, _timeout);
         }
         else
@@ -390,11 +413,13 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
                     {
                         curVersion = new SemanticVersion(Utils.GetVersionInfo());
                         message = string.Format(ResUI.IsLatestN, Global.AppName, curVersion);
-                        url = GetGuiUpdateAssetUrl(result.Release);
+                        var asset = GetPreferredGuiAsset(result.Release);
+                        url = asset?.BrowserDownloadUrl;
                         if (url.IsNullOrEmpty())
                         {
                             return new UpdateResult(false, "GitHub release does not contain a compatible .zip asset for NetCat.");
                         }
+                        result.Asset = asset;
                         break;
                     }
                 default:
@@ -461,6 +486,132 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
     {
         var asset = GetPreferredGuiAsset(release);
         return asset?.BrowserDownloadUrl;
+    }
+
+    private string GetGuiUpdateArchivePath(UpdateResult result)
+    {
+        var cacheDirectory = Path.Combine(Utils.GetTempPath(), "updates");
+        Directory.CreateDirectory(cacheDirectory);
+
+        var releaseTag = SanitizeFileName(result.Release?.TagName ?? result.Version?.ToString() ?? "latest");
+        var assetName = result.Asset?.Name;
+        if (assetName.IsNullOrEmpty())
+        {
+            var fallbackHash = Utils.GetMd5(result.Url ?? releaseTag);
+            assetName = $"NetCat-{fallbackHash}.zip";
+        }
+
+        return Path.Combine(cacheDirectory, $"{releaseTag}-{SanitizeFileName(assetName)}");
+    }
+
+    private void CleanupStaleGuiUpdateArtifacts(string keepArchivePath)
+    {
+        try
+        {
+            var normalizedKeepArchivePath = Path.GetFullPath(keepArchivePath);
+            var tempPath = Utils.GetTempPath();
+
+            foreach (var directoryPath in Directory.GetDirectories(tempPath, "updater-*", SearchOption.TopDirectoryOnly))
+            {
+                TryDeleteDirectory(directoryPath);
+            }
+
+            foreach (var filePath in Directory.GetFiles(tempPath, "*", SearchOption.TopDirectoryOnly))
+            {
+                if (string.Equals(Path.GetFullPath(filePath), normalizedKeepArchivePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (!Utils.IsGuidByParse(Path.GetFileName(filePath)))
+                {
+                    continue;
+                }
+
+                if (IsValidGuiUpdateArchive(filePath, null))
+                {
+                    TryDeleteFile(filePath);
+                }
+            }
+
+            var cacheDirectory = Path.GetDirectoryName(normalizedKeepArchivePath);
+            if (cacheDirectory.IsNullOrEmpty() || !Directory.Exists(cacheDirectory))
+            {
+                return;
+            }
+
+            foreach (var filePath in Directory.GetFiles(cacheDirectory, "*", SearchOption.TopDirectoryOnly))
+            {
+                if (string.Equals(Path.GetFullPath(filePath), normalizedKeepArchivePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (IsValidGuiUpdateArchive(filePath, null))
+                {
+                    TryDeleteFile(filePath);
+                }
+            }
+        }
+        catch
+        {
+            // ignore temp cleanup failures
+        }
+    }
+
+    private bool TryUseCachedGuiUpdateArchive(string filePath, GitHubReleaseAsset? asset)
+    {
+        if (!File.Exists(filePath))
+        {
+            return false;
+        }
+
+        long? expectedSize = asset?.Size > 0 ? asset.Size : null;
+        if (!IsValidGuiUpdateArchive(filePath, expectedSize))
+        {
+            TryDeleteFile(filePath);
+            return false;
+        }
+
+        Logging.SaveLog($"Reusing cached NetCat update package: {filePath}");
+        return true;
+    }
+
+    private static bool IsValidGuiUpdateArchive(string filePath, long? expectedSize)
+    {
+        try
+        {
+            var fileInfo = new FileInfo(filePath);
+            if (!fileInfo.Exists || fileInfo.Length <= 0)
+            {
+                return false;
+            }
+
+            if (expectedSize.HasValue && fileInfo.Length != expectedSize.Value)
+            {
+                return false;
+            }
+
+            using var archive = System.IO.Compression.ZipFile.OpenRead(filePath);
+            return archive.Entries.Any(entry =>
+                entry.Length > 0
+                && string.Equals(entry.Name, Utils.GetExeName(Global.AppName), StringComparison.OrdinalIgnoreCase));
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string SanitizeFileName(string value)
+    {
+        if (value.IsNullOrEmpty())
+        {
+            return "update.zip";
+        }
+
+        var invalidChars = Path.GetInvalidFileNameChars();
+        return string.Concat(value.Select(ch => invalidChars.Contains(ch) ? '_' : ch));
     }
 
     private GitHubReleaseAsset? GetPreferredGuiAsset(GitHubRelease? release)

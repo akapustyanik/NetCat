@@ -23,6 +23,7 @@ using ServiceLib.Handler;
 using ServiceLib.Handler.SysProxy;
 using ServiceLib.Manager;
 using ServiceLib.Models;
+using ServiceLib.Services;
 using ServiceLib.ViewModels;
 using v2rayN.Base;
 using v2rayN.Models;
@@ -47,6 +48,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     private bool _isAutoTestingZapret;
     private bool _startupUiHandled;
     private bool _startupZapretRestorePending = true;
+    private bool _startupUpdateCheckStarted;
     private int _autoRunSecretClickCount;
     private CancellationTokenSource? _zapretAutoTestCts;
     private Task? _zapretAutoTestTask;
@@ -138,6 +140,20 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     {
         get => _statusMessage;
         set => SetField(ref _statusMessage, value);
+    }
+
+    private string _updateBannerMessage = string.Empty;
+    public string UpdateBannerMessage
+    {
+        get => _updateBannerMessage;
+        set => SetField(ref _updateBannerMessage, value);
+    }
+
+    private Visibility _updateBannerVisibility = Visibility.Collapsed;
+    public Visibility UpdateBannerVisibility
+    {
+        get => _updateBannerVisibility;
+        set => SetField(ref _updateBannerVisibility, value);
     }
 
     private string _serverPing = string.Empty;
@@ -441,6 +457,11 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 
         await RefreshZapretAsync();
         await RefreshSupportSnapshotAsync(true);
+        if (!_startupUpdateCheckStarted)
+        {
+            _startupUpdateCheckStarted = true;
+            _ = CheckStartupGuiUpdateAsync();
+        }
     }
 
     private void LoadQuickLists()
@@ -755,6 +776,11 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         window.ShowDialog();
     }
 
+    private void OnDismissUpdateBanner(object sender, RoutedEventArgs e)
+    {
+        HideUpdateBanner();
+    }
+
     private async void BypassPrivate_Checked(object sender, RoutedEventArgs e)
     {
         await ApplyQuickRulesAsync(reload: true);
@@ -799,6 +825,41 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         SetStatus(UseCustomPrimaryColor
             ? $"Custom primary color set to {CustomPrimaryColorHex}"
             : $"Primary color set to {SelectedPrimaryColor?.Name ?? "Blue"}");
+    }
+
+    private async Task CheckStartupGuiUpdateAsync()
+    {
+        try
+        {
+            var updateService = new UpdateService(_config, (_, _) => Task.CompletedTask);
+            var result = await updateService.CheckGuiUpdateAvailability(_config.CheckUpdateItem.CheckPreReleaseUpdate);
+            if (!result.Success || result.Version == null || result.Url.IsNullOrEmpty())
+            {
+                return;
+            }
+
+            var versionText = result.Release?.TagName
+                ?? result.Version.ToString()
+                ?? result.Msg
+                ?? "latest";
+            ShowUpdateBanner($"Доступно обновление NetCat {versionText}. Можно открыть окно обновления и установить его вручную.");
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog("MainWindow.CheckStartupGuiUpdateAsync", ex);
+        }
+    }
+
+    private void ShowUpdateBanner(string message)
+    {
+        UpdateBannerMessage = message;
+        UpdateBannerVisibility = Visibility.Visible;
+    }
+
+    private void HideUpdateBanner()
+    {
+        UpdateBannerVisibility = Visibility.Collapsed;
+        UpdateBannerMessage = string.Empty;
     }
 
     private async void OnCustomHueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)

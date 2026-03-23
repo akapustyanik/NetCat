@@ -66,6 +66,36 @@
 
             <TextBlock Margin="0,8,0,0" FontSize="12" Opacity="0.7"
                        Text="VPN управляет системным прокси. TUN включает полное туннелирование и может работать отдельно." />
+
+            <Border Margin="0,12,0,0"
+                    Padding="12,10"
+                    Background="{DynamicResource MaterialDesignPaper}"
+                    BorderBrush="{DynamicResource MaterialDesign.Brush.Primary.Light}"
+                    BorderThickness="1"
+                    CornerRadius="0"
+                    Visibility="{Binding UpdateBannerVisibility}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0"
+                               VerticalAlignment="Center"
+                               Text="{Binding UpdateBannerMessage}"
+                               TextWrapping="Wrap" />
+                    <Button Grid.Column="1"
+                            Margin="12,0,0,0"
+                            Content="Открыть обновления"
+                            Style="{StaticResource DefButton}"
+                            Click="OnOpenUpdateWindow" />
+                    <Button Grid.Column="2"
+                            Margin="8,0,0,0"
+                            Content="Скрыть"
+                            Style="{StaticResource DefButton}"
+                            Click="OnDismissUpdateBanner" />
+                </Grid>
+            </Border>
         </StackPanel>
 
         <ScrollViewer
