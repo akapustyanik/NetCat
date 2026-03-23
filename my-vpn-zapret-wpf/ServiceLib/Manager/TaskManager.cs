@@ -57,8 +57,11 @@ public class TaskManager
                 //Logging.SaveLog("Execute delete expired files");
 
                 FileUtils.DeleteExpiredFiles(Utils.GetBinConfigPath(), DateTime.Now.AddHours(-1));
-                FileUtils.DeleteExpiredFiles(Utils.GetLogPath(), DateTime.Now.AddMonths(-1));
-                FileUtils.DeleteExpiredFiles(Utils.GetTempPath(), DateTime.Now.AddMonths(-1));
+                Utils.CleanupExpiredLogArtifacts(DateTime.UtcNow.AddDays(-14));
+                Utils.CleanupExpiredTempArtifacts(DateTime.UtcNow.AddDays(-7));
+                Utils.CleanupCachedGuiUpdateArchives(DateTime.UtcNow.AddDays(-14));
+                Utils.CleanupStaleUpdaterDirectories();
+                ZapretHandler.CleanupHiddenLaunchBats(ZapretHandler.FindZapretPath(_config.GuiItem.ZapretPath) ?? string.Empty);
 
                 try
                 {

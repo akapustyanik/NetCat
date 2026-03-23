@@ -693,6 +693,40 @@
                                 </StackPanel>
                             </GroupBox>
 
+                            <GroupBox Header="System Status" Style="{StaticResource MyGroupBox}" Margin="0,0,0,12">
+                                <StackPanel Margin="12">
+                                    <TextBlock FontSize="12" Opacity="0.8" TextWrapping="Wrap">
+                                        Краткое состояние обновления, updater, zapret и временных файлов. Здесь должно быть видно, если после обновления или тестов остался мусор.
+                                    </TextBlock>
+                                    <TextBox
+                                        Margin="0,8,0,0"
+                                        Text="{Binding SystemStatusSummary}"
+                                        IsReadOnly="True"
+                                        AcceptsReturn="True"
+                                        TextWrapping="Wrap"
+                                        VerticalScrollBarVisibility="Auto"
+                                        HorizontalScrollBarVisibility="Disabled"
+                                        common:SmoothScrollBehavior.IsEnabled="True"
+                                        MinHeight="170" />
+                                    <StackPanel Margin="0,10,0,0" Orientation="Horizontal">
+                                        <Button
+                                            Content="Refresh"
+                                            Style="{StaticResource DefButton}"
+                                            Click="OnRefreshDebug" />
+                                        <Button
+                                            Content="Open Temp"
+                                            Style="{StaticResource DefButton}"
+                                            Margin="8,0,0,0"
+                                            Click="OnOpenTempFolder" />
+                                        <Button
+                                            Content="Open Logs"
+                                            Style="{StaticResource DefButton}"
+                                            Margin="8,0,0,0"
+                                            Click="OnOpenLogsFolder" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </GroupBox>
+
                             <GroupBox Header="Appearance" Style="{StaticResource MyGroupBox}" Margin="0,0,0,12">
                                 <StackPanel Margin="12">
                                     <TextBlock FontSize="12" Opacity="0.7" Text="Выбор собственного цвета и яркости" />

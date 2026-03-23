@@ -6,6 +6,7 @@ namespace AmazTool;
 internal class Utils
 {
     private const string RebootAsArgument = "rebootas";
+    private const long MaxUpdaterLogSizeBytes = 1024 * 1024;
     private static readonly object _logLock = new();
     private static string? _targetStartupPath;
 
@@ -101,9 +102,9 @@ internal class Utils
 
             lock (_logLock)
             {
-                var logDir = Path.Combine(StartupPath(), "guiLogs");
-                Directory.CreateDirectory(logDir);
-                var logPath = Path.Combine(logDir, $"updater-{DateTime.Now:yyyy-MM-dd}.log");
+                var logDir = GetUpdaterLogDirectory();
+                CleanupOldUpdaterLogs(logDir);
+                var logPath = GetUpdaterLogPath(logDir);
                 File.AppendAllText(logPath, text + Environment.NewLine, Encoding.UTF8);
             }
         }
@@ -145,6 +146,67 @@ internal class Utils
         catch (Exception ex)
         {
             Log($"Failed to schedule updater cleanup: {ex.Message}");
+        }
+    }
+
+    private static string GetUpdaterLogDirectory()
+    {
+        var userDataLogDir = Path.Combine(StartupPath(), "userdata", "guiLogs");
+        if (Directory.Exists(Path.Combine(StartupPath(), "userdata")) || Directory.Exists(userDataLogDir))
+        {
+            Directory.CreateDirectory(userDataLogDir);
+            return userDataLogDir;
+        }
+
+        var legacyLogDir = Path.Combine(StartupPath(), "guiLogs");
+        Directory.CreateDirectory(legacyLogDir);
+        return legacyLogDir;
+    }
+
+    private static string GetUpdaterLogPath(string logDir)
+    {
+        var baseName = $"updater-{DateTime.Now:yyyy-MM-dd}";
+        var primaryPath = Path.Combine(logDir, $"{baseName}.log");
+        if (!File.Exists(primaryPath))
+        {
+            return primaryPath;
+        }
+
+        var info = new FileInfo(primaryPath);
+        if (info.Length < MaxUpdaterLogSizeBytes)
+        {
+            return primaryPath;
+        }
+
+        var index = 1;
+        while (true)
+        {
+            var candidate = Path.Combine(logDir, $"{baseName}.{index}.log");
+            if (!File.Exists(candidate) || new FileInfo(candidate).Length < MaxUpdaterLogSizeBytes)
+            {
+                return candidate;
+            }
+
+            index++;
+        }
+    }
+
+    private static void CleanupOldUpdaterLogs(string logDir)
+    {
+        try
+        {
+            foreach (var filePath in Directory.GetFiles(logDir, "updater-*.log", SearchOption.TopDirectoryOnly))
+            {
+                var info = new FileInfo(filePath);
+                if (info.LastWriteTimeUtc < DateTime.UtcNow.AddDays(-14))
+                {
+                    File.Delete(filePath);
+                }
+            }
+        }
+        catch
+        {
+            // ignore updater log cleanup failures
         }
     }
 }

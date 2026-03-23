@@ -6,6 +6,8 @@ namespace ServiceLib.Common;
 public static class FileUtils
 {
     private static readonly string _tag = "FileManager";
+    private const int DefaultIoRetryCount = 5;
+    private const int DefaultIoRetryDelayMs = 150;
 
     public static bool ByteArrayToFile(string fileName, byte[] content)
     {
@@ -210,7 +212,7 @@ public static class FileUtils
             foreach (var filePath in files)
             {
                 var file = new FileInfo(filePath);
-                if (file.CreationTime >= dtLine)
+                if (file.LastWriteTime >= dtLine)
                 {
                     continue;
                 }
@@ -245,5 +247,106 @@ public static class FileUtils
         await Utils.SetLinuxChmod(shFilePath);
 
         return shFilePath;
+    }
+
+    public static void EnsureParentDirectory(string path)
+    {
+        var directory = Path.GetDirectoryName(path);
+        if (!directory.IsNullOrEmpty())
+        {
+            Directory.CreateDirectory(directory);
+        }
+    }
+
+    public static bool TryDeleteFile(string? path)
+    {
+        try
+        {
+            if (!path.IsNullOrEmpty() && File.Exists(path))
+            {
+                File.Delete(path);
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog(_tag, ex);
+            return false;
+        }
+    }
+
+    public static bool TryDeleteDirectory(string? path)
+    {
+        try
+        {
+            if (!path.IsNullOrEmpty() && Directory.Exists(path))
+            {
+                Directory.Delete(path, true);
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog(_tag, ex);
+            return false;
+        }
+    }
+
+    public static void CopyFileWithRetry(string sourcePath, string destinationPath, bool overwrite, int retryCount = DefaultIoRetryCount, int delayMs = DefaultIoRetryDelayMs)
+    {
+        EnsureParentDirectory(destinationPath);
+
+        for (var attempt = 1; attempt <= retryCount; attempt++)
+        {
+            try
+            {
+                File.Copy(sourcePath, destinationPath, overwrite);
+                return;
+            }
+            catch when (attempt < retryCount)
+            {
+                Thread.Sleep(delayMs * attempt);
+            }
+        }
+
+        File.Copy(sourcePath, destinationPath, overwrite);
+    }
+
+    public static void MoveFileWithRetry(string sourcePath, string destinationPath, bool overwrite, int retryCount = DefaultIoRetryCount, int delayMs = DefaultIoRetryDelayMs)
+    {
+        EnsureParentDirectory(destinationPath);
+
+        for (var attempt = 1; attempt <= retryCount; attempt++)
+        {
+            try
+            {
+                File.Move(sourcePath, destinationPath, overwrite);
+                return;
+            }
+            catch when (attempt < retryCount)
+            {
+                Thread.Sleep(delayMs * attempt);
+            }
+        }
+
+        File.Move(sourcePath, destinationPath, overwrite);
+    }
+
+    public static void WriteAllTextAtomic(string path, string contents, Encoding? encoding = null)
+    {
+        encoding ??= new UTF8Encoding(false);
+        EnsureParentDirectory(path);
+
+        var tempPath = path + ".tmp";
+        File.WriteAllText(tempPath, contents, encoding);
+
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
+
+        File.Move(tempPath, path, true);
     }
 }

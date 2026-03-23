@@ -174,16 +174,15 @@ public class Utils
 
     public static string HumanFy(long amount)
     {
-        if (amount <= 0)
+        if (amount < 0)
         {
-            return $"{amount:f1} B";
+            return "0 B";
         }
 
-        string[] units = ["KB", "MB", "GB", "TB", "PB"];
+        string[] units = ["B", "KB", "MB", "GB", "TB", "PB"];
         var unitIndex = 0;
         double size = amount;
 
-        // Loop and divide by 1024 until a suitable unit is found
         while (size >= 1024 && unitIndex < units.Length - 1)
         {
             size /= 1024;
@@ -1218,6 +1217,280 @@ public class Utils
             var destinationPath = Path.Combine(targetPath, relativePath);
             Directory.CreateDirectory(Path.GetDirectoryName(destinationPath) ?? targetPath);
             File.Copy(file, destinationPath, true);
+        }
+    }
+
+    public static string GetInstallLogPath(string filename = "")
+    {
+        var logPath = Path.Combine(StartupPath(), "guiLogs");
+        Directory.CreateDirectory(logPath);
+        return filename.IsNullOrEmpty() ? logPath : Path.Combine(logPath, filename);
+    }
+
+    public static (int FileCount, long TotalBytes) GetDirectoryStats(string path, string searchPattern = "*", SearchOption searchOption = SearchOption.AllDirectories)
+    {
+        try
+        {
+            if (!Directory.Exists(path))
+            {
+                return (0, 0);
+            }
+
+            var files = Directory.GetFiles(path, searchPattern, searchOption)
+                .Select(filePath =>
+                {
+                    try
+                    {
+                        return new FileInfo(filePath);
+                    }
+                    catch
+                    {
+                        return null;
+                    }
+                })
+                .Where(info => info != null)
+                .Cast<FileInfo>()
+                .ToList();
+
+            return (files.Count, files.Sum(info => info.Length));
+        }
+        catch
+        {
+            return (0, 0);
+        }
+    }
+
+    public static int CleanupRuntimeArtifacts(Config? config = null)
+    {
+        var removedCount = 0;
+        removedCount += CleanupStaleUpdaterDirectories();
+        removedCount += CleanupExpiredTempArtifacts(DateTime.UtcNow.AddDays(-7));
+        removedCount += CleanupExpiredLogArtifacts(DateTime.UtcNow.AddDays(-14));
+        removedCount += CleanupCachedGuiUpdateArchives(DateTime.UtcNow.AddDays(-14));
+        removedCount += CleanupZapretArtifacts(config);
+        return removedCount;
+    }
+
+    public static int CountStaleUpdaterDirectories()
+    {
+        try
+        {
+            return Directory.Exists(GetTempPath())
+                ? Directory.GetDirectories(GetTempPath(), "updater-*", SearchOption.TopDirectoryOnly).Length
+                : 0;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    public static int CleanupStaleUpdaterDirectories()
+    {
+        var removedCount = 0;
+        try
+        {
+            foreach (var directoryPath in Directory.GetDirectories(GetTempPath(), "updater-*", SearchOption.TopDirectoryOnly))
+            {
+                if (FileUtils.TryDeleteDirectory(directoryPath))
+                {
+                    removedCount++;
+                }
+            }
+        }
+        catch
+        {
+            // ignore temp cleanup failures
+        }
+
+        return removedCount;
+    }
+
+    public static int CleanupExpiredTempArtifacts(DateTime thresholdUtc)
+    {
+        var removedCount = 0;
+        try
+        {
+            var tempPath = GetTempPath();
+            if (!Directory.Exists(tempPath))
+            {
+                return 0;
+            }
+
+            foreach (var filePath in Directory.GetFiles(tempPath, "*", SearchOption.TopDirectoryOnly))
+            {
+                if (Path.GetFileName(filePath).Equals("updates", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var info = new FileInfo(filePath);
+                if (info.LastWriteTimeUtc < thresholdUtc && FileUtils.TryDeleteFile(filePath))
+                {
+                    removedCount++;
+                }
+            }
+
+            foreach (var directoryPath in Directory.GetDirectories(tempPath, "*", SearchOption.TopDirectoryOnly))
+            {
+                if (Path.GetFileName(directoryPath).Equals("updates", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var info = new DirectoryInfo(directoryPath);
+                if (info.LastWriteTimeUtc < thresholdUtc && FileUtils.TryDeleteDirectory(directoryPath))
+                {
+                    removedCount++;
+                }
+            }
+        }
+        catch
+        {
+            // ignore temp cleanup failures
+        }
+
+        return removedCount;
+    }
+
+    public static int CleanupCachedGuiUpdateArchives(DateTime thresholdUtc)
+    {
+        var removedCount = 0;
+        try
+        {
+            var updateCachePath = Path.Combine(GetTempPath(), "updates");
+            if (!Directory.Exists(updateCachePath))
+            {
+                return 0;
+            }
+
+            foreach (var filePath in Directory.GetFiles(updateCachePath, "*.zip", SearchOption.TopDirectoryOnly))
+            {
+                var info = new FileInfo(filePath);
+                if (info.LastWriteTimeUtc < thresholdUtc && FileUtils.TryDeleteFile(filePath))
+                {
+                    removedCount++;
+                }
+            }
+        }
+        catch
+        {
+            // ignore cached archive cleanup failures
+        }
+
+        return removedCount;
+    }
+
+    public static int CleanupExpiredLogArtifacts(DateTime thresholdUtc)
+    {
+        var removedCount = 0;
+        removedCount += CleanupExpiredLogArtifactsInDirectory(GetLogPath(), thresholdUtc);
+        removedCount += CleanupExpiredLogArtifactsInDirectory(GetInstallLogPath(), thresholdUtc);
+        return removedCount;
+    }
+
+    public static string? ReadLatestLogError()
+    {
+        var candidateFiles = new[]
+        {
+            GetLogPath(),
+            GetInstallLogPath()
+        }
+            .Where(Directory.Exists)
+            .SelectMany(path => Directory.GetFiles(path, "*.txt", SearchOption.TopDirectoryOnly))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(path =>
+            {
+                try
+                {
+                    return new FileInfo(path);
+                }
+                catch
+                {
+                    return null;
+                }
+            })
+            .Where(info => info != null)
+            .Cast<FileInfo>()
+            .OrderByDescending(info => info.LastWriteTimeUtc)
+            .ToList();
+
+        foreach (var file in candidateFiles)
+        {
+            try
+            {
+                using FileStream stream = new(file.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using StreamReader reader = new(stream);
+                var lines = new List<string>();
+                while (!reader.EndOfStream)
+                {
+                    var line = reader.ReadLine();
+                    if (line.IsNotEmpty())
+                    {
+                        lines.Add(line);
+                    }
+                }
+
+                var match = lines
+                    .TakeLast(200)
+                    .LastOrDefault(line =>
+                        line.Contains("-ERROR ", StringComparison.OrdinalIgnoreCase)
+                        || line.Contains("UnhandledException", StringComparison.OrdinalIgnoreCase)
+                        || line.Contains("failed", StringComparison.OrdinalIgnoreCase)
+                        || line.Contains("exception", StringComparison.OrdinalIgnoreCase));
+                if (match.IsNotEmpty())
+                {
+                    return match;
+                }
+            }
+            catch
+            {
+                // ignore log read failures
+            }
+        }
+
+        return null;
+    }
+
+    private static int CleanupExpiredLogArtifactsInDirectory(string path, DateTime thresholdUtc)
+    {
+        var removedCount = 0;
+        try
+        {
+            if (!Directory.Exists(path))
+            {
+                return 0;
+            }
+
+            foreach (var filePath in Directory.GetFiles(path, "*.txt", SearchOption.TopDirectoryOnly))
+            {
+                var info = new FileInfo(filePath);
+                if (info.LastWriteTimeUtc < thresholdUtc && FileUtils.TryDeleteFile(filePath))
+                {
+                    removedCount++;
+                }
+            }
+        }
+        catch
+        {
+            // ignore log cleanup failures
+        }
+
+        return removedCount;
+    }
+
+    private static int CleanupZapretArtifacts(Config? config)
+    {
+        try
+        {
+            var zapretPath = ZapretHandler.FindZapretPath(config?.GuiItem.ZapretPath);
+            return zapretPath.IsNullOrEmpty()
+                ? 0
+                : ZapretHandler.CleanupHiddenLaunchBats(zapretPath);
+        }
+        catch
+        {
+            return 0;
         }
     }
 

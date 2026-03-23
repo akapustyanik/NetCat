@@ -92,6 +92,11 @@ public sealed class AppManager
     {
         Logging.SaveLog($"{Global.AppName} start up | {Utils.GetRuntimeInfo()}");
         Logging.LoggingEnabled(_config.GuiItem.EnableLog);
+        var cleanedArtifacts = Utils.CleanupRuntimeArtifacts(_config);
+        if (cleanedArtifacts > 0)
+        {
+            Logging.SaveLog($"Startup housekeeping removed {cleanedArtifacts} stale artifact(s).");
+        }
 
         //First determine the port value
         _ = StatePort;

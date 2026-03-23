@@ -11,6 +11,8 @@ namespace ServiceLib.Handler;
 
 public static class ZapretHandler
 {
+    private const string HiddenLaunchPrefix = "zapret-hidden-";
+
     public static bool IsValidZapretPath(string? path)
     {
         if (path.IsNullOrEmpty() || !Directory.Exists(path))
@@ -55,9 +57,12 @@ public static class ZapretHandler
             return [];
         }
 
+        CleanupHiddenLaunchBats(zapretPath);
+
         return Directory.GetFiles(zapretPath, "*.bat")
             .Select(Path.GetFileName)
             .Where(name => !string.Equals(name, "service.bat", StringComparison.OrdinalIgnoreCase))
+            .Where(name => !IsHiddenLaunchBat(name))
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
@@ -75,6 +80,14 @@ public static class ZapretHandler
             error = "Zapret path not found";
             return false;
         }
+
+        if (IsHiddenLaunchBat(configName))
+        {
+            error = "Temporary Zapret launcher file is not a valid config";
+            return false;
+        }
+
+        CleanupHiddenLaunchBats(zapretPath);
 
         var batPath = Path.Combine(zapretPath, configName);
         if (!File.Exists(batPath))
@@ -107,7 +120,7 @@ public static class ZapretHandler
     {
         var tempPath = Path.Combine(
             Path.GetDirectoryName(batPath) ?? Path.GetTempPath(),
-            $"zapret-hidden-{Path.GetFileNameWithoutExtension(batPath)}-{Guid.NewGuid():N}.bat");
+            $"{HiddenLaunchPrefix}{Path.GetFileNameWithoutExtension(batPath)}-{Guid.NewGuid():N}.bat");
 
         var content = File.ReadAllText(batPath);
         content = content.Replace("start \"zapret: %~n0\" /min", "start \"\" /b", StringComparison.OrdinalIgnoreCase);
@@ -194,10 +207,57 @@ public static class ZapretHandler
             {
                 Stop();
                 await WaitForStopAsync();
+                CleanupHiddenLaunchBats(zapretPath);
             }
         }
 
         return result;
+    }
+
+    private static bool IsHiddenLaunchBat(string? fileName)
+    {
+        return fileName?.StartsWith(HiddenLaunchPrefix, StringComparison.OrdinalIgnoreCase) == true;
+    }
+
+    public static int CountHiddenLaunchBats(string zapretPath)
+    {
+        try
+        {
+            return EnumerateHiddenLaunchBats(zapretPath).Count();
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    public static int CleanupHiddenLaunchBats(string zapretPath)
+    {
+        var removed = 0;
+        try
+        {
+            foreach (var filePath in EnumerateHiddenLaunchBats(zapretPath))
+            {
+                File.Delete(filePath);
+                removed++;
+            }
+        }
+        catch
+        {
+            // ignore stale temp launcher cleanup failures
+        }
+
+        return removed;
+    }
+
+    private static IEnumerable<string> EnumerateHiddenLaunchBats(string zapretPath)
+    {
+        if (zapretPath.IsNullOrEmpty() || !Directory.Exists(zapretPath))
+        {
+            return [];
+        }
+
+        return Directory.GetFiles(zapretPath, $"{HiddenLaunchPrefix}*.bat", SearchOption.TopDirectoryOnly);
     }
 
     private static string BuildSummaryMessage(ZapretTestResult result)

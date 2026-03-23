@@ -17,6 +17,9 @@
     mc:Ignorable="d">
 
     <DockPanel Margin="{StaticResource Margin8}">
+        <DockPanel.Resources>
+            <BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter" />
+        </DockPanel.Resources>
         <StackPanel
             Margin="{StaticResource Margin8}"
             HorizontalAlignment="Right"
@@ -70,6 +73,7 @@
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="2*" />
                                 <ColumnDefinition Width="3*" />
+                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <ToggleButton
                                 x:Name="togAutoRefresh"
@@ -98,6 +102,15 @@
                                 Style="{StaticResource ListItemSubTitle}"
                                 Text="{Binding Remarks}"
                                 TextWrapping="WrapWithOverflow" />
+                            <Button
+                                Grid.Column="3"
+                                Margin="{StaticResource Margin8}"
+                                VerticalAlignment="Center"
+                                Content="Повторить"
+                                Command="{Binding DataContext.RetryUpdateCmd, RelativeSource={RelativeSource AncestorType=ListView}}"
+                                CommandParameter="{Binding}"
+                                Style="{StaticResource DefButton}"
+                                Visibility="{Binding CanRetry, Converter={StaticResource BoolToVisibilityConverter}}" />
                         </Grid>
                     </Border>
                 </DataTemplate>

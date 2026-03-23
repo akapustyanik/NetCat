@@ -1,15 +1,44 @@
+using System.ComponentModel;
+
 namespace ServiceLib.ViewModels;
 
 public class CheckUpdateViewModel : MyReactiveObject
 {
     private const string _geo = "GeoFiles";
     private const string _zapret = "Zapret";
+    private static readonly string[] _retryFailureMarkers =
+    [
+        "failed",
+        "error",
+        "exception",
+        "cancelled",
+        "canceled",
+        "timeout",
+        "timed out",
+        "denied",
+        "not found",
+        "not exist",
+        "missing",
+        "does not contain",
+        "abnormal",
+        "statuscode error",
+        "operation failed",
+        "launch)",
+        "не удалось",
+        "ошиб",
+        "отмен",
+        "не найден",
+        "не существует",
+        "сбой",
+    ];
     private readonly string _v2rayN = ECoreType.v2rayN.ToString();
     private List<CheckUpdateModel> _lstUpdated = [];
     private static readonly string _tag = "CheckUpdateViewModel";
+    private bool _isCheckingUpdates;
 
     public IObservableCollection<CheckUpdateModel> CheckUpdateModels { get; } = new ObservableCollectionExtended<CheckUpdateModel>();
     public ReactiveCommand<Unit, Unit> CheckUpdateCmd { get; }
+    public ReactiveCommand<CheckUpdateModel, Unit> RetryUpdateCmd { get; }
     [Reactive] public bool EnableCheckPreReleaseUpdate { get; set; }
 
     public CheckUpdateViewModel(Func<EViewAction, object?, Task<bool>>? updateView)
@@ -22,6 +51,11 @@ public class CheckUpdateViewModel : MyReactiveObject
         {
             Logging.SaveLog(_tag, ex);
             _ = UpdateView(_v2rayN, ex.Message);
+        });
+        RetryUpdateCmd = ReactiveCommand.CreateFromTask<CheckUpdateModel>(RetryUpdateAsync);
+        RetryUpdateCmd.ThrownExceptions.Subscribe(ex =>
+        {
+            Logging.SaveLog(_tag, ex);
         });
 
         EnableCheckPreReleaseUpdate = _config.CheckUpdateItem.CheckPreReleaseUpdate;
@@ -88,46 +122,29 @@ public class CheckUpdateViewModel : MyReactiveObject
 
     private async Task CheckUpdateTask()
     {
-        _lstUpdated.Clear();
-        await SaveSelectedCoreTypes();
-
-        for (var k = CheckUpdateModels.Count - 1; k >= 0; k--)
+        _isCheckingUpdates = true;
+        try
         {
-            var item = CheckUpdateModels[k];
-            if (item.IsSelected != true)
-            {
-                continue;
-            }
+            _lstUpdated.Clear();
+            await SaveSelectedCoreTypes();
 
-            await UpdateView(item.CoreType, "...");
-            if (item.CoreType == _geo)
+            for (var k = CheckUpdateModels.Count - 1; k >= 0; k--)
             {
-                await CheckUpdateGeo();
-            }
-            else if (item.CoreType == _zapret)
-            {
-                await CheckUpdateZapret();
-            }
-            else if (item.CoreType == _v2rayN)
-            {
-                if (Utils.IsPackagedInstall())
+                var item = CheckUpdateModels[k];
+                if (item.IsSelected != true)
                 {
-                    await UpdateView(_v2rayN, "Not Support");
                     continue;
                 }
-                await CheckUpdateN(EnableCheckPreReleaseUpdate);
-            }
-            else if (item.CoreType == ECoreType.Xray.ToString())
-            {
-                await CheckUpdateCore(item, EnableCheckPreReleaseUpdate);
-            }
-            else
-            {
-                await CheckUpdateCore(item, false);
-            }
-        }
 
-        await UpdateFinished();
+                await RunUpdateForItemAsync(item);
+            }
+
+            await UpdateFinished();
+        }
+        finally
+        {
+            _isCheckingUpdates = false;
+        }
     }
 
     private void UpdatedPlusPlus(string coreType, string fileName)
@@ -200,6 +217,61 @@ public class CheckUpdateViewModel : MyReactiveObject
         }
         var type = (ECoreType)Enum.Parse(typeof(ECoreType), model.CoreType);
         await new UpdateService(_config, _updateUI).CheckUpdateCore(type, preRelease);
+    }
+
+    private async Task RetryUpdateAsync(CheckUpdateModel? item)
+    {
+        if (item?.CoreType.IsNullOrEmpty() != false || _isCheckingUpdates)
+        {
+            return;
+        }
+
+        _isCheckingUpdates = true;
+        item.IsRetrying = true;
+        item.CanRetry = false;
+        _lstUpdated.Clear();
+        try
+        {
+            await RunUpdateForItemAsync(item);
+            await UpdateFinished();
+        }
+        finally
+        {
+            item.IsRetrying = false;
+            item.CanRetry = ShouldAllowRetry(item.Remarks);
+            _isCheckingUpdates = false;
+        }
+    }
+
+    private async Task RunUpdateForItemAsync(CheckUpdateModel item)
+    {
+        item.CanRetry = false;
+        await UpdateView(item.CoreType, "...");
+        if (item.CoreType == _geo)
+        {
+            await CheckUpdateGeo();
+        }
+        else if (item.CoreType == _zapret)
+        {
+            await CheckUpdateZapret();
+        }
+        else if (item.CoreType == _v2rayN)
+        {
+            if (Utils.IsPackagedInstall())
+            {
+                await UpdateView(_v2rayN, "Not Support");
+                return;
+            }
+            await CheckUpdateN(EnableCheckPreReleaseUpdate);
+        }
+        else if (item.CoreType == ECoreType.Xray.ToString())
+        {
+            await CheckUpdateCore(item, EnableCheckPreReleaseUpdate);
+        }
+        else
+        {
+            await CheckUpdateCore(item, false);
+        }
     }
 
     private async Task UpdateFinished()
@@ -288,12 +360,19 @@ public class CheckUpdateViewModel : MyReactiveObject
             else
             {
                 CleanupStagedUpdater(stagedUpgradeFileName);
+                await UpdateView(_v2rayN, "Failed to start updater (Launch).");
             }
+        }
+        catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
+        {
+            CleanupStagedUpdater(stagedUpgradeFileName);
+            await UpdateView(_v2rayN, "Updater launch cancelled by user (Launch).");
+            Logging.SaveLog(_tag, ex);
         }
         catch (Exception ex)
         {
             CleanupStagedUpdater(stagedUpgradeFileName);
-            await UpdateView(_v2rayN, ex.Message);
+            await UpdateView(_v2rayN, $"{ex.Message} (Launch)");
             Logging.SaveLog(_tag, ex);
         }
     }
@@ -311,7 +390,7 @@ public class CheckUpdateViewModel : MyReactiveObject
             var relativePath = Path.GetRelativePath(sourceDir, file);
             var targetPath = Path.Combine(targetDir, relativePath);
             Directory.CreateDirectory(Path.GetDirectoryName(targetPath) ?? targetDir);
-            File.Copy(file, targetPath, true);
+            FileUtils.CopyFileWithRetry(file, targetPath, true);
         }
 
         var stagedUpgradeFileName = Path.Combine(targetDir, Path.GetFileName(upgradeFileName));
@@ -329,7 +408,7 @@ public class CheckUpdateViewModel : MyReactiveObject
         {
             foreach (var directoryPath in Directory.GetDirectories(Utils.GetTempPath(), "updater-*", SearchOption.TopDirectoryOnly))
             {
-                Directory.Delete(directoryPath, true);
+                FileUtils.TryDeleteDirectory(directoryPath);
             }
         }
         catch
@@ -348,7 +427,7 @@ public class CheckUpdateViewModel : MyReactiveObject
                 return;
             }
 
-            Directory.Delete(stagedDirectory, true);
+            FileUtils.TryDeleteDirectory(stagedDirectory);
         }
         catch
         {
@@ -407,7 +486,7 @@ public class CheckUpdateViewModel : MyReactiveObject
 
             if (File.Exists(fileName))
             {
-                File.Delete(fileName);
+                FileUtils.TryDeleteFile(fileName);
             }
         }
     }
@@ -436,7 +515,24 @@ public class CheckUpdateViewModel : MyReactiveObject
             return;
         }
         found.Remarks = model.Remarks;
+        found.CanRetry = !found.IsRetrying && ShouldAllowRetry(model.Remarks);
         await Task.CompletedTask;
+    }
+
+    private static bool ShouldAllowRetry(string? msg)
+    {
+        if (msg.IsNullOrEmpty())
+        {
+            return false;
+        }
+
+        var normalized = msg.Trim().ToLowerInvariant();
+        if (normalized is "" or "..." or "not support")
+        {
+            return false;
+        }
+
+        return _retryFailureMarkers.Any(marker => normalized.Contains(marker, StringComparison.Ordinal));
     }
 
     private static string GetModuleHint(string coreType)

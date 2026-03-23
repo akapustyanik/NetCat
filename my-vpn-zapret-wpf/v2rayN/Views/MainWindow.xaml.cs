@@ -156,6 +156,13 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         set => SetField(ref _updateBannerVisibility, value);
     }
 
+    private string _systemStatusSummary = string.Empty;
+    public string SystemStatusSummary
+    {
+        get => _systemStatusSummary;
+        set => SetField(ref _systemStatusSummary, value);
+    }
+
     private string _serverPing = string.Empty;
     public string ServerPing
     {
@@ -390,6 +397,8 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         set => SetField(ref _dataLayoutSummary, value);
     }
 
+    private string _startupUpdateStatus = "Update check: pending";
+
     public string AppVersion => $"v{Utils.GetVersionInfo()}";
 
     public MainWindow()
@@ -593,6 +602,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 
     private async Task RefreshSupportSnapshotAsync(bool refreshDebugLog)
     {
+        SystemStatusSummary = await BuildSystemStatusSummaryAsync();
         DataLayoutSummary = BuildDataLayoutSummary();
         DiagnosticOverview = await BuildDiagnosticOverviewAsync();
 
@@ -631,6 +641,36 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         sb.AppendLine($"Zapret folder: {(ZapretPath.IsNullOrEmpty() ? "missing" : ZapretPath)}");
         sb.AppendLine($"Connection: {ConnectionPing}");
         return sb.ToString().TrimEnd();
+    }
+
+    private Task<string> BuildSystemStatusSummaryAsync()
+    {
+        var updaterReady = Utils.UpgradeAppExists(out var updaterPath);
+        var resolvedZapretPath = ZapretPath.IsNullOrEmpty()
+            ? ZapretHandler.FindZapretPath(_config.GuiItem.ZapretPath) ?? string.Empty
+            : ZapretPath;
+        var hiddenLaunchers = resolvedZapretPath.IsNullOrEmpty()
+            ? 0
+            : ZapretHandler.CountHiddenLaunchBats(resolvedZapretPath);
+        var staleUpdaterDirs = Utils.CountStaleUpdaterDirectories();
+        var tempStats = Utils.GetDirectoryStats(Utils.GetTempPath(), "*", SearchOption.AllDirectories);
+        var logStats = Utils.GetDirectoryStats(Utils.GetLogPath(), "*", SearchOption.TopDirectoryOnly);
+        var updaterLogStats = Utils.GetDirectoryStats(Utils.GetInstallLogPath(), "updater-*.log", SearchOption.TopDirectoryOnly);
+        var latestError = Utils.ReadLatestLogError() ?? "none";
+
+        var sb = new StringBuilder();
+        sb.AppendLine(_startupUpdateStatus);
+        sb.AppendLine($"Updater: {(updaterReady ? "ready" : "missing")}");
+        sb.AppendLine($"Updater path: {updaterPath}");
+        sb.AppendLine($"Zapret path: {(resolvedZapretPath.IsNullOrEmpty() ? "missing" : resolvedZapretPath)}");
+        sb.AppendLine($"Zapret config: {SelectedZapretConfig?.Name ?? "none"}");
+        sb.AppendLine($"Zapret hidden launchers: {hiddenLaunchers}");
+        sb.AppendLine($"Stale updater dirs: {staleUpdaterDirs}");
+        sb.AppendLine($"Temp folder: {tempStats.FileCount} files, {Utils.HumanFy(tempStats.TotalBytes)}");
+        sb.AppendLine($"App logs: {logStats.FileCount} files, {Utils.HumanFy(logStats.TotalBytes)}");
+        sb.AppendLine($"Updater logs: {updaterLogStats.FileCount} files, {Utils.HumanFy(updaterLogStats.TotalBytes)}");
+        sb.AppendLine($"Latest error: {latestError}");
+        return Task.FromResult(sb.ToString().TrimEnd());
     }
 
     private bool CoreExists(ECoreType coreType)
@@ -833,8 +873,17 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         {
             var updateService = new UpdateService(_config, (_, _) => Task.CompletedTask);
             var result = await updateService.CheckGuiUpdateAvailability(_config.CheckUpdateItem.CheckPreReleaseUpdate);
+            _startupUpdateStatus = result.Status switch
+            {
+                EUpdateAvailabilityStatus.Available => $"Update check: available ({result.Release?.TagName ?? result.Version?.ToString() ?? "latest"})",
+                EUpdateAvailabilityStatus.UpToDate => $"Update check: up to date ({AppVersion})",
+                EUpdateAvailabilityStatus.Failed => $"Update check: failed{(result.FailureStage != EUpdateFailureStage.None ? $" ({result.FailureStage})" : string.Empty)}{(result.Msg.IsNullOrEmpty() ? string.Empty : $" - {result.Msg}")}",
+                _ => "Update check: no result"
+            };
+
             if (!result.Success || result.Version == null || result.Url.IsNullOrEmpty())
             {
+                await RefreshSupportSnapshotAsync(false);
                 return;
             }
 
@@ -843,10 +892,13 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
                 ?? result.Msg
                 ?? "latest";
             ShowUpdateBanner($"Доступно обновление NetCat {versionText}. Можно открыть окно обновления и установить его вручную.");
+            await RefreshSupportSnapshotAsync(false);
         }
         catch (Exception ex)
         {
+            _startupUpdateStatus = $"Update check: failed ({EUpdateFailureStage.Check}) - {ex.Message}";
             Logging.SaveLog("MainWindow.CheckStartupGuiUpdateAsync", ex);
+            await RefreshSupportSnapshotAsync(false);
         }
     }
 
@@ -1675,6 +1727,8 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         await RefreshSupportSnapshotAsync(true);
         var fileName = Utils.GetLogPath($"diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.txt");
         var export = new StringBuilder();
+        export.AppendLine(SystemStatusSummary);
+        export.AppendLine();
         export.AppendLine(DiagnosticOverview);
         export.AppendLine();
         export.AppendLine(DataLayoutSummary);
@@ -1698,6 +1752,11 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     private void OnOpenLogsFolder(object sender, RoutedEventArgs e)
     {
         OpenPath(Utils.GetLogPath());
+    }
+
+    private void OnOpenTempFolder(object sender, RoutedEventArgs e)
+    {
+        OpenPath(Utils.GetTempPath());
     }
 
     private async Task<string> BuildDebugInfoAsync()

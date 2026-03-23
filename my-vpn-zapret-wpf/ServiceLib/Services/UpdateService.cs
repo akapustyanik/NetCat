@@ -30,7 +30,11 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
         catch (Exception ex)
         {
             Logging.SaveLog(_tag, ex);
-            return new UpdateResult(false, ex.Message);
+            return new UpdateResult(false, ex.Message)
+            {
+                Status = EUpdateAvailabilityStatus.Failed,
+                FailureStage = EUpdateFailureStage.Check
+            };
         }
     }
 
@@ -66,9 +70,11 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
 
             url = result.Url.ToString();
             fileName = GetGuiUpdateArchivePath(result);
+            result.LocalArchivePath = fileName;
             CleanupStaleGuiUpdateArtifacts(fileName);
             if (TryUseCachedGuiUpdateArchive(fileName, result.Asset))
             {
+                result.UsedCachedArchive = true;
                 await UpdateFunc(false, "Using previously downloaded update package.");
                 await UpdateFunc(false, ResUI.MsgDownloadV2rayCoreSuccessfully);
                 await UpdateFunc(true, Utils.UrlEncode(fileName));
@@ -79,7 +85,7 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
         }
         else
         {
-            await UpdateFunc(false, result.Msg);
+            await UpdateFunc(false, FormatUpdateStatusMessage(result));
         }
     }
 
@@ -270,7 +276,11 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
         {
             Logging.SaveLog(_tag, ex);
             await UpdateFunc(false, ex.Message);
-            return new UpdateResult(false, ex.Message);
+            return new UpdateResult(false, ex.Message)
+            {
+                Status = EUpdateAvailabilityStatus.Failed,
+                FailureStage = EUpdateFailureStage.Check
+            };
         }
     }
 
@@ -284,13 +294,18 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
             gitHubRelease = await GetGitHubRelease(downloadHandle, coreInfo, preRelease);
             if (gitHubRelease == null)
             {
-                return new UpdateResult(false, "");
+                return new UpdateResult(false, "Failed to fetch NetCat release metadata.")
+                {
+                    Status = EUpdateAvailabilityStatus.Failed,
+                    FailureStage = EUpdateFailureStage.ReleaseLookup
+                };
             }
 
             tagName = gitHubRelease.TagName;
             return new UpdateResult(true, new SemanticVersion(tagName))
             {
                 Release = gitHubRelease,
+                Status = EUpdateAvailabilityStatus.Available
             };
         }
 
@@ -300,7 +315,11 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
             var result = await downloadHandle.TryDownloadString(url, true, Global.AppName);
             if (result.IsNullOrEmpty())
             {
-                return new UpdateResult(false, "");
+                return new UpdateResult(false, "Failed to fetch release list.")
+                {
+                    Status = EUpdateAvailabilityStatus.Failed,
+                    FailureStage = EUpdateFailureStage.ReleaseLookup
+                };
             }
 
             var gitHubReleases = JsonUtils.Deserialize<List<GitHubRelease>>(result);
@@ -314,12 +333,19 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
             var lastUrl = await downloadHandle.UrlRedirectAsync(url, true);
             if (lastUrl == null)
             {
-                return new UpdateResult(false, "");
+                return new UpdateResult(false, "Failed to resolve latest release redirect.")
+                {
+                    Status = EUpdateAvailabilityStatus.Failed,
+                    FailureStage = EUpdateFailureStage.ReleaseLookup
+                };
             }
 
             tagName = lastUrl?.Split("/tag/").LastOrDefault();
         }
-        return new UpdateResult(true, new SemanticVersion(tagName));
+        return new UpdateResult(true, new SemanticVersion(tagName))
+        {
+            Status = EUpdateAvailabilityStatus.Available
+        };
     }
 
     private async Task<SemanticVersion> GetCoreVersion(ECoreType type)
@@ -417,7 +443,11 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
                         url = asset?.BrowserDownloadUrl;
                         if (url.IsNullOrEmpty())
                         {
-                            return new UpdateResult(false, "GitHub release does not contain a compatible .zip asset for NetCat.");
+                            return new UpdateResult(false, "GitHub release does not contain a compatible .zip asset for NetCat.")
+                            {
+                                Status = EUpdateAvailabilityStatus.Failed,
+                                FailureStage = EUpdateFailureStage.AssetSelection
+                            };
                         }
                         result.Asset = asset;
                         break;
@@ -428,20 +458,33 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
 
             if (curVersion >= version && version != new SemanticVersion(0, 0, 0))
             {
-                return new UpdateResult(false, message);
+                return new UpdateResult(false, message)
+                {
+                    Status = EUpdateAvailabilityStatus.UpToDate,
+                    FailureStage = EUpdateFailureStage.None,
+                    Release = result.Release,
+                    Asset = result.Asset,
+                    Version = result.Version,
+                    Url = result.Url
+                };
             }
 
             result.Msg = type == ECoreType.v2rayN
                 ? $"Update available: {version}"
                 : result.Msg;
             result.Url = url;
+            result.Status = EUpdateAvailabilityStatus.Available;
             return result;
         }
         catch (Exception ex)
         {
             Logging.SaveLog(_tag, ex);
             await UpdateFunc(false, ex.Message);
-            return new UpdateResult(false, ex.Message);
+            return new UpdateResult(false, ex.Message)
+            {
+                Status = EUpdateAvailabilityStatus.Failed,
+                FailureStage = EUpdateFailureStage.ReleaseParsing
+            };
         }
     }
 
@@ -974,13 +1017,13 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
                         }
                         else
                         {
-                            File.Copy(tmpFileName, targetPath, true);
+                            FileUtils.CopyFileWithRetry(tmpFileName, targetPath, true);
                             SaveGeoFileMetadata(url, targetPath, remoteMetadata, new FileInfo(tmpFileName).Length);
                             hasChanges = true;
                             _ = UpdateFunc(false, string.Format(ResUI.MsgDownloadGeoFileSuccessfully, fileName));
                         }
 
-                        File.Delete(tmpFileName);
+                        FileUtils.TryDeleteFile(tmpFileName);
                     }
                 }
                 catch (Exception ex)
@@ -1114,7 +1157,7 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
                 ETag = remoteMetadata?.ETag,
                 LastModified = remoteMetadata?.LastModified
             };
-            File.WriteAllText(GetGeoFileMetadataPath(targetPath), JsonUtils.Serialize(metadata));
+            FileUtils.WriteAllTextAtomic(GetGeoFileMetadataPath(targetPath), JsonUtils.Serialize(metadata));
         }
         catch
         {
@@ -1211,7 +1254,7 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
 
             var targetPath = Path.Combine(backupPath, relativePath);
             Directory.CreateDirectory(Path.GetDirectoryName(targetPath) ?? backupPath);
-            File.Copy(filePath, targetPath, true);
+            FileUtils.CopyFileWithRetry(filePath, targetPath, true);
             hasFiles = true;
         }
 
@@ -1301,31 +1344,29 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
 
     private static void TryDeleteFile(string? filePath)
     {
-        try
-        {
-            if (filePath.IsNotEmpty() && File.Exists(filePath))
-            {
-                File.Delete(filePath);
-            }
-        }
-        catch
-        {
-            // ignore temp cleanup failures
-        }
+        FileUtils.TryDeleteFile(filePath);
     }
 
     private static void TryDeleteDirectory(string? directoryPath)
     {
-        try
+        FileUtils.TryDeleteDirectory(directoryPath);
+    }
+
+    private static string FormatUpdateStatusMessage(UpdateResult result)
+    {
+        if (!result.Msg.IsNullOrEmpty())
         {
-            if (directoryPath.IsNotEmpty() && Directory.Exists(directoryPath))
-            {
-                Directory.Delete(directoryPath, true);
-            }
+            return result.Status == EUpdateAvailabilityStatus.Failed && result.FailureStage != EUpdateFailureStage.None
+                ? $"{result.Msg} ({result.FailureStage})"
+                : result.Msg;
         }
-        catch
+
+        return result.Status switch
         {
-            // ignore temp cleanup failures
-        }
+            EUpdateAvailabilityStatus.UpToDate => "Already up to date.",
+            EUpdateAvailabilityStatus.Failed when result.FailureStage != EUpdateFailureStage.None => $"Update check failed ({result.FailureStage}).",
+            EUpdateAvailabilityStatus.Failed => "Update check failed.",
+            _ => "No updates."
+        };
     }
 }

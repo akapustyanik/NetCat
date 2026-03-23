@@ -3,7 +3,9 @@ param(
     [string]$Runtime = "win-x64",
     [string]$OutputDir = "",
     [string]$ZipPath = "",
-    [string]$SourcePublishDir = ""
+    [string]$SourcePublishDir = "",
+    [bool]$RunSmokeTest = $true,
+    [bool]$VerifySelfUpdateSmoke = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -127,6 +129,36 @@ function Ensure-BundledBinLayout {
     Copy-Item $sourceBinPath $targetBinPath -Recurse
 }
 
+function Copy-UpdaterBundle {
+    param(
+        [string]$RepoRoot,
+        [string]$Configuration,
+        [string]$Runtime,
+        [string]$OutputDir
+    )
+
+    $amazToolDir = Join-Path $RepoRoot "my-vpn-zapret-wpf\AmazTool\bin\$Configuration\net8.0\$Runtime"
+    if (-not (Test-Path $amazToolDir)) {
+        throw "AmazTool build output was not found: $amazToolDir"
+    }
+
+    $updaterDir = Join-Path $OutputDir "updater"
+    New-Item -ItemType Directory -Path $updaterDir -Force | Out-Null
+
+    Get-ChildItem -Path $amazToolDir -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -notmatch '\\guiLogs\\' } |
+        ForEach-Object {
+            $relativePath = [System.IO.Path]::GetRelativePath($amazToolDir, $_.FullName)
+            $targetPath = Join-Path $updaterDir $relativePath
+            $targetParent = Split-Path -Parent $targetPath
+            if (-not [string]::IsNullOrWhiteSpace($targetParent)) {
+                New-Item -ItemType Directory -Path $targetParent -Force | Out-Null
+            }
+
+            Copy-Item $_.FullName $targetPath -Force
+        }
+}
+
 Push-Location $repoRoot
 try {
     $env:DOTNET_CLI_HOME = Join-Path $repoRoot ".dotnet-cli"
@@ -173,6 +205,9 @@ try {
             Remove-Item $publishSourceDir -Recurse -Force
         }
         dotnet publish $projectPath -c $Configuration -r $Runtime --self-contained false
+        if ($LASTEXITCODE -ne 0) {
+            throw "dotnet publish failed with exit code $LASTEXITCODE"
+        }
         $publishSourceDir = Resolve-PublishOutputDirectory `
             -RepoRoot $repoRoot `
             -Configuration $Configuration `
@@ -190,6 +225,7 @@ try {
     Copy-Item $publishSourceDir $stagingDir -Recurse
     Copy-Item $stagingDir $OutputDir -Recurse
     Ensure-BundledBinLayout -RepoRoot $repoRoot -OutputDir $OutputDir
+    Copy-UpdaterBundle -RepoRoot $repoRoot -Configuration $Configuration -Runtime $Runtime -OutputDir $OutputDir
 
     $userDataDir = Join-Path $OutputDir "userdata"
     $defaultConfigPath = Join-Path $repoRoot "my-vpn-zapret\resources\v2rayn\guiConfigs\guiNConfig.json"
@@ -198,6 +234,7 @@ try {
     Get-ChildItem -Path $OutputDir -File -Filter "AmazTool*" -ErrorAction SilentlyContinue | Remove-Item -Force
     Remove-Item (Join-Path $OutputDir "guiNConfig.json") -Force -ErrorAction SilentlyContinue
     Remove-Item (Join-Path $OutputDir "updater\guiLogs") -Recurse -Force -ErrorAction SilentlyContinue
+    Get-ChildItem -Path (Join-Path $OutputDir "zapret") -File -Filter "zapret-hidden-*.bat" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
     if ((Test-Path $defaultConfigPath) -and (-not (Test-Path (Join-Path $userDataDir "guiNConfig.json")))) {
         Copy-Item $defaultConfigPath (Join-Path $userDataDir "guiNConfig.json") -Force
     }
@@ -220,8 +257,19 @@ try {
     Remove-Item $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item $zipStagingDir -Recurse -Force -ErrorAction SilentlyContinue
 
+    $hash = Get-FileHash -Path $ZipPath -Algorithm SHA256
+    Set-Content -Path "$ZipPath.sha256" -Value "$($hash.Hash.ToLowerInvariant()) *$([System.IO.Path]::GetFileName($ZipPath))" -Encoding ascii
+
+    if ($RunSmokeTest) {
+        & (Join-Path $repoRoot "Test-NetCatPackage.ps1") `
+            -OutputDir $OutputDir `
+            -ZipPath $ZipPath `
+            -VerifySelfUpdate $VerifySelfUpdateSmoke
+    }
+
     Write-Host "Published folder: $OutputDir"
     Write-Host "Release zip: $ZipPath"
+    Write-Host "SHA256 file: $ZipPath.sha256"
 }
 finally {
     Pop-Location

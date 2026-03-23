@@ -16,6 +16,11 @@ public class Logging
         config.AddTarget("file", fileTarget);
         fileTarget.Layout = "${longdate}-${level:uppercase=true} ${message}";
         fileTarget.FileName = Utils.GetLogPath("${shortdate}.txt");
+        fileTarget.ArchiveFileName = Utils.GetLogPath("archive/${shortdate}.{#####}.txt");
+        fileTarget.ArchiveEvery = FileArchivePeriod.Day;
+        fileTarget.ArchiveAboveSize = 1024 * 1024;
+        fileTarget.MaxArchiveFiles = 30;
+        fileTarget.KeepFileOpen = false;
         config.LoggingRules.Add(new LoggingRule("*", LogLevel.Debug, fileTarget));
         LogManager.Configuration = config;
     }
