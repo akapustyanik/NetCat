@@ -5,7 +5,12 @@ param(
     [string]$ZipPath = "",
     [string]$SourcePublishDir = "",
     [bool]$RunSmokeTest = $true,
-    [bool]$VerifySelfUpdateSmoke = $false
+    [bool]$VerifySelfUpdateSmoke = $false,
+    [bool]$SignBinaries = $true,
+    [string]$CodeSigningPfxPath = $env:NETCAT_CODESIGN_PFX,
+    [string]$CodeSigningPassword = $env:NETCAT_CODESIGN_PASSWORD,
+    [string]$TimestampUrl = $env:NETCAT_CODESIGN_TIMESTAMP_URL,
+    [string]$SignToolPath = $env:NETCAT_SIGNTOOL_PATH
 )
 
 $ErrorActionPreference = "Stop"
@@ -159,6 +164,103 @@ function Copy-UpdaterBundle {
         }
 }
 
+function Resolve-SignToolPath {
+    param([string]$ExplicitPath)
+
+    $candidates = @()
+    if (-not [string]::IsNullOrWhiteSpace($ExplicitPath)) {
+        $candidates += $ExplicitPath
+    }
+
+    $candidates += @(
+        "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe",
+        "C:\Program Files (x86)\Windows Kits\10\App Certification Kit\signtool.exe"
+    )
+
+    foreach ($candidate in $candidates) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path $candidate)) {
+            return $candidate
+        }
+    }
+
+    return $null
+}
+
+function Sign-Executable {
+    param(
+        [string]$TargetPath,
+        [string]$ResolvedSignToolPath,
+        [string]$ResolvedCodeSigningPfxPath,
+        [string]$ResolvedCodeSigningPassword,
+        [string]$ResolvedTimestampUrl
+    )
+
+    if (-not (Test-Path $TargetPath)) {
+        throw "File to sign was not found: $TargetPath"
+    }
+
+    $arguments = @(
+        "sign",
+        "/fd", "SHA256"
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($ResolvedTimestampUrl)) {
+        $arguments += @("/tr", $ResolvedTimestampUrl, "/td", "SHA256")
+    }
+
+    $arguments += @("/f", $ResolvedCodeSigningPfxPath)
+    if (-not [string]::IsNullOrWhiteSpace($ResolvedCodeSigningPassword)) {
+        $arguments += @("/p", $ResolvedCodeSigningPassword)
+    }
+
+    $arguments += $TargetPath
+
+    & $ResolvedSignToolPath @arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "signtool failed for $TargetPath with exit code $LASTEXITCODE"
+    }
+}
+
+function Try-SignPackageExecutables {
+    param(
+        [string]$PackageRoot,
+        [bool]$EnableSigning,
+        [string]$ResolvedCodeSigningPfxPath,
+        [string]$ResolvedCodeSigningPassword,
+        [string]$ResolvedTimestampUrl,
+        [string]$ExplicitSignToolPath
+    )
+
+    if (-not $EnableSigning) {
+        Write-Host "Code signing disabled."
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($ResolvedCodeSigningPfxPath)) {
+        Write-Warning "Skipping code signing because NETCAT_CODESIGN_PFX is not configured."
+        return
+    }
+
+    if (-not (Test-Path $ResolvedCodeSigningPfxPath)) {
+        throw "Code-signing certificate was not found: $ResolvedCodeSigningPfxPath"
+    }
+
+    $resolvedSignToolPath = Resolve-SignToolPath -ExplicitPath $ExplicitSignToolPath
+    if ([string]::IsNullOrWhiteSpace($resolvedSignToolPath)) {
+        throw "signtool.exe was not found. Set NETCAT_SIGNTOOL_PATH or install Windows SDK signing tools."
+    }
+
+    foreach ($relativePath in @("NetCat.exe", "updater\AmazTool.exe")) {
+        $targetPath = Join-Path $PackageRoot $relativePath
+        Sign-Executable `
+            -TargetPath $targetPath `
+            -ResolvedSignToolPath $resolvedSignToolPath `
+            -ResolvedCodeSigningPfxPath $ResolvedCodeSigningPfxPath `
+            -ResolvedCodeSigningPassword $ResolvedCodeSigningPassword `
+            -ResolvedTimestampUrl $ResolvedTimestampUrl
+    }
+}
+
 Push-Location $repoRoot
 try {
     $env:DOTNET_CLI_HOME = Join-Path $repoRoot ".dotnet-cli"
@@ -226,6 +328,13 @@ try {
     Copy-Item $stagingDir $OutputDir -Recurse
     Ensure-BundledBinLayout -RepoRoot $repoRoot -OutputDir $OutputDir
     Copy-UpdaterBundle -RepoRoot $repoRoot -Configuration $Configuration -Runtime $Runtime -OutputDir $OutputDir
+    Try-SignPackageExecutables `
+        -PackageRoot $OutputDir `
+        -EnableSigning $SignBinaries `
+        -ResolvedCodeSigningPfxPath $CodeSigningPfxPath `
+        -ResolvedCodeSigningPassword $CodeSigningPassword `
+        -ResolvedTimestampUrl $TimestampUrl `
+        -ExplicitSignToolPath $SignToolPath
 
     $userDataDir = Join-Path $OutputDir "userdata"
     $defaultConfigPath = Join-Path $repoRoot "my-vpn-zapret\resources\v2rayn\guiConfigs\guiNConfig.json"

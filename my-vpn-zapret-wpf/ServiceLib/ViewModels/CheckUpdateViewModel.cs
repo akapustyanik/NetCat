@@ -323,11 +323,16 @@ public class CheckUpdateViewModel : MyReactiveObject
 
     private async Task UpgradeN()
     {
+        string? updateLauncherPath = null;
+        string? updatePackagePath = null;
+        string? sourceUpgradeAssemblyPath = null;
+        string? sourceUpgradeFileName = null;
+        string? stagedUpgradeAssemblyPath = null;
         string? stagedUpgradeFileName = null;
         try
         {
-            var fileName = _lstUpdated.FirstOrDefault(x => x.CoreType == _v2rayN)?.FileName;
-            if (fileName.IsNullOrEmpty())
+            updatePackagePath = _lstUpdated.FirstOrDefault(x => x.CoreType == _v2rayN)?.FileName;
+            if (updatePackagePath.IsNullOrEmpty())
             {
                 return;
             }
@@ -339,19 +344,42 @@ public class CheckUpdateViewModel : MyReactiveObject
                 return;
             }
 
-            stagedUpgradeFileName = StageUpgradeApp(upgradeFileName);
+            sourceUpgradeFileName = upgradeFileName;
+            stagedUpgradeFileName = StageUpgradeApp(sourceUpgradeFileName);
+            stagedUpgradeAssemblyPath = Path.Combine(Path.GetDirectoryName(stagedUpgradeFileName) ?? Utils.GetTempPath(), "AmazTool.dll");
+            if (Utils.TryGetManagedUpgradeHost(out var dotnetHostPath, out var upgradeAssemblyPath) && File.Exists(stagedUpgradeAssemblyPath))
+            {
+                updateLauncherPath = dotnetHostPath;
+                sourceUpgradeAssemblyPath = upgradeAssemblyPath;
+            }
+            else
+            {
+                updateLauncherPath = stagedUpgradeFileName;
+            }
+
+            Logging.SaveLog(BuildUpdaterLaunchDiagnostics(sourceUpgradeFileName, sourceUpgradeAssemblyPath, stagedUpgradeFileName, stagedUpgradeAssemblyPath, updateLauncherPath, updatePackagePath));
             Process proc = new()
             {
                 StartInfo = new ProcessStartInfo
                 {
-                    UseShellExecute = true,
-                    FileName = stagedUpgradeFileName,
+                    UseShellExecute = string.Equals(updateLauncherPath, stagedUpgradeFileName, StringComparison.OrdinalIgnoreCase),
+                    FileName = updateLauncherPath,
                     WorkingDirectory = Path.GetDirectoryName(stagedUpgradeFileName) ?? Utils.GetTempPath(),
                 }
             };
-            proc.StartInfo.ArgumentList.Add("upgrade");
-            proc.StartInfo.ArgumentList.Add(Utils.StartupPath());
-            proc.StartInfo.ArgumentList.Add(fileName);
+            if (string.Equals(updateLauncherPath, stagedUpgradeFileName, StringComparison.OrdinalIgnoreCase))
+            {
+                proc.StartInfo.ArgumentList.Add("upgrade");
+                proc.StartInfo.ArgumentList.Add(Utils.StartupPath());
+                proc.StartInfo.ArgumentList.Add(updatePackagePath);
+            }
+            else
+            {
+                proc.StartInfo.ArgumentList.Add(stagedUpgradeAssemblyPath);
+                proc.StartInfo.ArgumentList.Add("upgrade");
+                proc.StartInfo.ArgumentList.Add(Utils.StartupPath());
+                proc.StartInfo.ArgumentList.Add(updatePackagePath);
+            }
 
             if (proc.Start())
             {
@@ -366,13 +394,15 @@ public class CheckUpdateViewModel : MyReactiveObject
         catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
         {
             CleanupStagedUpdater(stagedUpgradeFileName);
-            await UpdateView(_v2rayN, "Updater launch cancelled by user (Launch).");
+            await UpdateView(_v2rayN, "Updater launch was cancelled or blocked by Windows protection (Launch).");
+            Logging.SaveLog(BuildUpdaterLaunchDiagnostics(sourceUpgradeFileName, sourceUpgradeAssemblyPath, stagedUpgradeFileName, stagedUpgradeAssemblyPath, updateLauncherPath, updatePackagePath));
             Logging.SaveLog(_tag, ex);
         }
         catch (Exception ex)
         {
             CleanupStagedUpdater(stagedUpgradeFileName);
             await UpdateView(_v2rayN, $"{ex.Message} (Launch)");
+            Logging.SaveLog(BuildUpdaterLaunchDiagnostics(sourceUpgradeFileName, sourceUpgradeAssemblyPath, stagedUpgradeFileName, stagedUpgradeAssemblyPath, updateLauncherPath, updatePackagePath));
             Logging.SaveLog(_tag, ex);
         }
     }
@@ -393,13 +423,31 @@ public class CheckUpdateViewModel : MyReactiveObject
             FileUtils.CopyFileWithRetry(file, targetPath, true);
         }
 
+        var unblockResult = FileUtils.TryUnblockDirectoryFiles(targetDir);
+
         var stagedUpgradeFileName = Path.Combine(targetDir, Path.GetFileName(upgradeFileName));
         if (!File.Exists(stagedUpgradeFileName))
         {
             throw new FileNotFoundException("Failed to stage updater files.", stagedUpgradeFileName);
         }
 
+        Logging.SaveLog($"StageUpgradeApp prepared updater | sourceDir={sourceDir} | targetDir={targetDir} | scanned={unblockResult.ScannedFiles} | blocked={unblockResult.BlockedFiles} | unblocked={unblockResult.UnblockedFiles}");
+        Logging.SaveLog(BuildUpdaterLaunchDiagnostics(upgradeFileName, Path.Combine(sourceDir, "AmazTool.dll"), stagedUpgradeFileName, Path.Combine(targetDir, "AmazTool.dll"), null, null));
+
         return stagedUpgradeFileName;
+    }
+
+    private static string BuildUpdaterLaunchDiagnostics(string? sourceUpdaterPath, string? sourceUpdaterAssemblyPath, string? stagedUpdaterPath, string? stagedUpdaterAssemblyPath, string? launcherPath, string? packagePath)
+    {
+        return string.Join(" | ", [
+            "Updater launch diagnostics",
+            $"sourceExe={FileUtils.DescribeWindowsTrustState(sourceUpdaterPath)}",
+            $"sourceDll={FileUtils.DescribeWindowsTrustState(sourceUpdaterAssemblyPath)}",
+            $"stagedExe={FileUtils.DescribeWindowsTrustState(stagedUpdaterPath)}",
+            $"stagedDll={FileUtils.DescribeWindowsTrustState(stagedUpdaterAssemblyPath)}",
+            $"launcher={FileUtils.DescribeWindowsTrustState(launcherPath)}",
+            $"package={FileUtils.DescribeWindowsTrustState(packagePath)}"
+        ]);
     }
 
     private static void CleanupStaleStagedUpdaters()

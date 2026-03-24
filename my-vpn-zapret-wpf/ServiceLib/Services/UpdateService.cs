@@ -48,6 +48,7 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
         {
             if (args.Success)
             {
+                FileUtils.TryUnblockFile(fileName);
                 _ = UpdateFunc(false, ResUI.MsgDownloadV2rayCoreSuccessfully);
                 _ = UpdateFunc(true, Utils.UrlEncode(fileName));
             }
@@ -74,6 +75,7 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
             CleanupStaleGuiUpdateArtifacts(fileName);
             if (TryUseCachedGuiUpdateArchive(fileName, result.Asset))
             {
+                FileUtils.TryUnblockFile(fileName);
                 result.UsedCachedArchive = true;
                 await UpdateFunc(false, "Using previously downloaded update package.");
                 await UpdateFunc(false, ResUI.MsgDownloadV2rayCoreSuccessfully);
@@ -99,6 +101,7 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
         {
             if (args.Success)
             {
+                FileUtils.TryUnblockFile(fileName);
                 _ = UpdateFunc(false, ResUI.MsgDownloadV2rayCoreSuccessfully);
                 _ = UpdateFunc(false, ResUI.MsgUnpacking);
 
@@ -191,6 +194,8 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
                 return;
             }
 
+            FileUtils.TryUnblockFile(archivePath);
+
             await UpdateFunc(false, ResUI.MsgUnpacking);
 
             var wasRunning = ZapretHandler.IsRunning();
@@ -203,6 +208,7 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
 
             Directory.CreateDirectory(extractPath);
             System.IO.Compression.ZipFile.ExtractToDirectory(archivePath, extractPath, true);
+            FileUtils.TryUnblockDirectoryFiles(extractPath);
 
             var extractedZapretPath = FindZapretExtractRoot(extractPath);
             if (extractedZapretPath.IsNullOrEmpty())

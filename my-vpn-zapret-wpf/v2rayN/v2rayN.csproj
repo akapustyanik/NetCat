@@ -45,10 +45,10 @@
 			<CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
 			<Link>domains.lst</Link>
 		</Content>
-		<Content Include="..\..\..\secret.png">
+		<Content Include="..\..\..\secret.dat">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 			<CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-			<Link>secret.png</Link>
+			<Link>secret.dat</Link>
 		</Content>
 		<Content Include="..\..\my-vpn-zapret\resources\v2rayn\guiConfigs\guiNConfig.json">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

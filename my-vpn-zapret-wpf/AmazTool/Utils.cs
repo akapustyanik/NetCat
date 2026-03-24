@@ -60,6 +60,7 @@ internal class Utils
                     continue;
                 }
 
+                TryUnblockFile(appExePath);
                 Process process = new()
                 {
                     StartInfo = new()
@@ -207,6 +208,33 @@ internal class Utils
         catch
         {
             // ignore updater log cleanup failures
+        }
+    }
+
+    public static bool TryUnblockFile(string? path)
+    {
+        if (!OperatingSystem.IsWindows() || string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            File.Delete($"{path}:Zone.Identifier");
+            return true;
+        }
+        catch (FileNotFoundException)
+        {
+            return false;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Log($"Failed to unblock {path}: {ex.Message}");
+            return false;
         }
     }
 }

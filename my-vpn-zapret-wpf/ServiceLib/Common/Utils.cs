@@ -731,6 +731,44 @@ public class Utils
         return Path.Combine(GetBaseDirectory(), fileName);
     }
 
+    public static string GetUpgradeAppAssemblyPath()
+    {
+        var packagedPath = Path.Combine(GetBaseDirectory(UpgradeAppFolderName), "AmazTool.dll");
+        if (File.Exists(packagedPath))
+        {
+            return packagedPath;
+        }
+
+        return Path.Combine(GetBaseDirectory(), "AmazTool.dll");
+    }
+
+    public static bool TryGetManagedUpgradeHost(out string dotnetHostPath, out string upgradeAssemblyPath)
+    {
+        upgradeAssemblyPath = GetUpgradeAppAssemblyPath();
+        dotnetHostPath = GetDotnetHostPath();
+        return File.Exists(upgradeAssemblyPath) && File.Exists(dotnetHostPath);
+    }
+
+    public static string GetDotnetHostPath()
+    {
+        var candidates = new List<string>();
+
+        var dotnetRoot = Environment.GetEnvironmentVariable("DOTNET_ROOT");
+        if (dotnetRoot.IsNotEmpty())
+        {
+            candidates.Add(Path.Combine(dotnetRoot, "dotnet.exe"));
+        }
+
+        candidates.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet", "dotnet.exe"));
+        candidates.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "dotnet", "dotnet.exe"));
+
+        return candidates
+            .Where(path => path.IsNotEmpty() && File.Exists(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault()
+            ?? "dotnet";
+    }
+
     /// <summary>
     /// Get version
     /// </summary>
@@ -1258,6 +1296,40 @@ public class Utils
         {
             return (0, 0);
         }
+    }
+
+    public static (int ScannedFiles, int BlockedFiles, int UnblockedFiles) UnblockInstallDirectoryFiles()
+    {
+        if (!IsWindows())
+        {
+            return (0, 0, 0);
+        }
+
+        return FileUtils.TryUnblockDirectoryFiles(StartupPath());
+    }
+
+    public static string GetInstallTrustDiagnostics()
+    {
+        if (!IsWindows())
+        {
+            return "Windows trust diagnostics are not available on this platform.";
+        }
+
+        var appExePath = GetPath($"{Global.AppName}.exe");
+        var updaterExePath = GetPath(Path.Combine("updater", "AmazTool.exe"));
+        var cachedUpdateDirectory = Path.Combine(GetTempPath(), "updates");
+        var cachedArchivePath = Directory.Exists(cachedUpdateDirectory)
+            ? Directory.GetFiles(cachedUpdateDirectory, "*.zip", SearchOption.TopDirectoryOnly)
+                .OrderByDescending(path => File.GetLastWriteTimeUtc(path))
+                .FirstOrDefault()
+            : null;
+
+        return string.Join(" | ", [
+            $"InstallTrust startup={StartupPath()}",
+            $"app={FileUtils.DescribeWindowsTrustState(appExePath)}",
+            $"updater={FileUtils.DescribeWindowsTrustState(updaterExePath)}",
+            $"cachedArchive={FileUtils.DescribeWindowsTrustState(cachedArchivePath)}"
+        ]);
     }
 
     public static int CleanupRuntimeArtifacts(Config? config = null)

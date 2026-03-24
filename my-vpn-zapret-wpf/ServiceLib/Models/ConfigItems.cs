@@ -98,6 +98,7 @@ public class UIItem
     public bool UseCustomPrimaryColor { get; set; }
     public string? CustomPrimaryColor { get; set; }
     public string? CurrentTheme { get; set; }
+    public string? MainWindowPreset { get; set; }
     public string CurrentLanguage { get; set; }
     public string CurrentFontFamily { get; set; }
     public int CurrentFontSize { get; set; }
@@ -107,6 +108,7 @@ public class UIItem
     public bool Hide2TrayWhenClose { get; set; }
     public bool MinimizeToTray { get; set; }
     public bool MacOSShowInDock { get; set; }
+    public bool PreferFullTrafficVpn { get; set; } = true;
     public List<ColumnItem> MainColumnItem { get; set; }
     public List<WindowSizeItem> WindowSizeItem { get; set; }
 }

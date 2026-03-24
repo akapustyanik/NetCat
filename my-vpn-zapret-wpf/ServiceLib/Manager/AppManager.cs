@@ -97,6 +97,12 @@ public sealed class AppManager
         {
             Logging.SaveLog($"Startup housekeeping removed {cleanedArtifacts} stale artifact(s).");
         }
+        if (Utils.IsWindows())
+        {
+            var unblockResult = Utils.UnblockInstallDirectoryFiles();
+            Logging.SaveLog($"Startup trust cleanup scanned {unblockResult.ScannedFiles} file(s), found {unblockResult.BlockedFiles} blocked file(s), unblocked {unblockResult.UnblockedFiles} file(s).");
+            Logging.SaveLog(Utils.GetInstallTrustDiagnostics());
+        }
 
         //First determine the port value
         _ = StatePort;

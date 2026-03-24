@@ -3,6 +3,7 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:base="clr-namespace:v2rayN.Base"
+    xmlns:common="clr-namespace:v2rayN.Common"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:materialDesign="http://materialdesigninxaml.net/winfx/xaml/themes"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -10,18 +11,35 @@
     xmlns:resx="clr-namespace:ServiceLib.Resx;assembly=ServiceLib"
     xmlns:vms="clr-namespace:ServiceLib.ViewModels;assembly=ServiceLib"
     Title="{x:Static resx:ResUI.menuServers}"
-    Width="900"
-    Height="700"
+    Width="1140"
+    Height="760"
+    MinWidth="1080"
+    MinHeight="700"
+    Background="{DynamicResource ProtocolEditorWindowBackgroundBrush}"
     x:TypeArguments="vms:AddGroupServerViewModel"
     ResizeMode="CanResize"
     ShowInTaskbar="False"
     Style="{StaticResource WindowGlobal}"
     WindowStartupLocation="CenterScreen"
     mc:Ignorable="d">
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="../Resources/ProtocolEditorTheme.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Window.Resources>
 
-    <DockPanel Margin="{StaticResource Margin8}">
+    <Border
+        Margin="14"
+        Padding="16"
+        Background="{DynamicResource ProtocolEditorSurfaceBrush}"
+        BorderBrush="{DynamicResource ProtocolEditorBorderBrush}"
+        BorderThickness="1"
+        CornerRadius="20">
+    <DockPanel>
         <StackPanel
-            Margin="{StaticResource Margin4}"
+            Margin="0,12,0,0"
             HorizontalAlignment="Center"
             DockPanel.Dock="Bottom"
             Orientation="Horizontal">
@@ -37,7 +55,7 @@
                 Margin="{StaticResource MarginLeftRight8}"
                 Content="{x:Static resx:ResUI.TbCancel}"
                 IsCancel="true"
-                Style="{StaticResource DefButton}" />
+                Style="{StaticResource SubtleButton}" />
         </StackPanel>
 
         <Grid DockPanel.Dock="Top">
@@ -62,8 +80,8 @@
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="300" />
-                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="240" />
+                    <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
@@ -85,8 +103,8 @@
                     x:Name="txtRemarks"
                     Grid.Row="1"
                     Grid.Column="1"
-                    Width="400"
                     Margin="{StaticResource Margin4}"
+                    HorizontalAlignment="Stretch"
                     Style="{StaticResource DefTextBox}" />
 
                 <TextBlock
@@ -100,8 +118,8 @@
                     x:Name="cmbCoreType"
                     Grid.Row="2"
                     Grid.Column="1"
-                    Width="200"
                     Margin="{StaticResource Margin4}"
+                    MinWidth="220"
                     materialDesign:HintAssist.Hint="{x:Static resx:ResUI.TbCoreType}"
                     Style="{StaticResource DefComboBox}" />
 
@@ -111,8 +129,8 @@
                     Grid.Column="0"
                     Grid.ColumnSpan="3">
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="300" />
-                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="240" />
+                        <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <TextBlock
@@ -126,8 +144,8 @@
                         x:Name="cmbPolicyGroupType"
                         Grid.Row="3"
                         Grid.Column="1"
-                        Width="200"
                         Margin="{StaticResource Margin4}"
+                        MinWidth="220"
                         materialDesign:HintAssist.Hint="{x:Static resx:ResUI.TbPolicyGroupType}"
                         Style="{StaticResource DefComboBox}" />
                 </Grid>
@@ -137,9 +155,14 @@
         <TabControl
             x:Name="tabControl"
             Margin="{StaticResource Margin8}"
-            HorizontalContentAlignment="Left"
+            HorizontalContentAlignment="Stretch"
             DockPanel.Dock="Top">
             <TabItem HorizontalAlignment="Left" Header="{x:Static resx:ResUI.menuServerList}">
+                <ScrollViewer
+                    materialDesign:ScrollViewerAssist.IsAutoHideEnabled="True"
+                    common:SmoothScrollBehavior.IsEnabled="True"
+                    HorizontalScrollBarVisibility="Disabled"
+                    VerticalScrollBarVisibility="Auto">
                 <Grid Margin="{StaticResource Margin8}">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -147,9 +170,9 @@
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="220" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="280" />
                     </Grid.ColumnDefinitions>
 
                     <TextBlock
@@ -163,9 +186,9 @@
                         x:Name="cmbSubChildItems"
                         Grid.Row="0"
                         Grid.Column="1"
-                        Width="600"
                         Margin="{StaticResource Margin4}"
                         DisplayMemberPath="Remarks"
+                        HorizontalAlignment="Stretch"
                         Style="{StaticResource DefComboBox}" />
                     <TextBlock
                         Grid.Row="0"
@@ -187,12 +210,13 @@
                         x:Name="cmbFilter"
                         Grid.Row="1"
                         Grid.Column="1"
-                        Width="600"
                         Margin="{StaticResource Margin4}"
                         VerticalAlignment="Center"
+                        HorizontalAlignment="Stretch"
                         IsEditable="True"
                         Style="{StaticResource DefComboBox}" />
                 </Grid>
+                </ScrollViewer>
             </TabItem>
 
             <TabItem HorizontalAlignment="Left" Header="{x:Static resx:ResUI.menuServerList2}">
@@ -318,4 +342,5 @@
             </TabItem>
         </TabControl>
     </DockPanel>
+    </Border>
 </base:WindowBase>

@@ -7,9 +7,9 @@ namespace v2rayN.Common;
 
 public static class SmoothScrollBehavior
 {
-    private const double WheelStep = 115.2;
+    private const double WheelStep = 180;
     private const double TouchpadExponent = 0.65;
-    private const double TouchpadMultiplier = 0.9;
+    private const double TouchpadMultiplier = 1.2;
 
     public static readonly DependencyProperty IsEnabledProperty =
         DependencyProperty.RegisterAttached(
@@ -23,7 +23,7 @@ public static class SmoothScrollBehavior
             "MouseWheelMultiplier",
             typeof(double),
             typeof(SmoothScrollBehavior),
-            new PropertyMetadata(1d));
+            new PropertyMetadata(1.35d));
 
     private static readonly DependencyProperty VerticalOffsetProperty =
         DependencyProperty.RegisterAttached(
@@ -118,7 +118,7 @@ public static class SmoothScrollBehavior
         {
             From = currentOffset,
             To = targetOffset,
-            Duration = TimeSpan.FromMilliseconds(140),
+            Duration = TimeSpan.FromMilliseconds(100),
             EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
         };
         scrollViewer.BeginAnimation(VerticalOffsetProperty, animation, HandoffBehavior.SnapshotAndReplace);

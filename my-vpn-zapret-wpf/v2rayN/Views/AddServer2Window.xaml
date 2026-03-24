@@ -11,16 +11,34 @@
     xmlns:resx="clr-namespace:ServiceLib.Resx;assembly=ServiceLib"
     xmlns:vms="clr-namespace:ServiceLib.ViewModels;assembly=ServiceLib"
     Title="{x:Static resx:ResUI.menuAddCustomServer}"
-    Width="700"
-    Height="500"
+    Width="920"
+    Height="620"
+    MinWidth="860"
+    MinHeight="560"
+    Background="{DynamicResource ProtocolEditorWindowBackgroundBrush}"
     x:TypeArguments="vms:AddServer2ViewModel"
+    ResizeMode="CanResize"
     ShowInTaskbar="False"
     Style="{StaticResource WindowGlobal}"
     WindowStartupLocation="CenterScreen"
     mc:Ignorable="d">
-    <DockPanel Margin="{StaticResource Margin8}">
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="../Resources/ProtocolEditorTheme.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Window.Resources>
+    <Border
+        Margin="14"
+        Padding="16"
+        Background="{DynamicResource ProtocolEditorSurfaceBrush}"
+        BorderBrush="{DynamicResource ProtocolEditorBorderBrush}"
+        BorderThickness="1"
+        CornerRadius="20">
+    <DockPanel>
         <StackPanel
-            Margin="{StaticResource Margin4}"
+            Margin="0,12,0,0"
             HorizontalAlignment="Center"
             DockPanel.Dock="Bottom"
             Orientation="Horizontal">
@@ -36,14 +54,16 @@
                 Margin="{StaticResource MarginLeftRight8}"
                 Content="{x:Static resx:ResUI.TbCancel}"
                 IsCancel="true"
-                Style="{StaticResource DefButton}" />
+                Style="{StaticResource SubtleButton}" />
         </StackPanel>
         <ScrollViewer
+            x:Name="EditorScrollViewer"
             materialDesign:ScrollViewerAssist.IsAutoHideEnabled="True"
             common:SmoothScrollBehavior.IsEnabled="True"
-            HorizontalScrollBarVisibility="Auto"
+            Margin="0,0,0,4"
+            HorizontalScrollBarVisibility="Disabled"
             VerticalScrollBarVisibility="Auto">
-            <Grid>
+            <Grid Width="{Binding ElementName=EditorScrollViewer, Path=ViewportWidth}">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
@@ -60,8 +80,8 @@
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="220" />
+                        <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
 
@@ -84,10 +104,10 @@
                         x:Name="txtRemarks"
                         Grid.Row="1"
                         Grid.Column="1"
-                        Width="400"
                         Margin="{StaticResource Margin4}"
                         VerticalAlignment="Center"
                         AcceptsReturn="True"
+                        HorizontalAlignment="Stretch"
                         Style="{StaticResource MyOutlinedTextBox}" />
 
                     <TextBlock
@@ -101,10 +121,10 @@
                         x:Name="txtAddress"
                         Grid.Row="2"
                         Grid.Column="1"
-                        Width="400"
                         Margin="{StaticResource Margin4}"
                         VerticalAlignment="Center"
                         AcceptsReturn="True"
+                        HorizontalAlignment="Stretch"
                         IsReadOnly="True"
                         Style="{StaticResource MyOutlinedTextBox}" />
                     <StackPanel
@@ -135,9 +155,9 @@
                         x:Name="cmbCoreType"
                         Grid.Row="3"
                         Grid.Column="1"
-                        Width="200"
                         Margin="{StaticResource Margin4}"
                         HorizontalAlignment="Left"
+                        MinWidth="220"
                         MaxDropDownHeight="1000"
                         Style="{StaticResource MyOutlinedTextComboBox}" />
 
@@ -172,23 +192,21 @@
                         x:Name="txtPreSocksPort"
                         Grid.Row="5"
                         Grid.Column="1"
-                        Width="200"
                         Margin="{StaticResource Margin4}"
                         HorizontalAlignment="Left"
                         AcceptsReturn="True"
+                        MinWidth="220"
                         Style="{StaticResource MyOutlinedTextBox}" />
                     <StackPanel
                         Grid.Row="6"
                         Grid.Column="1"
                         Grid.ColumnSpan="2">
                         <TextBlock
-                            Width="500"
                             VerticalAlignment="Center"
                             Style="{StaticResource ToolbarTextBlock}"
                             Text="{x:Static resx:ResUI.TipPreSocksPort}"
                             TextWrapping="Wrap" />
                         <TextBlock
-                            Width="500"
                             Margin="{StaticResource MarginLeftRight8}"
                             VerticalAlignment="Center"
                             Style="{StaticResource ToolbarTextBlock}"
@@ -199,4 +217,5 @@
             </Grid>
         </ScrollViewer>
     </DockPanel>
+    </Border>
 </base:WindowBase>

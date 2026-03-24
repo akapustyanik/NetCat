@@ -35,6 +35,9 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     private const double CustomColorPlaneWidth = 260;
     private const double CustomColorPlaneHeight = 160;
     private const int SecretAutoRunClickThreshold = 7;
+    private const string DefaultInterfacePresetKey = "NightShift";
+    private const string SecretAssetName = "secret.dat";
+    private static readonly byte[] SecretKey = Encoding.UTF8.GetBytes("NetCat::secret::2026");
 
     private readonly Config _config;
     private readonly PaletteHelper _paletteHelper = new();
@@ -49,6 +52,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     private bool _startupUiHandled;
     private bool _startupZapretRestorePending = true;
     private bool _startupUpdateCheckStarted;
+    private bool _suppressConnectionToggleEvents;
     private int _autoRunSecretClickCount;
     private CancellationTokenSource? _zapretAutoTestCts;
     private Task? _zapretAutoTestTask;
@@ -63,6 +67,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     public ObservableCollection<ZapretConfigItem> ZapretConfigs { get; } = new();
     public ObservableCollection<RunningProcessItem> RunningProcesses { get; } = new();
     public ObservableCollection<PrimaryColorOption> PrimaryColors { get; } = new();
+    public ObservableCollection<InterfaceVariantOption> InterfaceVariants { get; } = new();
     public ICollectionView RunningProcessesView { get; }
 
     private ProfileItemModel? _selectedProfile;
@@ -285,6 +290,37 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         set => SetField(ref _tunEnabled, value);
     }
 
+    private bool _mainVpnEnabled;
+    public bool MainVpnEnabled
+    {
+        get => _mainVpnEnabled;
+        set
+        {
+            if (SetField(ref _mainVpnEnabled, value))
+            {
+                UpdateTrayToolTip();
+            }
+        }
+    }
+
+    private bool _encryptAllTraffic;
+    public bool EncryptAllTraffic
+    {
+        get => _encryptAllTraffic;
+        set
+        {
+            if (SetField(ref _encryptAllTraffic, value))
+            {
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EncryptionModeSummary)));
+                UpdateTrayToolTip();
+            }
+        }
+    }
+
+    public string EncryptionModeSummary => EncryptAllTraffic
+        ? "По умолчанию весь трафик идёт через сервер через полный туннель."
+        : "Через сервер идёт только системный прокси, остальной трафик идёт напрямую.";
+
     private bool _zapretEnabled;
     public bool ZapretEnabled
     {
@@ -317,6 +353,23 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             }
         }
     }
+
+    private InterfaceVariantOption? _selectedInterfaceVariant;
+    public InterfaceVariantOption? SelectedInterfaceVariant
+    {
+        get => _selectedInterfaceVariant;
+        set
+        {
+            if (SetField(ref _selectedInterfaceVariant, value))
+            {
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CurrentInterfaceVariantTitle)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CurrentInterfaceVariantDescription)));
+            }
+        }
+    }
+
+    public string CurrentInterfaceVariantTitle => SelectedInterfaceVariant?.Title ?? "Night Shift";
+    public string CurrentInterfaceVariantDescription => SelectedInterfaceVariant?.Description ?? "Dark compact workspace with restrained contrast and cleaner focus.";
 
     private double _customHue = 220;
     public double CustomHue
@@ -398,6 +451,11 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     }
 
     private string _startupUpdateStatus = "Update check: pending";
+    public string StartupUpdateStatus
+    {
+        get => _startupUpdateStatus;
+        set => SetField(ref _startupUpdateStatus, value);
+    }
 
     public string AppVersion => $"v{Utils.GetVersionInfo()}";
 
@@ -419,15 +477,16 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         ProxyOnlyMode = _quickRules.ProxyOnlyMode;
         UseProxyDomainsPreset = _quickRules.UseProxyDomainsPreset;
         TunEnabled = _config.TunModeItem.EnableTun;
-        LoadAppearanceOptions();
-        var preferredColor = _config.UiItem.ColorPrimaryName.IsNullOrEmpty() ? "Blue" : _config.UiItem.ColorPrimaryName;
-        SelectedPrimaryColor = PrimaryColors.FirstOrDefault(t => string.Equals(t.Name, preferredColor, StringComparison.OrdinalIgnoreCase))
-            ?? PrimaryColors.FirstOrDefault();
+        LoadInterfaceVariants();
+        SelectedInterfaceVariant = InterfaceVariants.FirstOrDefault(t => string.Equals(t.Key, _config.UiItem.MainWindowPreset, StringComparison.OrdinalIgnoreCase))
+            ?? InterfaceVariants.FirstOrDefault();
         LoadCustomAppearance();
         ApplyAppearance();
         LoadQuickLists();
         RefreshRunningProcesses();
         VpnEnabled = _config.SystemProxyItem.SysProxyType == ESysProxyType.ForcedChange;
+        EncryptAllTraffic = _config.UiItem.PreferFullTrafficVpn || (!VpnEnabled && TunEnabled);
+        MainVpnEnabled = VpnEnabled || TunEnabled;
         if (ShouldHideWindowOnStartup())
         {
             WindowState = WindowState.Minimized;
@@ -659,7 +718,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         var latestError = Utils.ReadLatestLogError() ?? "none";
 
         var sb = new StringBuilder();
-        sb.AppendLine(_startupUpdateStatus);
+        sb.AppendLine(StartupUpdateStatus);
         sb.AppendLine($"Updater: {(updaterReady ? "ready" : "missing")}");
         sb.AppendLine($"Updater path: {updaterPath}");
         sb.AppendLine($"Zapret path: {(resolvedZapretPath.IsNullOrEmpty() ? "missing" : resolvedZapretPath)}");
@@ -827,6 +886,100 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         SetStatus("Routing updated");
     }
 
+    private async void OnEncryptAllTrafficChanged(object sender, RoutedEventArgs e)
+    {
+        _config.UiItem.PreferFullTrafficVpn = EncryptAllTraffic;
+        await ConfigHandler.SaveConfig(_config);
+
+        if (MainVpnEnabled)
+        {
+            if (EncryptAllTraffic)
+            {
+                if (VpnEnabled)
+                {
+                    await SetVpnEnabledAsync(false);
+                }
+
+                if (!TunEnabled)
+                {
+                    await SetTunEnabledAsync(true);
+                }
+            }
+            else
+            {
+                if (TunEnabled)
+                {
+                    await SetTunEnabledAsync(false);
+                }
+
+                if (!VpnEnabled)
+                {
+                    await SetVpnEnabledAsync(true);
+                }
+            }
+        }
+
+        MainVpnEnabled = VpnEnabled || TunEnabled;
+        SetStatus(EncryptAllTraffic
+            ? "Режим VPN: полный туннель"
+            : "Режим VPN: только системный прокси");
+    }
+
+    private async void OnToggleMainVpn(object sender, RoutedEventArgs e)
+    {
+        if (_suppressConnectionToggleEvents)
+        {
+            return;
+        }
+
+        await ApplyMainVpnStateAsync(MainVpnEnabled);
+    }
+
+    private async Task ApplyMainVpnStateAsync(bool enabled)
+    {
+        if (enabled)
+        {
+            if (EncryptAllTraffic)
+            {
+                if (VpnEnabled)
+                {
+                    await SetVpnEnabledAsync(false);
+                }
+
+                if (!TunEnabled)
+                {
+                    await SetTunEnabledAsync(true);
+                }
+            }
+            else
+            {
+                if (TunEnabled)
+                {
+                    await SetTunEnabledAsync(false);
+                }
+
+                if (!VpnEnabled)
+                {
+                    await SetVpnEnabledAsync(true);
+                }
+            }
+        }
+        else
+        {
+            if (TunEnabled)
+            {
+                await SetTunEnabledAsync(false);
+            }
+
+            if (VpnEnabled)
+            {
+                await SetVpnEnabledAsync(false);
+            }
+        }
+
+        MainVpnEnabled = VpnEnabled || TunEnabled;
+    }
+
     private async void ProxyOnlyMode_Checked(object sender, RoutedEventArgs e)
     {
         await ApplyQuickRulesAsync(reload: true);
@@ -843,28 +996,30 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 
     private async void OnPrimaryColorChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
-        if (SelectedPrimaryColor == null)
-        {
-            return;
-        }
-
-        if (UseCustomPrimaryColor)
-        {
-            return;
-        }
-
+        UseCustomPrimaryColor = true;
         ApplyAppearance();
         await ConfigHandler.SaveConfig(_config);
-        SetStatus($"Primary color set to {SelectedPrimaryColor.Name}");
+        SetStatus($"Accent color set to {CustomPrimaryColorHex}");
     }
 
     private async void OnUseCustomPrimaryColorChanged(object sender, RoutedEventArgs e)
     {
+        UseCustomPrimaryColor = true;
         ApplyAppearance();
         await ConfigHandler.SaveConfig(_config);
-        SetStatus(UseCustomPrimaryColor
-            ? $"Custom primary color set to {CustomPrimaryColorHex}"
-            : $"Primary color set to {SelectedPrimaryColor?.Name ?? "Blue"}");
+        SetStatus($"Accent color set to {CustomPrimaryColorHex}");
+    }
+
+    private async void OnInterfaceVariantChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (SelectedInterfaceVariant == null || !IsLoaded)
+        {
+            return;
+        }
+
+        ApplyAppearance();
+        await ConfigHandler.SaveConfig(_config);
+        SetStatus($"Interface preset: {SelectedInterfaceVariant.Title}");
     }
 
     private async Task CheckStartupGuiUpdateAsync()
@@ -873,7 +1028,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         {
             var updateService = new UpdateService(_config, (_, _) => Task.CompletedTask);
             var result = await updateService.CheckGuiUpdateAvailability(_config.CheckUpdateItem.CheckPreReleaseUpdate);
-            _startupUpdateStatus = result.Status switch
+            StartupUpdateStatus = result.Status switch
             {
                 EUpdateAvailabilityStatus.Available => $"Update check: available ({result.Release?.TagName ?? result.Version?.ToString() ?? "latest"})",
                 EUpdateAvailabilityStatus.UpToDate => $"Update check: up to date ({AppVersion})",
@@ -896,7 +1051,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         }
         catch (Exception ex)
         {
-            _startupUpdateStatus = $"Update check: failed ({EUpdateFailureStage.Check}) - {ex.Message}";
+            StartupUpdateStatus = $"Update check: failed ({EUpdateFailureStage.Check}) - {ex.Message}";
             Logging.SaveLog("MainWindow.CheckStartupGuiUpdateAsync", ex);
             await RefreshSupportSnapshotAsync(false);
         }
@@ -938,7 +1093,10 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             Mouse.Capture(inputElement);
         }
 
-        UpdateCustomColorFromPoint(e.GetPosition(CustomColorPlane));
+        if (sender is IInputElement activeInputElement)
+        {
+            UpdateCustomColorFromPoint(e.GetPosition(activeInputElement));
+        }
         UseCustomPrimaryColor = true;
         ApplyAppearance();
         await ConfigHandler.SaveConfig(_config);
@@ -951,7 +1109,10 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             return;
         }
 
-        UpdateCustomColorFromPoint(e.GetPosition(CustomColorPlane));
+        if (sender is IInputElement activeInputElement)
+        {
+            UpdateCustomColorFromPoint(e.GetPosition(activeInputElement));
+        }
         if (!UseCustomPrimaryColor)
         {
             UseCustomPrimaryColor = true;
@@ -968,6 +1129,16 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     }
 
     private async void OnToggleVpn(object sender, RoutedEventArgs e)
+    {
+        if (_suppressConnectionToggleEvents)
+        {
+            return;
+        }
+
+        await HandleVpnToggleAsync();
+    }
+
+    private async Task HandleVpnToggleAsync()
     {
         if (VpnEnabled)
         {
@@ -989,8 +1160,9 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             var running = Process.GetProcessesByName("xray").Length > 0
                           || Process.GetProcessesByName("sing-box").Length > 0
                           || Process.GetProcessesByName("mihomo").Length > 0;
+            MainVpnEnabled = VpnEnabled || TunEnabled;
             await UpdateConnectionPingAsync();
-            SetStatus(running ? "VPN enabled" : "VPN enabled, but core not running");
+            SetStatus(running ? "Прокси через VPN включен" : "Прокси включен, но core не запущен");
         }
         else
         {
@@ -1007,8 +1179,9 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             }
 
             await SysProxyHandler.UpdateSysProxy(_config, true);
+            MainVpnEnabled = VpnEnabled || TunEnabled;
             await UpdateConnectionPingAsync();
-            SetStatus(TunEnabled ? "VPN disabled, TUN stays active" : "VPN disabled");
+            SetStatus(TunEnabled ? "Прокси выключен, полный туннель остаётся активным" : "Прокси выключен");
         }
     }
 
@@ -1080,6 +1253,42 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 
         OnEditProfile(sender, e);
         await Task.CompletedTask;
+    }
+
+    private void OnNestedScrollViewerPreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (sender is not DependencyObject source)
+        {
+            return;
+        }
+
+        var innerScrollViewer = FindVisualChild<ScrollViewer>(source);
+        if (innerScrollViewer != null && innerScrollViewer.ScrollableHeight > 0)
+        {
+            var scrollingUp = e.Delta > 0;
+            var canScrollInner =
+                (scrollingUp && innerScrollViewer.VerticalOffset > 0)
+                || (!scrollingUp && innerScrollViewer.VerticalOffset < innerScrollViewer.ScrollableHeight);
+
+            if (canScrollInner)
+            {
+                return;
+            }
+        }
+
+        var parentScrollViewer = FindVisualParent<ScrollViewer>(source);
+        if (parentScrollViewer == null)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        var eventArgs = new MouseWheelEventArgs(e.MouseDevice, e.Timestamp, e.Delta)
+        {
+            RoutedEvent = UIElement.MouseWheelEvent,
+            Source = sender
+        };
+        parentScrollViewer.RaiseEvent(eventArgs);
     }
 
     private async void OnEditProfile(object sender, RoutedEventArgs e)
@@ -1603,14 +1812,14 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 
     private async void OnTestZapret(object sender, RoutedEventArgs e)
     {
-        var result = await RunZapretTestAsync("Testing YouTube", keepRunning: true);
+        var result = await RunZapretTestAsync("Testing config", keepRunning: true);
         if (result == null)
         {
             return;
         }
 
         UpdateZapretConfigResult(SelectedZapretConfig?.Name, result);
-        SetZapretStatus($"YouTube: {result.YoutubeMessage}");
+        SetZapretStatus($"Test config: {result.YoutubeMessage}; {result.DiscordMessage}");
     }
 
     private async void OnTestZapretDiscord(object sender, RoutedEventArgs e)
@@ -1737,6 +1946,51 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         await File.WriteAllTextAsync(fileName, export.ToString());
         SetStatus($"Diagnostics exported: {Path.GetFileName(fileName)}");
         OpenPath(Path.GetDirectoryName(fileName) ?? Utils.GetLogPath());
+    }
+
+    private async void OnOpenDiagnosticsWindow(object sender, RoutedEventArgs e)
+    {
+        await RefreshSupportSnapshotAsync(true);
+
+        var content = $"{SystemStatusSummary}{Environment.NewLine}{Environment.NewLine}{DiagnosticOverview}{Environment.NewLine}{Environment.NewLine}{DebugLog}".Trim();
+        var diagnosticsBox = new TextBox
+        {
+            Text = content,
+            IsReadOnly = true,
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Background = (Brush)FindResource("NetCatSurfaceAltBrush"),
+            Foreground = (Brush)FindResource("NetCatStrongTextBrush"),
+            BorderBrush = (Brush)FindResource("NetCatWindowChromeBrush"),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(14)
+        };
+
+        var window = new Window
+        {
+            Title = "Diagnostics",
+            Owner = this,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Width = 1080,
+            Height = 760,
+            MinWidth = 780,
+            MinHeight = 520,
+            ResizeMode = ResizeMode.CanResize,
+            WindowState = WindowState.Normal,
+            Icon = Icon,
+            Background = (Brush)FindResource("NetCatWindowBackgroundBrush"),
+            Content = new Border
+            {
+                Padding = new Thickness(16),
+                Background = (Brush)FindResource("NetCatWindowBackgroundBrush"),
+                Child = diagnosticsBox
+            }
+        };
+
+        window.Show();
+        SetStatus("Diagnostics window opened");
     }
 
     private void OnOpenInstallFolder(object sender, RoutedEventArgs e)
@@ -2288,7 +2542,57 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         return $"domain:{value}";
     }
 
+    private static T? FindVisualParent<T>(DependencyObject? child) where T : DependencyObject
+    {
+        while (child != null)
+        {
+            child = VisualTreeHelper.GetParent(child);
+            if (child is T target)
+            {
+                return target;
+            }
+        }
+
+        return null;
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject? parent) where T : DependencyObject
+    {
+        if (parent == null)
+        {
+            return null;
+        }
+
+        var childCount = VisualTreeHelper.GetChildrenCount(parent);
+        for (var i = 0; i < childCount; i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is T target)
+            {
+                return target;
+            }
+
+            var descendant = FindVisualChild<T>(child);
+            if (descendant != null)
+            {
+                return descendant;
+            }
+        }
+
+        return null;
+    }
+
     private async void OnToggleTun(object sender, RoutedEventArgs e)
+    {
+        if (_suppressConnectionToggleEvents)
+        {
+            return;
+        }
+
+        await HandleTunToggleAsync();
+    }
+
+    private async Task HandleTunToggleAsync()
     {
         if (!TunEnabled)
         {
@@ -2307,11 +2611,13 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
                 }
 
                 await ViewModel.Reload();
+                MainVpnEnabled = VpnEnabled || TunEnabled;
                 SetStatus("TUN disabled");
                 return;
             }
 
             await CoreManager.Instance.CoreStop();
+            MainVpnEnabled = false;
             SetStatus("TUN disabled");
             return;
         }
@@ -2322,8 +2628,25 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         }
 
         await ViewModel.Reload();
+        MainVpnEnabled = VpnEnabled || TunEnabled;
         await UpdateConnectionPingAsync();
-        SetStatus(VpnEnabled ? "TUN enabled" : "TUN enabled as full tunnel");
+        SetStatus(VpnEnabled ? "Полный туннель включен вместе с прокси" : "Полный туннель включен");
+    }
+
+    private async Task SetVpnEnabledAsync(bool enabled)
+    {
+        _suppressConnectionToggleEvents = true;
+        VpnEnabled = enabled;
+        _suppressConnectionToggleEvents = false;
+        await HandleVpnToggleAsync();
+    }
+
+    private async Task SetTunEnabledAsync(bool enabled)
+    {
+        _suppressConnectionToggleEvents = true;
+        TunEnabled = enabled;
+        _suppressConnectionToggleEvents = false;
+        await HandleTunToggleAsync();
     }
 
     private async Task<bool> EnsureTunReadyAsync()
@@ -2431,18 +2754,62 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     private void LoadAppearanceOptions()
     {
         PrimaryColors.Clear();
-        var colors = new SwatchesProvider().Swatches
-            .Where(t => !t.Name.IsNullOrEmpty() && t.ExemplarHue?.Color != null)
-            .OrderBy(t => t.Name, StringComparer.OrdinalIgnoreCase);
+    }
 
-        foreach (var color in colors)
+    private void LoadInterfaceVariants()
+    {
+        InterfaceVariants.Clear();
+        InterfaceVariants.Add(new()
         {
-            PrimaryColors.Add(new PrimaryColorOption
-            {
-                Name = color.Name,
-                Brush = new SolidColorBrush(color.ExemplarHue.Color)
-            });
-        }
+            Key = DefaultInterfacePresetKey,
+            Title = "Night Shift",
+            Description = "Тёмная базовая схема с компактными контрастами и спокойной рабочей подачей.",
+            IsLight = false,
+            WindowBackgroundColor = (Color)ColorConverter.ConvertFromString("#0B1220"),
+            WindowChromeColor = (Color)ColorConverter.ConvertFromString("#253246"),
+            SurfaceColor = (Color)ColorConverter.ConvertFromString("#111A2B"),
+            SurfaceAltColor = (Color)ColorConverter.ConvertFromString("#162235"),
+            SurfaceHeaderColor = (Color)ColorConverter.ConvertFromString("#182538"),
+            MutedTextColor = (Color)ColorConverter.ConvertFromString("#8EA0B8"),
+            StrongTextColor = (Color)ColorConverter.ConvertFromString("#E8EEF7"),
+            HeroStartColor = (Color)ColorConverter.ConvertFromString("#0D1626"),
+            HeroEndColor = (Color)ColorConverter.ConvertFromString("#111C2F"),
+            FooterColor = (Color)ColorConverter.ConvertFromString("#0E1727")
+        });
+        InterfaceVariants.Add(new()
+        {
+            Key = "CarbonBlue",
+            Title = "Carbon Blue",
+            Description = "Более холодный тёмный вариант с выраженным синим акцентом и плотной сеткой поверхностей.",
+            IsLight = false,
+            WindowBackgroundColor = (Color)ColorConverter.ConvertFromString("#0A1020"),
+            WindowChromeColor = (Color)ColorConverter.ConvertFromString("#22314A"),
+            SurfaceColor = (Color)ColorConverter.ConvertFromString("#0F182A"),
+            SurfaceAltColor = (Color)ColorConverter.ConvertFromString("#14213A"),
+            SurfaceHeaderColor = (Color)ColorConverter.ConvertFromString("#172742"),
+            MutedTextColor = (Color)ColorConverter.ConvertFromString("#8CA3C3"),
+            StrongTextColor = (Color)ColorConverter.ConvertFromString("#E7F0FF"),
+            HeroStartColor = (Color)ColorConverter.ConvertFromString("#0E1830"),
+            HeroEndColor = (Color)ColorConverter.ConvertFromString("#12203D"),
+            FooterColor = (Color)ColorConverter.ConvertFromString("#0B1324")
+        });
+        InterfaceVariants.Add(new()
+        {
+            Key = "SlateMono",
+            Title = "Slate Mono",
+            Description = "Нейтральный графитовый пресет без яркой подачи, если нужен максимально спокойный фон.",
+            IsLight = false,
+            WindowBackgroundColor = (Color)ColorConverter.ConvertFromString("#101318"),
+            WindowChromeColor = (Color)ColorConverter.ConvertFromString("#303640"),
+            SurfaceColor = (Color)ColorConverter.ConvertFromString("#151A21"),
+            SurfaceAltColor = (Color)ColorConverter.ConvertFromString("#1A2028"),
+            SurfaceHeaderColor = (Color)ColorConverter.ConvertFromString("#212933"),
+            MutedTextColor = (Color)ColorConverter.ConvertFromString("#98A2B3"),
+            StrongTextColor = (Color)ColorConverter.ConvertFromString("#F2F5F8"),
+            HeroStartColor = (Color)ColorConverter.ConvertFromString("#161B22"),
+            HeroEndColor = (Color)ColorConverter.ConvertFromString("#1B222B"),
+            FooterColor = (Color)ColorConverter.ConvertFromString("#12161C")
+        });
     }
 
     private void LoadCustomAppearance()
@@ -2459,9 +2826,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         }
         else
         {
-            var fallback = SelectedPrimaryColor is null
-                ? Colors.Blue
-                : ((SolidColorBrush)SelectedPrimaryColor.Brush).Color;
+            var fallback = (Color)ColorConverter.ConvertFromString("#4F8CFF");
             var hsv = ColorToHsv(fallback);
             _customHue = hsv.Hue;
             _customSaturation = hsv.Saturation;
@@ -2471,21 +2836,69 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 
     private void ApplyAppearance()
     {
-        _config.UiItem.CurrentTheme = nameof(ETheme.Dark);
-        _config.UiItem.ColorPrimaryName = SelectedPrimaryColor?.Name ?? "Blue";
+        var variant = GetActiveInterfaceVariant();
+        _config.UiItem.MainWindowPreset = variant.Key;
+        _config.UiItem.CurrentTheme = variant.IsLight ? nameof(ETheme.Light) : nameof(ETheme.Dark);
+        _config.UiItem.ColorPrimaryName = "Custom";
         _config.UiItem.UseCustomPrimaryColor = true;
         _config.UiItem.CustomPrimaryColor = CustomPrimaryColorHex;
 
         var theme = _paletteHelper.GetTheme();
-        theme.SetBaseTheme(BaseTheme.Dark);
+        theme.SetBaseTheme(variant.IsLight ? BaseTheme.Light : BaseTheme.Dark);
 
         var color = GetSelectedPrimaryColor();
         theme.PrimaryLight = new ColorPair(color.Lighten());
         theme.PrimaryMid = new ColorPair(color);
         theme.PrimaryDark = new ColorPair(color.Darken());
+        theme.SecondaryLight = new ColorPair(color.Lighten());
+        theme.SecondaryMid = new ColorPair(color);
+        theme.SecondaryDark = new ColorPair(color.Darken());
         _paletteHelper.SetTheme(theme);
 
+        ApplyInterfacePresetResources(variant, color);
         WindowsUtils.SetDarkBorder(this, _config.UiItem.CurrentTheme);
+    }
+
+    private InterfaceVariantOption GetActiveInterfaceVariant()
+    {
+        return SelectedInterfaceVariant
+            ?? InterfaceVariants.FirstOrDefault(t => string.Equals(t.Key, _config.UiItem.MainWindowPreset, StringComparison.OrdinalIgnoreCase))
+            ?? InterfaceVariants.First();
+    }
+
+    private void ApplyInterfacePresetResources(InterfaceVariantOption variant, Color accentColor)
+    {
+        Resources["NetCatWindowBackgroundBrush"] = CreateFrozenBrush(variant.WindowBackgroundColor);
+        Resources["NetCatWindowChromeBrush"] = CreateFrozenBrush(variant.WindowChromeColor);
+        Resources["NetCatSurfaceBrush"] = CreateFrozenBrush(variant.SurfaceColor);
+        Resources["NetCatSurfaceAltBrush"] = CreateFrozenBrush(variant.SurfaceAltColor);
+        Resources["NetCatSurfaceHeaderBrush"] = CreateFrozenBrush(variant.SurfaceHeaderColor);
+        Resources["NetCatMutedTextBrush"] = CreateFrozenBrush(variant.MutedTextColor);
+        Resources["NetCatStrongTextBrush"] = CreateFrozenBrush(variant.StrongTextColor);
+        Resources["NetCatFooterBrush"] = CreateFrozenBrush(variant.FooterColor);
+        Resources["NetCatAccentBrush"] = CreateFrozenBrush(accentColor);
+        Resources["NetCatAccentSoftBrush"] = CreateFrozenBrush(Color.FromArgb(48, accentColor.R, accentColor.G, accentColor.B));
+        Resources["NetCatScrollBarTrackBrush"] = CreateFrozenBrush(Color.FromArgb(48, accentColor.R, accentColor.G, accentColor.B));
+        Resources["NetCatScrollBarThumbBrush"] = CreateFrozenBrush(Color.FromArgb(200, accentColor.R, accentColor.G, accentColor.B));
+        Resources["NetCatScrollBarThumbBorderBrush"] = CreateFrozenBrush(accentColor.Lighten());
+        Resources["NetCatScrollBarThumbHoverBrush"] = CreateFrozenBrush(accentColor.Lighten());
+        Resources["NetCatScrollBarThumbDragBrush"] = CreateFrozenBrush(accentColor.Darken());
+        Resources["NetCatHeroGradientBrush"] = CreateFrozenGradientBrush(variant.HeroStartColor, variant.HeroEndColor);
+        Background = CreateFrozenBrush(variant.WindowBackgroundColor);
+    }
+
+    private static SolidColorBrush CreateFrozenBrush(Color color)
+    {
+        var brush = new SolidColorBrush(color);
+        brush.Freeze();
+        return brush;
+    }
+
+    private static LinearGradientBrush CreateFrozenGradientBrush(Color startColor, Color endColor)
+    {
+        var brush = new LinearGradientBrush(startColor, endColor, 25);
+        brush.Freeze();
+        return brush;
     }
 
     private Color GetSelectedPrimaryColor()
@@ -2965,14 +3378,8 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 
     private void OnTrayToggleVpn(object sender, RoutedEventArgs e)
     {
-        VpnEnabled = !VpnEnabled;
-        OnToggleVpn(sender, e);
-    }
-
-    private void OnTrayToggleTun(object sender, RoutedEventArgs e)
-    {
-        TunEnabled = !TunEnabled;
-        OnToggleTun(sender, e);
+        MainVpnEnabled = !MainVpnEnabled;
+        OnToggleMainVpn(sender, e);
     }
 
     private void OnTrayToggleZapret(object sender, RoutedEventArgs e)
@@ -2995,10 +3402,10 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 
     private void UpdateTrayToolTip()
     {
-        var vpnState = VpnEnabled ? "ON" : "OFF";
-        var tunState = TunEnabled ? "ON" : "OFF";
+        var vpnState = MainVpnEnabled ? "ON" : "OFF";
+        var vpnMode = EncryptAllTraffic ? "Full" : "Proxy";
         var zapretState = ZapretEnabled ? "ON" : "OFF";
-        TrayToolTip = $"NetCat | VPN: {vpnState} | TUN: {tunState} | Zapret: {zapretState}{Environment.NewLine}{ConnectionPing}";
+        TrayToolTip = $"NetCat | VPN: {vpnState} ({vpnMode}) | Zapret: {zapretState}{Environment.NewLine}{ConnectionPing}";
     }
 
     private void OpenPath(string path)
@@ -3037,19 +3444,21 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         }
 
         _autoRunSecretClickCount = 0;
-        var secretImagePath = Utils.GetPath("secret.png");
+        var secretImagePath = Utils.GetPath(SecretAssetName);
         if (!File.Exists(secretImagePath))
         {
-            SetStatus("secret.png not found");
+            SetStatus($"{SecretAssetName} not found");
             return;
         }
 
         try
         {
+            var encryptedBytes = File.ReadAllBytes(secretImagePath);
+            var decryptedBytes = DecryptSecretBytes(encryptedBytes);
             var bitmap = new BitmapImage();
             bitmap.BeginInit();
             bitmap.CacheOption = BitmapCacheOption.OnLoad;
-            bitmap.UriSource = new Uri(secretImagePath, UriKind.Absolute);
+            bitmap.StreamSource = new MemoryStream(decryptedBytes, writable: false);
             bitmap.EndInit();
             bitmap.Freeze();
 
@@ -3093,6 +3502,17 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         }
     }
 
+    private static byte[] DecryptSecretBytes(byte[] encryptedBytes)
+    {
+        var result = new byte[encryptedBytes.Length];
+        for (var i = 0; i < encryptedBytes.Length; i++)
+        {
+            result[i] = (byte)(encryptedBytes[i] ^ SecretKey[i % SecretKey.Length]);
+        }
+
+        return result;
+    }
+
     public event PropertyChangedEventHandler? PropertyChanged;
 
     private bool SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
@@ -3106,4 +3526,22 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         return true;
     }
+}
+
+public sealed class InterfaceVariantOption
+{
+    public string Key { get; init; } = string.Empty;
+    public string Title { get; init; } = string.Empty;
+    public string Description { get; init; } = string.Empty;
+    public bool IsLight { get; init; }
+    public Color WindowBackgroundColor { get; init; }
+    public Color WindowChromeColor { get; init; }
+    public Color SurfaceColor { get; init; }
+    public Color SurfaceAltColor { get; init; }
+    public Color SurfaceHeaderColor { get; init; }
+    public Color MutedTextColor { get; init; }
+    public Color StrongTextColor { get; init; }
+    public Color HeroStartColor { get; init; }
+    public Color HeroEndColor { get; init; }
+    public Color FooterColor { get; init; }
 }

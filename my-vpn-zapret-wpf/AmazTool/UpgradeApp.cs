@@ -115,6 +115,8 @@ internal class UpgradeApp
                         throw new IOException($"Failed to extract {entry.FullName} to {entryOutputPath}");
                     }
 
+                    Utils.TryUnblockFile(entryOutputPath);
+
                     Utils.Log($"Updated file: {entryOutputPath}");
                     Console.WriteLine(entryOutputPath);
                 }

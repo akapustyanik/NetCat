@@ -11,8 +11,11 @@
     xmlns:resx="clr-namespace:ServiceLib.Resx;assembly=ServiceLib"
     xmlns:vms="clr-namespace:ServiceLib.ViewModels;assembly=ServiceLib"
     Title="{x:Static resx:ResUI.menuServers}"
-    Width="900"
+    Width="1080"
     Height="700"
+    MinWidth="1020"
+    MinHeight="680"
+    Background="{DynamicResource ProtocolEditorWindowBackgroundBrush}"
     x:TypeArguments="vms:AddServerViewModel"
     ResizeMode="CanResize"
     ShowInTaskbar="False"
@@ -20,15 +23,23 @@
     WindowStartupLocation="CenterScreen"
     mc:Ignorable="d">
     <Window.Resources>
-        <ResourceDictionary>
-            <ResourceDictionary.MergedDictionaries>
-                <ResourceDictionary Source="pack://application:,,,/MaterialDesignThemes.Wpf;component/Themes/MaterialDesignTheme.Popupbox.xaml" />
-            </ResourceDictionary.MergedDictionaries>
-        </ResourceDictionary>
+            <ResourceDictionary>
+                <ResourceDictionary.MergedDictionaries>
+                    <ResourceDictionary Source="../Resources/ProtocolEditorTheme.xaml" />
+                    <ResourceDictionary Source="pack://application:,,,/MaterialDesignThemes.Wpf;component/Themes/MaterialDesignTheme.Popupbox.xaml" />
+                </ResourceDictionary.MergedDictionaries>
+            </ResourceDictionary>
     </Window.Resources>
-    <DockPanel Margin="{StaticResource Margin8}">
+    <Border
+        Margin="14"
+        Padding="16"
+        Background="{DynamicResource ProtocolEditorSurfaceBrush}"
+        BorderBrush="{DynamicResource ProtocolEditorBorderBrush}"
+        BorderThickness="1"
+        CornerRadius="20">
+    <DockPanel>
         <StackPanel
-            Margin="{StaticResource Margin4}"
+            Margin="0,12,0,0"
             HorizontalAlignment="Center"
             DockPanel.Dock="Bottom"
             Orientation="Horizontal">
@@ -44,14 +55,16 @@
                 Margin="{StaticResource MarginLeftRight8}"
                 Content="{x:Static resx:ResUI.TbCancel}"
                 IsCancel="true"
-                Style="{StaticResource DefButton}" />
+                Style="{StaticResource SubtleButton}" />
         </StackPanel>
         <ScrollViewer
+            x:Name="EditorScrollViewer"
             materialDesign:ScrollViewerAssist.IsAutoHideEnabled="True"
             common:SmoothScrollBehavior.IsEnabled="True"
-            HorizontalScrollBarVisibility="Auto"
+            Margin="0,0,0,4"
+            HorizontalScrollBarVisibility="Disabled"
             VerticalScrollBarVisibility="Auto">
-            <Grid>
+            <Grid Width="{Binding ElementName=EditorScrollViewer, Path=ViewportWidth}">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
@@ -222,7 +235,7 @@
                     <TextBlock
                         Grid.Row="4"
                         Grid.Column="0"
-                        Margin="{StaticResource Margin4}"
+                        Margin="4,12,4,4"
                         VerticalAlignment="Center"
                         Style="{StaticResource ToolbarTextBlock}"
                         Text="{x:Static resx:ResUI.TbSettingsMuxEnabled}" />
@@ -230,7 +243,7 @@
                         x:Name="togmuxEnabled"
                         Grid.Row="4"
                         Grid.Column="1"
-                        Margin="{StaticResource Margin4}"
+                        Margin="4,12,4,4"
                         HorizontalAlignment="Left" />
                 </Grid>
                 <Grid
@@ -282,7 +295,7 @@
                     <TextBlock
                         Grid.Row="4"
                         Grid.Column="0"
-                        Margin="{StaticResource Margin4}"
+                        Margin="4,12,4,4"
                         VerticalAlignment="Center"
                         Style="{StaticResource ToolbarTextBlock}"
                         Text="{x:Static resx:ResUI.TbSettingsMuxEnabled}" />
@@ -290,7 +303,7 @@
                         x:Name="togmuxEnabled3"
                         Grid.Row="4"
                         Grid.Column="1"
-                        Margin="{StaticResource Margin4}"
+                        Margin="4,12,4,4"
                         HorizontalAlignment="Left" />
                 </Grid>
                 <Grid
@@ -390,6 +403,7 @@
                         Grid.Column="1"
                         Width="200"
                         Margin="{StaticResource Margin4}"
+                        HorizontalAlignment="Left"
                         Style="{StaticResource DefComboBox}" />
 
                     <TextBlock
@@ -411,7 +425,7 @@
                     <TextBlock
                         Grid.Row="4"
                         Grid.Column="0"
-                        Margin="{StaticResource Margin4}"
+                        Margin="4,12,4,4"
                         VerticalAlignment="Center"
                         Style="{StaticResource ToolbarTextBlock}"
                         Text="{x:Static resx:ResUI.TbSettingsMuxEnabled}" />
@@ -419,7 +433,7 @@
                         x:Name="togmuxEnabled5"
                         Grid.Row="4"
                         Grid.Column="1"
-                        Margin="{StaticResource Margin4}"
+                        Margin="4,12,4,4"
                         HorizontalAlignment="Left" />
                 </Grid>
                 <Grid
@@ -466,12 +480,13 @@
                         Grid.Column="1"
                         Width="200"
                         Margin="{StaticResource Margin4}"
+                        HorizontalAlignment="Left"
                         Style="{StaticResource DefComboBox}" />
 
                     <TextBlock
                         Grid.Row="4"
                         Grid.Column="0"
-                        Margin="{StaticResource Margin4}"
+                        Margin="4,12,4,4"
                         VerticalAlignment="Center"
                         Style="{StaticResource ToolbarTextBlock}"
                         Text="{x:Static resx:ResUI.TbSettingsMuxEnabled}" />
@@ -479,7 +494,7 @@
                         x:Name="togmuxEnabled6"
                         Grid.Row="4"
                         Grid.Column="1"
-                        Margin="{StaticResource Margin4}"
+                        Margin="4,12,4,4"
                         HorizontalAlignment="Left" />
                 </Grid>
                 <Grid
@@ -825,6 +840,7 @@
                         Grid.Column="1"
                         Width="200"
                         Margin="{StaticResource Margin4}"
+                        HorizontalAlignment="Left"
                         Style="{StaticResource DefComboBox}" />
                     <TextBlock
                         Grid.Row="1"
@@ -851,6 +867,7 @@
                             x:Name="cmbHeaderType"
                             Width="200"
                             Margin="{StaticResource Margin4}"
+                            HorizontalAlignment="Left"
                             Style="{StaticResource DefComboBox}" />
 
                         <materialDesign:PopupBox
@@ -898,6 +915,7 @@
                         Grid.Column="1"
                         Width="400"
                         Margin="{StaticResource Margin4}"
+                        HorizontalAlignment="Left"
                         Style="{StaticResource DefTextBox}" />
                     <TextBlock
                         x:Name="tipRequestHost"
@@ -921,6 +939,7 @@
                         Grid.Column="1"
                         Width="400"
                         Margin="{StaticResource Margin4}"
+                        HorizontalAlignment="Left"
                         Style="{StaticResource DefTextBox}" />
                     <TextBlock
                         x:Name="tipPath"
@@ -932,7 +951,7 @@
                         Text="{x:Static resx:ResUI.TbPath}" />
                 </Grid>
 
-                <Grid x:Name="gridFinalmask" Grid.Row="5">
+                <Grid x:Name="gridFinalmask" Grid.Row="5" Margin="0,10,0,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="300" />
                         <ColumnDefinition Width="Auto" />
@@ -998,6 +1017,7 @@
                         Grid.Column="1"
                         Width="200"
                         Margin="{StaticResource Margin4}"
+                        HorizontalAlignment="Left"
                         Style="{StaticResource DefComboBox}" />
                 </Grid>
                 <Grid
@@ -1048,6 +1068,7 @@
                         Grid.Column="1"
                         Width="200"
                         Margin="{StaticResource Margin4}"
+                        HorizontalAlignment="Left"
                         IsEditable="True"
                         Style="{StaticResource DefComboBox}" />
 
@@ -1064,6 +1085,7 @@
                         Grid.Column="1"
                         Width="200"
                         Margin="{StaticResource Margin4}"
+                        HorizontalAlignment="Left"
                         Style="{StaticResource DefComboBox}" />
 
                     <TextBlock
@@ -1079,6 +1101,7 @@
                         Grid.Column="1"
                         Width="200"
                         Margin="{StaticResource Margin4}"
+                        HorizontalAlignment="Left"
                         Style="{StaticResource DefComboBox}" />
 
                     <TextBlock
@@ -1110,6 +1133,7 @@
                         Grid.Column="1"
                         Width="200"
                         Margin="{StaticResource Margin4}"
+                        HorizontalAlignment="Left"
                         Style="{StaticResource DefComboBox}" />
 
                     <TextBlock
@@ -1235,6 +1259,7 @@
                         Grid.Column="1"
                         Width="200"
                         Margin="{StaticResource Margin4}"
+                        HorizontalAlignment="Left"
                         IsEditable="True"
                         Style="{StaticResource DefComboBox}" />
 
@@ -1309,4 +1334,5 @@
             </Grid>
         </ScrollViewer>
     </DockPanel>
+    </Border>
 </base:WindowBase>

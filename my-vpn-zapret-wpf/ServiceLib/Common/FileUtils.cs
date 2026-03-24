@@ -1,5 +1,6 @@
 using System.Formats.Tar;
 using System.IO.Compression;
+using System.Security.Cryptography.X509Certificates;
 
 namespace ServiceLib.Common;
 
@@ -314,6 +315,164 @@ public static class FileUtils
         File.Copy(sourcePath, destinationPath, overwrite);
     }
 
+    public static bool HasZoneIdentifier(string? path)
+    {
+        if (!OperatingSystem.IsWindows() || path.IsNullOrEmpty())
+        {
+            return false;
+        }
+
+        try
+        {
+            using var stream = new FileStream(GetZoneIdentifierPath(path), FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            return stream.Length >= 0;
+        }
+        catch (FileNotFoundException)
+        {
+            return false;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static string? TryReadZoneIdentifier(string? path)
+    {
+        if (!OperatingSystem.IsWindows() || path.IsNullOrEmpty())
+        {
+            return null;
+        }
+
+        try
+        {
+            using var stream = new FileStream(GetZoneIdentifierPath(path), FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using StreamReader reader = new(stream, Encoding.UTF8, true);
+            return reader.ReadToEnd();
+        }
+        catch (FileNotFoundException)
+        {
+            return null;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog(_tag, ex);
+            return null;
+        }
+    }
+
+    public static bool IsFileDigitallySigned(string? path)
+    {
+        if (path.IsNullOrEmpty() || !File.Exists(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            _ = X509Certificate.CreateFromSignedFile(path);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static string DescribeWindowsTrustState(string? path)
+    {
+        if (path.IsNullOrEmpty())
+        {
+            return "path=(empty)";
+        }
+
+        var exists = File.Exists(path);
+        var isSigned = exists && IsFileDigitallySigned(path);
+        var zoneIdentifier = exists ? TryReadZoneIdentifier(path) : null;
+        var hasZoneIdentifier = !string.IsNullOrWhiteSpace(zoneIdentifier);
+        var normalizedZoneIdentifier = zoneIdentifier?
+            .Replace("\r", " ")
+            .Replace("\n", " ")
+            .Trim();
+
+        if (!string.IsNullOrWhiteSpace(normalizedZoneIdentifier) && normalizedZoneIdentifier.Length > 160)
+        {
+            normalizedZoneIdentifier = normalizedZoneIdentifier[..157] + "...";
+        }
+
+        return $"path={path}, exists={exists}, signed={isSigned}, zoneIdentifier={hasZoneIdentifier}, zone={normalizedZoneIdentifier ?? "(none)"}";
+    }
+
+    public static bool TryUnblockFile(string? path)
+    {
+        if (!OperatingSystem.IsWindows() || path.IsNullOrEmpty() || !File.Exists(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            File.Delete(GetZoneIdentifierPath(path));
+            return true;
+        }
+        catch (FileNotFoundException)
+        {
+            return false;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog(_tag, ex);
+            return false;
+        }
+    }
+
+    public static (int ScannedFiles, int BlockedFiles, int UnblockedFiles) TryUnblockDirectoryFiles(string? directoryPath)
+    {
+        if (!OperatingSystem.IsWindows() || directoryPath.IsNullOrEmpty() || !Directory.Exists(directoryPath))
+        {
+            return (0, 0, 0);
+        }
+
+        var scannedFiles = 0;
+        var blockedFiles = 0;
+        var unblockedFiles = 0;
+        try
+        {
+            foreach (var filePath in Directory.GetFiles(directoryPath, "*", SearchOption.AllDirectories))
+            {
+                scannedFiles++;
+                if (!HasZoneIdentifier(filePath))
+                {
+                    continue;
+                }
+
+                blockedFiles++;
+                if (TryUnblockFile(filePath))
+                {
+                    unblockedFiles++;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog(_tag, ex);
+        }
+
+        return (scannedFiles, blockedFiles, unblockedFiles);
+    }
+
     public static void MoveFileWithRetry(string sourcePath, string destinationPath, bool overwrite, int retryCount = DefaultIoRetryCount, int delayMs = DefaultIoRetryDelayMs)
     {
         EnsureParentDirectory(destinationPath);
@@ -348,5 +507,10 @@ public static class FileUtils
         }
 
         File.Move(tempPath, path, true);
+    }
+
+    private static string GetZoneIdentifierPath(string path)
+    {
+        return $"{path}:Zone.Identifier";
     }
 }
