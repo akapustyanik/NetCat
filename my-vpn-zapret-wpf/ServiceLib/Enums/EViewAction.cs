@@ -15,6 +15,7 @@ public enum EViewAction
     ScanScreenTask,
     ScanImageTask,
     BrowseServer,
+    SelectLocalUpdatePackage,
     ImportRulesFromFile,
     InitSettingFont,
     PasswordInput,

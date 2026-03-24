@@ -866,11 +866,18 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             Title = "NetCat Update",
             Owner = this,
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            Width = 760,
-            Height = 520,
+            Width = 900,
+            Height = 640,
+            MinWidth = 760,
+            MinHeight = 520,
+            ResizeMode = ResizeMode.CanResize,
             Icon = this.Icon,
             Content = new CheckUpdateView()
         };
+
+        window.SetResourceReference(Window.BackgroundProperty, "NetCatWindowBackgroundBrush");
+        window.SetResourceReference(Window.ForegroundProperty, "NetCatStrongTextBrush");
+        window.Loaded += (_, _) => WindowsUtils.SetDarkBorder(window, _config.UiItem.CurrentTheme);
 
         window.ShowDialog();
     }

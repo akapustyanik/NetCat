@@ -38,6 +38,83 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
         }
     }
 
+    public UpdateResult PrepareLocalGuiUpdateArchive(string sourceArchivePath)
+    {
+        try
+        {
+            if (sourceArchivePath.IsNullOrEmpty() || !File.Exists(sourceArchivePath))
+            {
+                return new UpdateResult(false, "Local update package was not found.")
+                {
+                    Status = EUpdateAvailabilityStatus.Failed,
+                    FailureStage = EUpdateFailureStage.Stage
+                };
+            }
+
+            if (!string.Equals(Path.GetExtension(sourceArchivePath), ".zip", StringComparison.OrdinalIgnoreCase))
+            {
+                return new UpdateResult(false, "Selected file is not a .zip update package.")
+                {
+                    Status = EUpdateAvailabilityStatus.Failed,
+                    FailureStage = EUpdateFailureStage.AssetSelection
+                };
+            }
+
+            FileUtils.TryUnblockFile(sourceArchivePath);
+            if (!IsValidGuiUpdateArchive(sourceArchivePath, null))
+            {
+                return new UpdateResult(false, "Selected .zip does not contain a valid NetCat update package.")
+                {
+                    Status = EUpdateAvailabilityStatus.Failed,
+                    FailureStage = EUpdateFailureStage.Unpack
+                };
+            }
+
+            var cacheDirectory = Path.Combine(Utils.GetTempPath(), "updates");
+            Directory.CreateDirectory(cacheDirectory);
+
+            var sourceFileName = SanitizeFileName(Path.GetFileName(sourceArchivePath));
+            var versionToken = ExtractGuiUpdateVersionToken(sourceArchivePath);
+            var cachedArchivePath = Path.Combine(
+                cacheDirectory,
+                versionToken.IsNullOrEmpty()
+                    ? $"manual-{Utils.GetMd5(Path.GetFullPath(sourceArchivePath))}-{sourceFileName}"
+                    : $"{SanitizeFileName(versionToken)}-{sourceFileName}");
+
+            CleanupStaleGuiUpdateArtifacts(cachedArchivePath);
+
+            if (!string.Equals(Path.GetFullPath(sourceArchivePath), Path.GetFullPath(cachedArchivePath), StringComparison.OrdinalIgnoreCase))
+            {
+                FileUtils.CopyFileWithRetry(sourceArchivePath, cachedArchivePath, true);
+            }
+
+            FileUtils.TryUnblockFile(cachedArchivePath);
+            if (!IsValidGuiUpdateArchive(cachedArchivePath, null))
+            {
+                return new UpdateResult(false, "Prepared local update package is invalid.")
+                {
+                    Status = EUpdateAvailabilityStatus.Failed,
+                    FailureStage = EUpdateFailureStage.Stage
+                };
+            }
+
+            return new UpdateResult(true, $"Local update package ready: {Path.GetFileName(cachedArchivePath)}")
+            {
+                Status = EUpdateAvailabilityStatus.Available,
+                LocalArchivePath = cachedArchivePath
+            };
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog(_tag, ex);
+            return new UpdateResult(false, ex.Message)
+            {
+                Status = EUpdateAvailabilityStatus.Failed,
+                FailureStage = EUpdateFailureStage.Stage
+            };
+        }
+    }
+
     public async Task CheckUpdateGuiN(bool preRelease)
     {
         var url = string.Empty;
@@ -596,7 +673,7 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
                     continue;
                 }
 
-                if (IsValidGuiUpdateArchive(filePath, null))
+                if (string.Equals(Path.GetExtension(filePath), ".zip", StringComparison.OrdinalIgnoreCase))
                 {
                     TryDeleteFile(filePath);
                 }
@@ -649,6 +726,35 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
         catch
         {
             return false;
+        }
+    }
+
+    private static string? ExtractGuiUpdateVersionToken(string archivePath)
+    {
+        try
+        {
+            using var archive = System.IO.Compression.ZipFile.OpenRead(archivePath);
+            var manifestEntry = archive.Entries.FirstOrDefault(entry =>
+                string.Equals(entry.Name, "release-manifest.json", StringComparison.OrdinalIgnoreCase));
+            if (manifestEntry == null)
+            {
+                return null;
+            }
+
+            using var stream = manifestEntry.Open();
+            using StreamReader reader = new(stream);
+            var manifest = reader.ReadToEnd();
+            if (manifest.IsNullOrEmpty())
+            {
+                return null;
+            }
+
+            var match = Regex.Match(manifest, "\"version\"\\s*:\\s*\"([^\"]+)\"", RegexOptions.IgnoreCase);
+            return match.Success ? match.Groups[1].Value : null;
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -1360,17 +1466,35 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
 
     private static string FormatUpdateStatusMessage(UpdateResult result)
     {
+        var stageSummary = result.FailureStage switch
+        {
+            EUpdateFailureStage.Check => "Update check failed. Please try again.",
+            EUpdateFailureStage.ReleaseLookup => "Unable to reach release information. Check network, DNS or GitHub access.",
+            EUpdateFailureStage.ReleaseParsing => "Release metadata is invalid or incompatible.",
+            EUpdateFailureStage.AssetSelection => "Compatible update package was not found.",
+            EUpdateFailureStage.Download => "Failed to download the update package.",
+            EUpdateFailureStage.Stage => "Failed to prepare the update package or updater.",
+            EUpdateFailureStage.Unpack => "Update package is invalid or cannot be unpacked.",
+            EUpdateFailureStage.Launch => "Updater failed to start. Windows protection may have blocked it.",
+            EUpdateFailureStage.Restart => "Update completed but restart failed.",
+            EUpdateFailureStage.Cleanup => "Update completed but cleanup failed.",
+            _ => result.Status == EUpdateAvailabilityStatus.UpToDate ? "Already up to date." : "No updates."
+        };
+
         if (!result.Msg.IsNullOrEmpty())
         {
-            return result.Status == EUpdateAvailabilityStatus.Failed && result.FailureStage != EUpdateFailureStage.None
-                ? $"{result.Msg} ({result.FailureStage})"
-                : result.Msg;
+            if (result.Status == EUpdateAvailabilityStatus.Failed && result.FailureStage != EUpdateFailureStage.None)
+            {
+                return $"{stageSummary} Details: {result.Msg}";
+            }
+
+            return result.Msg;
         }
 
         return result.Status switch
         {
             EUpdateAvailabilityStatus.UpToDate => "Already up to date.",
-            EUpdateAvailabilityStatus.Failed when result.FailureStage != EUpdateFailureStage.None => $"Update check failed ({result.FailureStage}).",
+            EUpdateAvailabilityStatus.Failed when result.FailureStage != EUpdateFailureStage.None => stageSummary,
             EUpdateAvailabilityStatus.Failed => "Update check failed.",
             _ => "No updates."
         };

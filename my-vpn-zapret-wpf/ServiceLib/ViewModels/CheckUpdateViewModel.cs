@@ -39,8 +39,7 @@ public class CheckUpdateViewModel : MyReactiveObject
     public IObservableCollection<CheckUpdateModel> CheckUpdateModels { get; } = new ObservableCollectionExtended<CheckUpdateModel>();
     public ReactiveCommand<Unit, Unit> CheckUpdateCmd { get; }
     public ReactiveCommand<CheckUpdateModel, Unit> RetryUpdateCmd { get; }
-    [Reactive] public bool EnableCheckPreReleaseUpdate { get; set; }
-
+    public ReactiveCommand<CheckUpdateModel, Unit> InstallLocalPackageCmd { get; }
     public CheckUpdateViewModel(Func<EViewAction, object?, Task<bool>>? updateView)
     {
         _config = AppManager.Instance.Config;
@@ -57,13 +56,13 @@ public class CheckUpdateViewModel : MyReactiveObject
         {
             Logging.SaveLog(_tag, ex);
         });
+        InstallLocalPackageCmd = ReactiveCommand.CreateFromTask<CheckUpdateModel>(InstallLocalPackageAsync);
+        InstallLocalPackageCmd.ThrownExceptions.Subscribe(ex =>
+        {
+            Logging.SaveLog(_tag, ex);
+        });
 
-        EnableCheckPreReleaseUpdate = _config.CheckUpdateItem.CheckPreReleaseUpdate;
-
-        this.WhenAnyValue(
-        x => x.EnableCheckPreReleaseUpdate,
-        y => y == true)
-            .Subscribe(c => _config.CheckUpdateItem.CheckPreReleaseUpdate = EnableCheckPreReleaseUpdate);
+        _config.CheckUpdateItem.CheckPreReleaseUpdate = false;
 
         RefreshCheckUpdateItems();
     }
@@ -95,8 +94,10 @@ public class CheckUpdateViewModel : MyReactiveObject
             {
                 IsSelected = false,
                 CoreType = coreType,
+                DisplayName = coreType == _v2rayN ? "NetCat" : coreType,
+                CanUseLocalPackage = false,
                 Hint = GetModuleHint(coreType),
-                Remarks = ResUI.menuCheckUpdate + " (Not Support)",
+                Remarks = "Update is not supported for packaged installs.",
             };
         }
 
@@ -104,8 +105,10 @@ public class CheckUpdateViewModel : MyReactiveObject
         {
             IsSelected = _config.CheckUpdateItem.SelectedCoreTypes?.Contains(coreType) ?? true,
             CoreType = coreType,
+            DisplayName = coreType == _v2rayN ? "NetCat" : coreType,
+            CanUseLocalPackage = coreType == _v2rayN,
             Hint = GetModuleHint(coreType),
-            Remarks = ResUI.menuCheckUpdate,
+            Remarks = "Ready to check for updates.",
         };
     }
 
@@ -243,6 +246,48 @@ public class CheckUpdateViewModel : MyReactiveObject
         }
     }
 
+    private async Task InstallLocalPackageAsync(CheckUpdateModel? item)
+    {
+        if (item?.CoreType != _v2rayN || _isCheckingUpdates)
+        {
+            return;
+        }
+
+        var selectedPath = new string[1];
+        if (await _updateView(EViewAction.SelectLocalUpdatePackage, selectedPath) != true || selectedPath[0].IsNullOrEmpty())
+        {
+            return;
+        }
+        var fileName = selectedPath[0];
+
+        _isCheckingUpdates = true;
+        item.IsRetrying = true;
+        item.CanRetry = false;
+        try
+        {
+            await UpdateView(_v2rayN, "Preparing local update package...");
+
+            var service = new UpdateService(_config, async (_, msg) => await UpdateView(_v2rayN, msg));
+            var result = service.PrepareLocalGuiUpdateArchive(fileName);
+            if (!result.Success || result.LocalArchivePath.IsNullOrEmpty())
+            {
+                await UpdateView(_v2rayN, result.Msg ?? "Failed to prepare local update package.");
+                item.CanRetry = ShouldAllowRetry(result.Msg);
+                return;
+            }
+
+            UpdatedPlusPlus(_v2rayN, result.LocalArchivePath);
+            await UpdateView(_v2rayN, result.Msg ?? "Local update package is ready.");
+            await UpgradeN(result.LocalArchivePath);
+        }
+        finally
+        {
+            item.IsRetrying = false;
+            item.CanRetry = ShouldAllowRetry(item.Remarks);
+            _isCheckingUpdates = false;
+        }
+    }
+
     private async Task RunUpdateForItemAsync(CheckUpdateModel item)
     {
         item.CanRetry = false;
@@ -262,11 +307,11 @@ public class CheckUpdateViewModel : MyReactiveObject
                 await UpdateView(_v2rayN, "Not Support");
                 return;
             }
-            await CheckUpdateN(EnableCheckPreReleaseUpdate);
+            await CheckUpdateN(false);
         }
         else if (item.CoreType == ECoreType.Xray.ToString())
         {
-            await CheckUpdateCore(item, EnableCheckPreReleaseUpdate);
+            await CheckUpdateCore(item, false);
         }
         else
         {
@@ -321,7 +366,7 @@ public class CheckUpdateViewModel : MyReactiveObject
         }
     }
 
-    private async Task UpgradeN()
+    private async Task UpgradeN(string? packageOverridePath = null)
     {
         string? updateLauncherPath = null;
         string? updatePackagePath = null;
@@ -331,14 +376,14 @@ public class CheckUpdateViewModel : MyReactiveObject
         string? stagedUpgradeFileName = null;
         try
         {
-            updatePackagePath = _lstUpdated.FirstOrDefault(x => x.CoreType == _v2rayN)?.FileName;
+            updatePackagePath = packageOverridePath ?? _lstUpdated.FirstOrDefault(x => x.CoreType == _v2rayN)?.FileName;
             if (updatePackagePath.IsNullOrEmpty())
             {
                 return;
             }
             if (!Utils.UpgradeAppExists(out var upgradeFileName))
             {
-                await UpdateView(_v2rayN, ResUI.UpgradeAppNotExistTip);
+                await UpdateView(_v2rayN, $"Updater is missing. {ResUI.UpgradeAppNotExistTip}");
                 NoticeManager.Instance.SendMessageAndEnqueue(ResUI.UpgradeAppNotExistTip);
                 Logging.SaveLog("UpgradeApp does not exist");
                 return;
@@ -388,20 +433,20 @@ public class CheckUpdateViewModel : MyReactiveObject
             else
             {
                 CleanupStagedUpdater(stagedUpgradeFileName);
-                await UpdateView(_v2rayN, "Failed to start updater (Launch).");
+                await UpdateView(_v2rayN, "Failed to launch updater. Try again or use a local .zip package.");
             }
         }
         catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
         {
             CleanupStagedUpdater(stagedUpgradeFileName);
-            await UpdateView(_v2rayN, "Updater launch was cancelled or blocked by Windows protection (Launch).");
+            await UpdateView(_v2rayN, "Updater launch was cancelled or blocked by Windows protection. You can retry or install from a local .zip package.");
             Logging.SaveLog(BuildUpdaterLaunchDiagnostics(sourceUpgradeFileName, sourceUpgradeAssemblyPath, stagedUpgradeFileName, stagedUpgradeAssemblyPath, updateLauncherPath, updatePackagePath));
             Logging.SaveLog(_tag, ex);
         }
         catch (Exception ex)
         {
             CleanupStagedUpdater(stagedUpgradeFileName);
-            await UpdateView(_v2rayN, $"{ex.Message} (Launch)");
+            await UpdateView(_v2rayN, $"Failed to launch updater. Details: {ex.Message}");
             Logging.SaveLog(BuildUpdaterLaunchDiagnostics(sourceUpgradeFileName, sourceUpgradeAssemblyPath, stagedUpgradeFileName, stagedUpgradeAssemblyPath, updateLauncherPath, updatePackagePath));
             Logging.SaveLog(_tag, ex);
         }
@@ -592,7 +637,7 @@ public class CheckUpdateViewModel : MyReactiveObject
             "Xray" => GetResourceText("UpdateHintXray", "Xray core used for proxy protocols and connections."),
             "mihomo" => GetResourceText("UpdateHintMihomo", "Mihomo core used for Clash-compatible profiles and rule processing."),
             "sing_box" => GetResourceText("UpdateHintSingBox", "sing-box core used for sing-box profiles, DNS and rule sets."),
-            _ => GetResourceText("UpdateHintNetCat", "Main application update from GitHub Releases.")
+            _ => GetResourceText("UpdateHintNetCat", "Main application update from GitHub Releases. If GitHub is unavailable, you can install from a local .zip package.")
         };
     }
 

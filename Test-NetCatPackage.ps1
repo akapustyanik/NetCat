@@ -3,7 +3,8 @@ param(
     [string]$OutputDir,
 
     [string]$ZipPath = "",
-    [bool]$VerifySelfUpdate = $false
+    [bool]$VerifySelfUpdate = $false,
+    [bool]$RequireCodeSigning = $false
 )
 
 $ErrorActionPreference = "Stop"
@@ -46,6 +47,15 @@ function Get-StaleUpdaterDirs {
     return Get-ChildItem -Path $tempRoot -Directory -Filter "updater-*" -ErrorAction SilentlyContinue
 }
 
+function Assert-AuthenticodeSigned {
+    param([string]$Path)
+
+    $signature = Get-AuthenticodeSignature -FilePath $Path
+    if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+        throw "Executable is not code-signed: $Path (status: $($signature.Status))"
+    }
+}
+
 function Invoke-SelfUpdateSmoke {
     param(
         [string]$SourceDir,
@@ -75,6 +85,14 @@ function Invoke-SelfUpdateSmoke {
         $staleUpdaterDirs = @(Get-StaleUpdaterDirs -PackageRoot $workDir)
         if ($staleUpdaterDirs.Count -gt 0) {
             throw "Self-update smoke test left staged updater directories behind: $($staleUpdaterDirs.Name -join ', ')"
+        }
+
+        $updateCacheRoot = Join-Path $workDir "userdata\guiTemps\updates"
+        if (Test-Path $updateCacheRoot) {
+            $cachedPackages = @(Get-ChildItem -Path $updateCacheRoot -File -Filter "*.zip" -ErrorAction SilentlyContinue)
+            if ($cachedPackages.Count -gt 1) {
+                throw "Self-update smoke test left multiple cached update archives behind: $($cachedPackages.Name -join ', ')"
+            }
         }
     }
     finally {
@@ -141,6 +159,12 @@ if ($VerifySelfUpdate) {
     }
 
     Invoke-SelfUpdateSmoke -SourceDir $OutputDir -ArchivePath $ZipPath
+}
+
+if ($RequireCodeSigning) {
+    foreach ($relativePath in @("NetCat.exe", "updater\\AmazTool.exe")) {
+        Assert-AuthenticodeSigned -Path (Join-Path $OutputDir $relativePath)
+    }
 }
 
 Write-Host "Smoke test passed: $OutputDir"

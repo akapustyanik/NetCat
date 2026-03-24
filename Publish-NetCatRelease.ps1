@@ -7,6 +7,7 @@ param(
     [bool]$RunSmokeTest = $true,
     [bool]$VerifySelfUpdateSmoke = $false,
     [bool]$SignBinaries = $true,
+    [bool]$RequireCodeSigning = $false,
     [string]$CodeSigningPfxPath = $env:NETCAT_CODESIGN_PFX,
     [string]$CodeSigningPassword = $env:NETCAT_CODESIGN_PASSWORD,
     [string]$TimestampUrl = $env:NETCAT_CODESIGN_TIMESTAMP_URL,
@@ -225,6 +226,7 @@ function Try-SignPackageExecutables {
     param(
         [string]$PackageRoot,
         [bool]$EnableSigning,
+        [bool]$RequireSigning,
         [string]$ResolvedCodeSigningPfxPath,
         [string]$ResolvedCodeSigningPassword,
         [string]$ResolvedTimestampUrl,
@@ -237,6 +239,9 @@ function Try-SignPackageExecutables {
     }
 
     if ([string]::IsNullOrWhiteSpace($ResolvedCodeSigningPfxPath)) {
+        if ($RequireSigning) {
+            throw "Code signing is required, but NETCAT_CODESIGN_PFX is not configured."
+        }
         Write-Warning "Skipping code signing because NETCAT_CODESIGN_PFX is not configured."
         return
     }
@@ -331,6 +336,7 @@ try {
     Try-SignPackageExecutables `
         -PackageRoot $OutputDir `
         -EnableSigning $SignBinaries `
+        -RequireSigning $RequireCodeSigning `
         -ResolvedCodeSigningPfxPath $CodeSigningPfxPath `
         -ResolvedCodeSigningPassword $CodeSigningPassword `
         -ResolvedTimestampUrl $TimestampUrl `
@@ -373,7 +379,8 @@ try {
         & (Join-Path $repoRoot "Test-NetCatPackage.ps1") `
             -OutputDir $OutputDir `
             -ZipPath $ZipPath `
-            -VerifySelfUpdate $VerifySelfUpdateSmoke
+            -VerifySelfUpdate $VerifySelfUpdateSmoke `
+            -RequireCodeSigning $RequireCodeSigning
     }
 
     Write-Host "Published folder: $OutputDir"

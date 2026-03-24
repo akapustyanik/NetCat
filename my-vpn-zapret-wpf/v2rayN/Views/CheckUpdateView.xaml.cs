@@ -11,14 +11,30 @@ public partial class CheckUpdateView
         this.WhenActivated(disposables =>
         {
             this.OneWayBind(ViewModel, vm => vm.CheckUpdateModels, v => v.lstCheckUpdates.ItemsSource).DisposeWith(disposables);
-
-            this.Bind(ViewModel, vm => vm.EnableCheckPreReleaseUpdate, v => v.togEnableCheckPreReleaseUpdate.IsChecked).DisposeWith(disposables);
             this.BindCommand(ViewModel, vm => vm.CheckUpdateCmd, v => v.btnCheckUpdate).DisposeWith(disposables);
         });
     }
 
     private async Task<bool> UpdateViewHandler(EViewAction action, object? obj)
     {
+        switch (action)
+        {
+            case EViewAction.SelectLocalUpdatePackage:
+                if (obj is string[] selectedPath)
+                {
+                    string fileName = string.Empty;
+                    var result = await Application.Current.Dispatcher.InvokeAsync(() =>
+                        UI.OpenFileDialog(out fileName, "Zip archive|*.zip|All files|*.*"));
+
+                    if (result == true)
+                    {
+                        selectedPath[0] = fileName;
+                        return true;
+                    }
+                }
+                return false;
+        }
+
         return await Task.FromResult(true);
     }
 }

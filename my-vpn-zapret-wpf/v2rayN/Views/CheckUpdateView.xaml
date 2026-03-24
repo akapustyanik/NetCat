@@ -1,4 +1,5 @@
 <reactiveui:ReactiveUserControl
+    x:Name="Root"
     x:Class="v2rayN.Views.CheckUpdateView"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -13,108 +14,319 @@
     d:DesignHeight="450"
     d:DesignWidth="800"
     x:TypeArguments="vms:CheckUpdateViewModel"
-    Style="{StaticResource ViewGlobal}"
+    Background="{DynamicResource NetCatWindowBackgroundBrush}"
+    Foreground="{DynamicResource NetCatStrongTextBrush}"
     mc:Ignorable="d">
 
-    <DockPanel Margin="{StaticResource Margin8}">
-        <DockPanel.Resources>
+    <Grid Margin="20">
+        <Grid.Resources>
             <BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter" />
-        </DockPanel.Resources>
-        <StackPanel
-            Margin="{StaticResource Margin8}"
-            HorizontalAlignment="Right"
-            DockPanel.Dock="Bottom"
-            Orientation="Horizontal">
-
-            <TextBlock
-                Margin="{StaticResource Margin8}"
-                VerticalAlignment="Center"
-                Style="{StaticResource ToolbarTextBlock}"
-                Text="{x:Static resx:ResUI.TbSettingsEnableCheckPreReleaseUpdate}" />
-            <ToggleButton
-                x:Name="togEnableCheckPreReleaseUpdate"
-                Margin="{StaticResource Margin8}"
-                HorizontalAlignment="Left" />
-
-            <Button
-                x:Name="btnCheckUpdate"
-                Width="100"
-                Margin="{StaticResource Margin8}"
-                Content="{x:Static resx:ResUI.menuCheckUpdate}"
-                IsDefault="True"
-                Style="{StaticResource DefButton}" />
-        </StackPanel>
-
-        <ListView
-            x:Name="lstCheckUpdates"
-            BorderThickness="1"
-            ItemContainerStyle="{StaticResource lvItemSelected}"
-            ScrollViewer.CanContentScroll="False"
-            ScrollViewer.VerticalScrollBarVisibility="Auto"
-            common:SmoothScrollBehavior.IsEnabled="True"
-            common:SmoothScrollBehavior.MouseWheelMultiplier="1.5">
-            <ListView.ItemsPanel>
-                <ItemsPanelTemplate>
-                    <StackPanel Orientation="Vertical" />
-                </ItemsPanelTemplate>
-            </ListView.ItemsPanel>
-            <ListView.ItemTemplate>
-                <DataTemplate>
+            <Style x:Key="UpdateTitleText" BasedOn="{StaticResource MaterialDesignTextBlock}" TargetType="{x:Type TextBlock}">
+                <Setter Property="Foreground" Value="{DynamicResource NetCatStrongTextBrush}" />
+                <Setter Property="FontSize" Value="22" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+            </Style>
+            <Style x:Key="UpdateBodyText" BasedOn="{StaticResource MaterialDesignTextBlock}" TargetType="{x:Type TextBlock}">
+                <Setter Property="Foreground" Value="{DynamicResource NetCatMutedTextBrush}" />
+                <Setter Property="FontSize" Value="12" />
+            </Style>
+            <Style x:Key="UpdatePrimaryButton" BasedOn="{StaticResource DefButton}" TargetType="{x:Type ButtonBase}">
+                <Setter Property="MinWidth" Value="122" />
+                <Setter Property="Height" Value="38" />
+                <Setter Property="Margin" Value="0,0,0,10" />
+            </Style>
+            <Style x:Key="UpdateSecondaryButton" BasedOn="{StaticResource MaterialDesignOutlinedButton}" TargetType="{x:Type ButtonBase}">
+                <Setter Property="FontSize" Value="{DynamicResource StdFontSize}" />
+                <Setter Property="MinHeight" Value="40" />
+                <Setter Property="MinWidth" Value="88" />
+                <Setter Property="Padding" Value="14,9" />
+                <Setter Property="VerticalContentAlignment" Value="Center" />
+                <Setter Property="HorizontalContentAlignment" Value="Center" />
+                <Setter Property="UseLayoutRounding" Value="True" />
+                <Setter Property="SnapsToDevicePixels" Value="True" />
+                <Setter Property="TextBlock.LineHeight" Value="16" />
+                <Setter Property="TextBlock.LineStackingStrategy" Value="BlockLineHeight" />
+                <Setter Property="Foreground" Value="{DynamicResource NetCatStrongTextBrush}" />
+                <Setter Property="Background" Value="{DynamicResource NetCatSurfaceAltBrush}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource NetCatWindowChromeBrush}" />
+                <Setter Property="materialDesign:ButtonAssist.CornerRadius" Value="12" />
+                <Setter Property="Margin" Value="0,0,0,10" />
+            </Style>
+            <Style x:Key="UpdateItemStyle" TargetType="{x:Type ListViewItem}">
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="Margin" Value="0,0,0,12" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="{x:Type ListViewItem}">
+                            <ContentPresenter />
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+            <Style x:Key="ScrollBarTrackButtonStyle" TargetType="{x:Type RepeatButton}">
+                <Setter Property="Focusable" Value="False" />
+                <Setter Property="OverridesDefaultStyle" Value="True" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="{x:Type RepeatButton}">
+                            <Border Background="Transparent" CornerRadius="6" />
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+            <Style x:Key="RoundedScrollBarThumbStyle" TargetType="{x:Type Thumb}">
+                <Setter Property="OverridesDefaultStyle" Value="True" />
+                <Setter Property="SnapsToDevicePixels" Value="True" />
+                <Setter Property="Background" Value="{DynamicResource NetCatScrollBarThumbBrush}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource NetCatScrollBarThumbBorderBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="{x:Type Thumb}">
+                            <Border
+                                x:Name="ThumbBorder"
+                                Margin="2"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6" />
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="ThumbBorder" Property="Background" Value="{DynamicResource NetCatScrollBarThumbHoverBrush}" />
+                                    <Setter TargetName="ThumbBorder" Property="BorderBrush" Value="{DynamicResource NetCatScrollBarThumbBorderBrush}" />
+                                </Trigger>
+                                <Trigger Property="IsDragging" Value="True">
+                                    <Setter TargetName="ThumbBorder" Property="Background" Value="{DynamicResource NetCatScrollBarThumbDragBrush}" />
+                                    <Setter TargetName="ThumbBorder" Property="BorderBrush" Value="{DynamicResource NetCatScrollBarThumbBorderBrush}" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+            <ControlTemplate x:Key="RoundedVerticalScrollBarTemplate" TargetType="{x:Type ScrollBar}">
+                <Grid Background="Transparent" Width="{TemplateBinding Width}">
                     <Border
-                        Width="500"
-                        Margin="{StaticResource Margin8}"
-                        Padding="0"
-                        VerticalAlignment="Center">
-                        <Grid>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                            </Grid.RowDefinitions>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="2*" />
-                                <ColumnDefinition Width="3*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <ToggleButton
-                                x:Name="togAutoRefresh"
-                                Grid.Column="0"
-                                Margin="{StaticResource Margin8}"
-                                HorizontalAlignment="Left"
-                                VerticalAlignment="Center"
-                                IsChecked="{Binding IsSelected}" />
-                            <StackPanel
-                                Grid.Column="1"
-                                Margin="{StaticResource Margin8}"
-                                ToolTip="{Binding Hint}"
-                                ToolTipService.ShowDuration="60000">
+                        Margin="3,2"
+                        Background="{DynamicResource NetCatScrollBarTrackBrush}"
+                        CornerRadius="8" />
+                    <Track
+                        x:Name="PART_Track"
+                        Margin="2"
+                        IsDirectionReversed="True"
+                        Focusable="False">
+                        <Track.DecreaseRepeatButton>
+                            <RepeatButton Command="ScrollBar.PageUpCommand" Style="{StaticResource ScrollBarTrackButtonStyle}" />
+                        </Track.DecreaseRepeatButton>
+                        <Track.Thumb>
+                            <Thumb MinHeight="40" Style="{StaticResource RoundedScrollBarThumbStyle}" />
+                        </Track.Thumb>
+                        <Track.IncreaseRepeatButton>
+                            <RepeatButton Command="ScrollBar.PageDownCommand" Style="{StaticResource ScrollBarTrackButtonStyle}" />
+                        </Track.IncreaseRepeatButton>
+                    </Track>
+                </Grid>
+            </ControlTemplate>
+            <ControlTemplate x:Key="RoundedHorizontalScrollBarTemplate" TargetType="{x:Type ScrollBar}">
+                <Grid Background="Transparent" Height="{TemplateBinding Height}">
+                    <Border
+                        Margin="2,3"
+                        Background="{DynamicResource NetCatScrollBarTrackBrush}"
+                        CornerRadius="8" />
+                    <Track
+                        x:Name="PART_Track"
+                        Margin="2"
+                        Focusable="False">
+                        <Track.DecreaseRepeatButton>
+                            <RepeatButton Command="ScrollBar.PageLeftCommand" Style="{StaticResource ScrollBarTrackButtonStyle}" />
+                        </Track.DecreaseRepeatButton>
+                        <Track.Thumb>
+                            <Thumb MinWidth="40" Style="{StaticResource RoundedScrollBarThumbStyle}" />
+                        </Track.Thumb>
+                        <Track.IncreaseRepeatButton>
+                            <RepeatButton Command="ScrollBar.PageRightCommand" Style="{StaticResource ScrollBarTrackButtonStyle}" />
+                        </Track.IncreaseRepeatButton>
+                    </Track>
+                </Grid>
+            </ControlTemplate>
+            <Style TargetType="{x:Type ScrollBar}">
+                <Setter Property="Background" Value="{DynamicResource NetCatScrollBarTrackBrush}" />
+                <Setter Property="Width" Value="14" />
+                <Setter Property="Template" Value="{StaticResource RoundedVerticalScrollBarTemplate}" />
+                <Style.Triggers>
+                    <Trigger Property="Orientation" Value="Horizontal">
+                        <Setter Property="Height" Value="14" />
+                        <Setter Property="Width" Value="Auto" />
+                        <Setter Property="Template" Value="{StaticResource RoundedHorizontalScrollBarTemplate}" />
+                    </Trigger>
+                    <Trigger Property="Orientation" Value="Vertical">
+                        <Setter Property="Width" Value="14" />
+                        <Setter Property="Template" Value="{StaticResource RoundedVerticalScrollBarTemplate}" />
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+        </Grid.Resources>
+
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Border
+            Grid.Row="0"
+            Padding="18"
+            Background="{DynamicResource NetCatSurfaceBrush}"
+            BorderBrush="{DynamicResource NetCatWindowChromeBrush}"
+            BorderThickness="1"
+            CornerRadius="18">
+            <StackPanel>
+                <TextBlock Style="{StaticResource UpdateTitleText}" Text="Обновления" />
+                <TextBlock
+                    Margin="0,8,0,0"
+                    Style="{StaticResource UpdateBodyText}"
+                    Text="Проверяйте версии модулей, повторяйте неудачные обновления и при необходимости устанавливайте NetCat из локального ZIP-пакета."
+                    TextWrapping="Wrap" />
+            </StackPanel>
+        </Border>
+
+        <Border
+            Grid.Row="1"
+            Margin="0,18,0,18"
+            Padding="16"
+            Background="{DynamicResource NetCatSurfaceBrush}"
+            BorderBrush="{DynamicResource NetCatWindowChromeBrush}"
+            BorderThickness="1"
+            CornerRadius="18">
+            <ListView
+                x:Name="lstCheckUpdates"
+                Background="Transparent"
+                BorderThickness="0"
+                ItemContainerStyle="{StaticResource UpdateItemStyle}"
+                ScrollViewer.CanContentScroll="False"
+                ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                ScrollViewer.VerticalScrollBarVisibility="Auto"
+                common:SmoothScrollBehavior.IsEnabled="True"
+                common:SmoothScrollBehavior.MouseWheelMultiplier="1.5">
+                <ListView.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Orientation="Vertical" />
+                    </ItemsPanelTemplate>
+                </ListView.ItemsPanel>
+                <ListView.ItemTemplate>
+                    <DataTemplate>
+                        <Border
+                            Padding="16"
+                            Background="{DynamicResource NetCatSurfaceAltBrush}"
+                            BorderBrush="{DynamicResource NetCatWindowChromeBrush}"
+                            BorderThickness="1"
+                            CornerRadius="16">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+
+                                <CheckBox
+                                    Grid.RowSpan="3"
+                                    Margin="0,4,16,0"
+                                    VerticalAlignment="Top"
+                                    IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                    Style="{StaticResource ListItemCheckBox}" />
+
                                 <TextBlock
-                                    Style="{StaticResource ListItemTitle}"
-                                    Text="{Binding CoreType}" />
+                                    Grid.Column="1"
+                                    Style="{StaticResource ModuleTitle}"
+                                    Text="{Binding DisplayName}" />
+
                                 <TextBlock
-                                    Margin="0,4,0,0"
-                                    Foreground="{DynamicResource MaterialDesignBodyLight}"
-                                    Opacity="0.85"
+                                    Grid.Row="1"
+                                    Grid.Column="1"
+                                    Margin="0,8,0,0"
+                                    Foreground="{DynamicResource NetCatMutedTextBrush}"
                                     Text="{Binding Hint}"
+                                    TextWrapping="Wrap"
+                                    ToolTip="{Binding Hint}"
+                                    ToolTipService.ShowDuration="60000" />
+
+                                <TextBlock
+                                    Grid.Row="2"
+                                    Grid.Column="1"
+                                    Margin="0,12,20,0"
+                                    Foreground="{DynamicResource NetCatStrongTextBrush}"
+                                    Text="{Binding Remarks}"
                                     TextWrapping="Wrap" />
-                            </StackPanel>
-                            <TextBlock
-                                Grid.Column="2"
-                                Style="{StaticResource ListItemSubTitle}"
-                                Text="{Binding Remarks}"
-                                TextWrapping="WrapWithOverflow" />
-                            <Button
-                                Grid.Column="3"
-                                Margin="{StaticResource Margin8}"
-                                VerticalAlignment="Center"
-                                Content="Повторить"
-                                Command="{Binding DataContext.RetryUpdateCmd, RelativeSource={RelativeSource AncestorType=ListView}}"
-                                CommandParameter="{Binding}"
-                                Style="{StaticResource DefButton}"
-                                Visibility="{Binding CanRetry, Converter={StaticResource BoolToVisibilityConverter}}" />
-                        </Grid>
-                    </Border>
-                </DataTemplate>
-            </ListView.ItemTemplate>
-        </ListView>
-    </DockPanel>
+
+                                <StackPanel
+                                    Grid.Column="2"
+                                    Grid.RowSpan="3"
+                                    HorizontalAlignment="Right"
+                                    VerticalAlignment="Top">
+                                    <Button
+                                        Content="Повторить"
+                                        Command="{Binding ViewModel.RetryUpdateCmd, ElementName=Root}"
+                                        CommandParameter="{Binding}"
+                                        Style="{StaticResource UpdatePrimaryButton}"
+                                        Visibility="{Binding CanRetry, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                    <Button
+                                        Content="Из ZIP"
+                                        Command="{Binding ViewModel.InstallLocalPackageCmd, ElementName=Root}"
+                                        CommandParameter="{Binding}"
+                                        Style="{StaticResource UpdateSecondaryButton}"
+                                        Visibility="{Binding CanUseLocalPackage, Converter={StaticResource BoolToVisibilityConverter}}" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+        </Border>
+
+        <Border
+            Grid.Row="2"
+            Padding="16"
+            Background="{DynamicResource NetCatSurfaceBrush}"
+            BorderBrush="{DynamicResource NetCatWindowChromeBrush}"
+            BorderThickness="1"
+            CornerRadius="18">
+            <DockPanel LastChildFill="False">
+                <StackPanel DockPanel.Dock="Left">
+                    <TextBlock
+                        Foreground="{DynamicResource NetCatStrongTextBrush}"
+                        FontSize="13"
+                        FontWeight="SemiBold"
+                        Text="Обновление NetCat" />
+                    <TextBlock
+                        Margin="0,4,0,0"
+                        Style="{StaticResource UpdateBodyText}"
+                        Text="Запустите проверку обновлений или выберите локальный ZIP-пакет NetCat."
+                        TextWrapping="Wrap" />
+                </StackPanel>
+
+                <WrapPanel
+                    Margin="16,0,0,0"
+                    HorizontalAlignment="Right"
+                    DockPanel.Dock="Right"
+                    Orientation="Horizontal">
+                    <Button
+                        x:Name="btnCheckUpdate"
+                        MinWidth="160"
+                        Content="Update"
+                        IsDefault="True"
+                        Style="{StaticResource UpdatePrimaryButton}" />
+                </WrapPanel>
+            </DockPanel>
+        </Border>
+    </Grid>
 </reactiveui:ReactiveUserControl>
