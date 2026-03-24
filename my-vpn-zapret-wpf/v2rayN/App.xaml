@@ -63,6 +63,25 @@
                 Left="0"
                 Right="8"
                 Top="0" />
+            <SolidColorBrush x:Key="NetCatWindowBackgroundBrush" Color="#0B1220" />
+            <SolidColorBrush x:Key="NetCatWindowChromeBrush" Color="#253246" />
+            <SolidColorBrush x:Key="NetCatSurfaceBrush" Color="#111A2B" />
+            <SolidColorBrush x:Key="NetCatSurfaceAltBrush" Color="#162235" />
+            <SolidColorBrush x:Key="NetCatSurfaceHeaderBrush" Color="#182538" />
+            <SolidColorBrush x:Key="NetCatMutedTextBrush" Color="#8EA0B8" />
+            <SolidColorBrush x:Key="NetCatStrongTextBrush" Color="#E8EEF7" />
+            <SolidColorBrush x:Key="NetCatAccentBrush" Color="#4F8CFF" />
+            <SolidColorBrush x:Key="NetCatAccentSoftBrush" Color="#264F8CFF" />
+            <SolidColorBrush x:Key="NetCatScrollBarTrackBrush" Color="#142033" />
+            <SolidColorBrush x:Key="NetCatScrollBarThumbBrush" Color="#4F8CFF" />
+            <SolidColorBrush x:Key="NetCatScrollBarThumbBorderBrush" Color="#7AA6FF" />
+            <SolidColorBrush x:Key="NetCatScrollBarThumbHoverBrush" Color="#6B9CFF" />
+            <SolidColorBrush x:Key="NetCatScrollBarThumbDragBrush" Color="#88B0FF" />
+            <SolidColorBrush x:Key="NetCatFooterBrush" Color="#0E1727" />
+            <LinearGradientBrush x:Key="NetCatHeroGradientBrush" StartPoint="0,0" EndPoint="1,1">
+                <GradientStop Offset="0" Color="#0D1626" />
+                <GradientStop Offset="1" Color="#111C2F" />
+            </LinearGradientBrush>
             <Style
                 x:Key="ModuleTitle"
                 BasedOn="{StaticResource MaterialDesignTextBlock}"

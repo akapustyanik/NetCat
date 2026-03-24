@@ -3,29 +3,15 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:materialDesign="http://materialdesigninxaml.net/winfx/xaml/themes">
 
-    <SolidColorBrush x:Key="ProtocolEditorWindowBackgroundBrush" Color="#0B1220" />
-    <SolidColorBrush x:Key="ProtocolEditorSurfaceBrush" Color="#111A2B" />
-    <SolidColorBrush x:Key="ProtocolEditorSurfaceAltBrush" Color="#162235" />
-    <SolidColorBrush x:Key="ProtocolEditorBorderBrush" Color="#253246" />
-    <SolidColorBrush x:Key="ProtocolEditorMutedTextBrush" Color="#93A5BE" />
-    <SolidColorBrush x:Key="ProtocolEditorStrongTextBrush" Color="#E8EEF7" />
-    <SolidColorBrush x:Key="ProtocolEditorAccentBrush" Color="#4F8CFF" />
-    <SolidColorBrush x:Key="ProtocolEditorAccentSoftBrush" Color="#264F8CFF" />
-    <SolidColorBrush x:Key="ProtocolEditorScrollBarTrackBrush" Color="#1A2840" />
-    <SolidColorBrush x:Key="ProtocolEditorScrollBarThumbBrush" Color="#4F8CFF" />
-    <SolidColorBrush x:Key="ProtocolEditorScrollBarThumbBorderBrush" Color="#84B0FF" />
-    <SolidColorBrush x:Key="ProtocolEditorScrollBarThumbHoverBrush" Color="#6C9DFF" />
-    <SolidColorBrush x:Key="ProtocolEditorScrollBarThumbDragBrush" Color="#3D79E6" />
-
     <Style x:Key="ModuleTitle" TargetType="{x:Type TextBlock}">
         <Setter Property="FontSize" Value="18" />
         <Setter Property="FontWeight" Value="SemiBold" />
-        <Setter Property="Foreground" Value="{DynamicResource ProtocolEditorStrongTextBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource NetCatStrongTextBrush}" />
     </Style>
 
     <Style x:Key="ToolbarTextBlock" TargetType="{x:Type TextBlock}">
         <Setter Property="FontSize" Value="13" />
-        <Setter Property="Foreground" Value="{DynamicResource ProtocolEditorMutedTextBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource NetCatMutedTextBrush}" />
     </Style>
 
     <Style x:Key="DefButton" BasedOn="{StaticResource MaterialDesignRaisedButton}" TargetType="{x:Type Button}">
@@ -33,7 +19,7 @@
         <Setter Property="MinWidth" Value="100" />
         <Setter Property="Padding" Value="16,10" />
         <Setter Property="Foreground" Value="White" />
-        <Setter Property="Background" Value="{DynamicResource ProtocolEditorAccentBrush}" />
+        <Setter Property="Background" Value="{DynamicResource NetCatAccentBrush}" />
         <Setter Property="materialDesign:ButtonAssist.CornerRadius" Value="12" />
     </Style>
 
@@ -41,24 +27,24 @@
         <Setter Property="MinHeight" Value="40" />
         <Setter Property="MinWidth" Value="100" />
         <Setter Property="Padding" Value="16,10" />
-        <Setter Property="Foreground" Value="{DynamicResource ProtocolEditorStrongTextBrush}" />
-        <Setter Property="Background" Value="{DynamicResource ProtocolEditorSurfaceAltBrush}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource ProtocolEditorBorderBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource NetCatStrongTextBrush}" />
+        <Setter Property="Background" Value="{DynamicResource NetCatSurfaceAltBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource NetCatWindowChromeBrush}" />
         <Setter Property="materialDesign:ButtonAssist.CornerRadius" Value="12" />
     </Style>
 
     <Style x:Key="DefTextBox" BasedOn="{StaticResource MaterialDesignOutlinedTextBox}" TargetType="{x:Type TextBox}">
         <Setter Property="MinHeight" Value="42" />
-        <Setter Property="Foreground" Value="{DynamicResource ProtocolEditorStrongTextBrush}" />
-        <Setter Property="Background" Value="{DynamicResource ProtocolEditorSurfaceAltBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource NetCatStrongTextBrush}" />
+        <Setter Property="Background" Value="{DynamicResource NetCatSurfaceAltBrush}" />
     </Style>
 
     <Style x:Key="MyOutlinedTextBox" BasedOn="{StaticResource DefTextBox}" TargetType="{x:Type TextBox}" />
 
     <Style x:Key="DefComboBox" BasedOn="{StaticResource MaterialDesignOutlinedComboBox}" TargetType="{x:Type ComboBox}">
         <Setter Property="MinHeight" Value="42" />
-        <Setter Property="Foreground" Value="{DynamicResource ProtocolEditorStrongTextBrush}" />
-        <Setter Property="Background" Value="{DynamicResource ProtocolEditorSurfaceAltBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource NetCatStrongTextBrush}" />
+        <Setter Property="Background" Value="{DynamicResource NetCatSurfaceAltBrush}" />
     </Style>
 
     <Style x:Key="MyOutlinedTextComboBox" BasedOn="{StaticResource DefComboBox}" TargetType="{x:Type ComboBox}" />
@@ -87,8 +73,8 @@
     <Style x:Key="ProtocolEditorRoundedScrollBarThumbStyle" TargetType="{x:Type Thumb}">
         <Setter Property="OverridesDefaultStyle" Value="True" />
         <Setter Property="Focusable" Value="False" />
-        <Setter Property="Background" Value="{DynamicResource ProtocolEditorScrollBarThumbBrush}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource ProtocolEditorScrollBarThumbBorderBrush}" />
+        <Setter Property="Background" Value="{DynamicResource NetCatScrollBarThumbBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource NetCatScrollBarThumbBorderBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="Template">
             <Setter.Value>
@@ -101,10 +87,10 @@
                         CornerRadius="6" />
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter Property="Background" Value="{DynamicResource ProtocolEditorScrollBarThumbHoverBrush}" />
+                            <Setter Property="Background" Value="{DynamicResource NetCatScrollBarThumbHoverBrush}" />
                         </Trigger>
                         <Trigger Property="IsDragging" Value="True">
-                            <Setter Property="Background" Value="{DynamicResource ProtocolEditorScrollBarThumbDragBrush}" />
+                            <Setter Property="Background" Value="{DynamicResource NetCatScrollBarThumbDragBrush}" />
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -114,7 +100,7 @@
 
     <ControlTemplate x:Key="ProtocolEditorVerticalScrollBarTemplate" TargetType="{x:Type ScrollBar}">
         <Border
-            Background="{DynamicResource ProtocolEditorScrollBarTrackBrush}"
+            Background="{DynamicResource NetCatScrollBarTrackBrush}"
             CornerRadius="7"
             SnapsToDevicePixels="True">
             <Track
@@ -136,7 +122,7 @@
 
     <ControlTemplate x:Key="ProtocolEditorHorizontalScrollBarTemplate" TargetType="{x:Type ScrollBar}">
         <Border
-            Background="{DynamicResource ProtocolEditorScrollBarTrackBrush}"
+            Background="{DynamicResource NetCatScrollBarTrackBrush}"
             CornerRadius="7"
             SnapsToDevicePixels="True">
             <Track
@@ -157,7 +143,7 @@
     </ControlTemplate>
 
     <Style TargetType="{x:Type ScrollBar}">
-        <Setter Property="Background" Value="{DynamicResource ProtocolEditorScrollBarTrackBrush}" />
+        <Setter Property="Background" Value="{DynamicResource NetCatScrollBarTrackBrush}" />
         <Setter Property="Width" Value="14" />
         <Setter Property="Template" Value="{StaticResource ProtocolEditorVerticalScrollBarTemplate}" />
         <Style.Triggers>
@@ -175,9 +161,9 @@
     </Style>
 
     <Style x:Key="DefContextMenu" TargetType="{x:Type ContextMenu}">
-        <Setter Property="Background" Value="{DynamicResource ProtocolEditorSurfaceBrush}" />
-        <Setter Property="Foreground" Value="{DynamicResource ProtocolEditorStrongTextBrush}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource ProtocolEditorBorderBrush}" />
+        <Setter Property="Background" Value="{DynamicResource NetCatSurfaceBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource NetCatStrongTextBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource NetCatWindowChromeBrush}" />
         <Setter Property="BorderThickness" Value="1" />
     </Style>
 
@@ -185,34 +171,34 @@
                 xmlns:sys="clr-namespace:System;assembly=mscorlib">36</sys:Double>
 
     <Style TargetType="{x:Type MenuItem}">
-        <Setter Property="Foreground" Value="{DynamicResource ProtocolEditorStrongTextBrush}" />
-        <Setter Property="Background" Value="{DynamicResource ProtocolEditorSurfaceBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource NetCatStrongTextBrush}" />
+        <Setter Property="Background" Value="{DynamicResource NetCatSurfaceBrush}" />
         <Setter Property="Height" Value="{StaticResource MenuItemHeight}" />
     </Style>
 
     <Style TargetType="{x:Type DataGrid}" BasedOn="{StaticResource MaterialDesignDataGrid}">
-        <Setter Property="Background" Value="{DynamicResource ProtocolEditorSurfaceBrush}" />
-        <Setter Property="Foreground" Value="{DynamicResource ProtocolEditorStrongTextBrush}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource ProtocolEditorBorderBrush}" />
-        <Setter Property="HorizontalGridLinesBrush" Value="{DynamicResource ProtocolEditorBorderBrush}" />
-        <Setter Property="VerticalGridLinesBrush" Value="{DynamicResource ProtocolEditorBorderBrush}" />
+        <Setter Property="Background" Value="{DynamicResource NetCatSurfaceBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource NetCatStrongTextBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource NetCatWindowChromeBrush}" />
+        <Setter Property="HorizontalGridLinesBrush" Value="{DynamicResource NetCatWindowChromeBrush}" />
+        <Setter Property="VerticalGridLinesBrush" Value="{DynamicResource NetCatWindowChromeBrush}" />
     </Style>
 
     <Style TargetType="{x:Type DataGridRow}" BasedOn="{StaticResource MaterialDesignDataGridRow}">
-        <Setter Property="Background" Value="{DynamicResource ProtocolEditorSurfaceBrush}" />
-        <Setter Property="Foreground" Value="{DynamicResource ProtocolEditorStrongTextBrush}" />
+        <Setter Property="Background" Value="{DynamicResource NetCatSurfaceBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource NetCatStrongTextBrush}" />
     </Style>
 
     <Style TargetType="{x:Type DataGridColumnHeader}" BasedOn="{StaticResource MaterialDesignDataGridColumnHeader}">
-        <Setter Property="Background" Value="{DynamicResource ProtocolEditorSurfaceAltBrush}" />
-        <Setter Property="Foreground" Value="{DynamicResource ProtocolEditorStrongTextBrush}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource ProtocolEditorBorderBrush}" />
+        <Setter Property="Background" Value="{DynamicResource NetCatSurfaceAltBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource NetCatStrongTextBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource NetCatWindowChromeBrush}" />
     </Style>
 
     <Style TargetType="{x:Type DataGridCell}" BasedOn="{StaticResource MaterialDesignDataGridCell}">
-        <Setter Property="Background" Value="{DynamicResource ProtocolEditorSurfaceBrush}" />
-        <Setter Property="Foreground" Value="{DynamicResource ProtocolEditorStrongTextBrush}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource ProtocolEditorBorderBrush}" />
+        <Setter Property="Background" Value="{DynamicResource NetCatSurfaceBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource NetCatStrongTextBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource NetCatWindowChromeBrush}" />
     </Style>
 
     <Style TargetType="{x:Type TabControl}">
@@ -223,9 +209,9 @@
     <Style TargetType="{x:Type TabItem}">
         <Setter Property="Padding" Value="14,8" />
         <Setter Property="Margin" Value="0,0,8,8" />
-        <Setter Property="Foreground" Value="{DynamicResource ProtocolEditorMutedTextBrush}" />
-        <Setter Property="Background" Value="{DynamicResource ProtocolEditorSurfaceAltBrush}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource ProtocolEditorBorderBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource NetCatMutedTextBrush}" />
+        <Setter Property="Background" Value="{DynamicResource NetCatSurfaceAltBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource NetCatWindowChromeBrush}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="Template">
             <Setter.Value>
@@ -241,9 +227,9 @@
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsSelected" Value="True">
-                            <Setter TargetName="TabBorder" Property="Background" Value="{DynamicResource ProtocolEditorAccentSoftBrush}" />
-                            <Setter TargetName="TabBorder" Property="BorderBrush" Value="{DynamicResource ProtocolEditorAccentBrush}" />
-                            <Setter Property="Foreground" Value="{DynamicResource ProtocolEditorStrongTextBrush}" />
+                            <Setter TargetName="TabBorder" Property="Background" Value="{DynamicResource NetCatAccentSoftBrush}" />
+                            <Setter TargetName="TabBorder" Property="BorderBrush" Value="{DynamicResource NetCatAccentBrush}" />
+                            <Setter Property="Foreground" Value="{DynamicResource NetCatStrongTextBrush}" />
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>

@@ -15,7 +15,7 @@
     Height="760"
     MinWidth="1080"
     MinHeight="700"
-    Background="{DynamicResource ProtocolEditorWindowBackgroundBrush}"
+    Background="{DynamicResource NetCatWindowBackgroundBrush}"
     x:TypeArguments="vms:AddGroupServerViewModel"
     ResizeMode="CanResize"
     ShowInTaskbar="False"
@@ -33,8 +33,8 @@
     <Border
         Margin="14"
         Padding="16"
-        Background="{DynamicResource ProtocolEditorSurfaceBrush}"
-        BorderBrush="{DynamicResource ProtocolEditorBorderBrush}"
+        Background="{DynamicResource NetCatSurfaceBrush}"
+        BorderBrush="{DynamicResource NetCatWindowChromeBrush}"
         BorderThickness="1"
         CornerRadius="20">
     <DockPanel>

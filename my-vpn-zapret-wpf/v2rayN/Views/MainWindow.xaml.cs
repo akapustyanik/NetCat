@@ -2868,23 +2868,32 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 
     private void ApplyInterfacePresetResources(InterfaceVariantOption variant, Color accentColor)
     {
-        Resources["NetCatWindowBackgroundBrush"] = CreateFrozenBrush(variant.WindowBackgroundColor);
-        Resources["NetCatWindowChromeBrush"] = CreateFrozenBrush(variant.WindowChromeColor);
-        Resources["NetCatSurfaceBrush"] = CreateFrozenBrush(variant.SurfaceColor);
-        Resources["NetCatSurfaceAltBrush"] = CreateFrozenBrush(variant.SurfaceAltColor);
-        Resources["NetCatSurfaceHeaderBrush"] = CreateFrozenBrush(variant.SurfaceHeaderColor);
-        Resources["NetCatMutedTextBrush"] = CreateFrozenBrush(variant.MutedTextColor);
-        Resources["NetCatStrongTextBrush"] = CreateFrozenBrush(variant.StrongTextColor);
-        Resources["NetCatFooterBrush"] = CreateFrozenBrush(variant.FooterColor);
-        Resources["NetCatAccentBrush"] = CreateFrozenBrush(accentColor);
-        Resources["NetCatAccentSoftBrush"] = CreateFrozenBrush(Color.FromArgb(48, accentColor.R, accentColor.G, accentColor.B));
-        Resources["NetCatScrollBarTrackBrush"] = CreateFrozenBrush(Color.FromArgb(48, accentColor.R, accentColor.G, accentColor.B));
-        Resources["NetCatScrollBarThumbBrush"] = CreateFrozenBrush(Color.FromArgb(200, accentColor.R, accentColor.G, accentColor.B));
-        Resources["NetCatScrollBarThumbBorderBrush"] = CreateFrozenBrush(accentColor.Lighten());
-        Resources["NetCatScrollBarThumbHoverBrush"] = CreateFrozenBrush(accentColor.Lighten());
-        Resources["NetCatScrollBarThumbDragBrush"] = CreateFrozenBrush(accentColor.Darken());
-        Resources["NetCatHeroGradientBrush"] = CreateFrozenGradientBrush(variant.HeroStartColor, variant.HeroEndColor);
+        SetThemeResource("NetCatWindowBackgroundBrush", CreateFrozenBrush(variant.WindowBackgroundColor));
+        SetThemeResource("NetCatWindowChromeBrush", CreateFrozenBrush(variant.WindowChromeColor));
+        SetThemeResource("NetCatSurfaceBrush", CreateFrozenBrush(variant.SurfaceColor));
+        SetThemeResource("NetCatSurfaceAltBrush", CreateFrozenBrush(variant.SurfaceAltColor));
+        SetThemeResource("NetCatSurfaceHeaderBrush", CreateFrozenBrush(variant.SurfaceHeaderColor));
+        SetThemeResource("NetCatMutedTextBrush", CreateFrozenBrush(variant.MutedTextColor));
+        SetThemeResource("NetCatStrongTextBrush", CreateFrozenBrush(variant.StrongTextColor));
+        SetThemeResource("NetCatFooterBrush", CreateFrozenBrush(variant.FooterColor));
+        SetThemeResource("NetCatAccentBrush", CreateFrozenBrush(accentColor));
+        SetThemeResource("NetCatAccentSoftBrush", CreateFrozenBrush(Color.FromArgb(48, accentColor.R, accentColor.G, accentColor.B)));
+        SetThemeResource("NetCatScrollBarTrackBrush", CreateFrozenBrush(Color.FromArgb(48, accentColor.R, accentColor.G, accentColor.B)));
+        SetThemeResource("NetCatScrollBarThumbBrush", CreateFrozenBrush(Color.FromArgb(200, accentColor.R, accentColor.G, accentColor.B)));
+        SetThemeResource("NetCatScrollBarThumbBorderBrush", CreateFrozenBrush(accentColor.Lighten()));
+        SetThemeResource("NetCatScrollBarThumbHoverBrush", CreateFrozenBrush(accentColor.Lighten()));
+        SetThemeResource("NetCatScrollBarThumbDragBrush", CreateFrozenBrush(accentColor.Darken()));
+        SetThemeResource("NetCatHeroGradientBrush", CreateFrozenGradientBrush(variant.HeroStartColor, variant.HeroEndColor));
         Background = CreateFrozenBrush(variant.WindowBackgroundColor);
+    }
+
+    private void SetThemeResource(string key, object value)
+    {
+        Resources[key] = value;
+        if (Application.Current != null)
+        {
+            Application.Current.Resources[key] = value;
+        }
     }
 
     private static SolidColorBrush CreateFrozenBrush(Color color)
