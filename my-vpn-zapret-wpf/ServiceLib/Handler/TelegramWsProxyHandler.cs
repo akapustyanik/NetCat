@@ -19,6 +19,8 @@ public static class TelegramWsProxyHandler
     private const string DefaultHost = "127.0.0.1";
     private const int DefaultPort = 1080;
     private const string EmbeddedDisplayPath = "embedded://telegram-ws-proxy";
+    private static readonly string ImplementationName = NetCatVersionInfo.TelegramWsProxyImplementation;
+    private static readonly int ConfigSchemaVersion = NetCatVersionInfo.TelegramWsProxySchemaVersion;
     private static readonly byte[] Zero64 = new byte[64];
     private static readonly HashSet<uint> ValidProtocols = [0xEFEFEFEF, 0xEEEEEEEE, 0xDDDDDDDD];
 
@@ -86,10 +88,27 @@ public static class TelegramWsProxyHandler
         "cdn-telegram.org",
         "tg.dev"
     ];
-    private static readonly string[] DefaultDcIpEntries =
+    private static readonly string[] BundledDefaultDcIpEntries =
     [
+        "1:149.154.175.50",
+        "1:149.154.175.51",
+        "1:149.154.175.53",
+        "1:149.154.175.54",
         "2:149.154.167.220",
-        "4:149.154.167.220"
+        "2:149.154.167.41",
+        "2:149.154.167.50",
+        "2:149.154.167.51",
+        "2:95.161.76.100",
+        "3:149.154.175.100",
+        "3:149.154.175.101",
+        "4:149.154.167.220",
+        "4:149.154.167.91",
+        "4:149.154.167.92",
+        "5:91.108.56.100",
+        "5:91.108.56.101",
+        "5:91.108.56.116",
+        "5:91.108.56.126",
+        "5:149.154.171.5"
     ];
     private static readonly HttpClient DnsHttpClient = CreateDnsHttpClient();
 
@@ -97,7 +116,32 @@ public static class TelegramWsProxyHandler
     private static TcpListener? _listener;
     private static Task? _serverTask;
     private static string _lastError = string.Empty;
+    private static string _lastWsDomain = string.Empty;
+    private static string _lastTargetIp = string.Empty;
+    private static string _lastRoute = "idle";
+    private static int _lastDc;
+    private static DateTimeOffset? _lastActivityUtc;
     private static long _activeConnections;
+    private static long _acceptedConnections;
+    private static long _passthroughConnections;
+    private static long _tcpFallbackConnections;
+    private static long _webSocketSuccessConnections;
+    private static long _webSocketAttemptCount;
+
+    public sealed class TelegramWsProxyConfigSnapshot
+    {
+        public string Host { get; init; } = DefaultHost;
+        public int Port { get; init; } = DefaultPort;
+        public IReadOnlyList<string> UserDcIps { get; init; } = [];
+        public IReadOnlyList<string> BundledDcIps { get; init; } = [];
+    }
+
+    public sealed class TelegramWsProxyProbeResult
+    {
+        public bool Success { get; init; }
+        public string Status { get; init; } = string.Empty;
+        public string Summary { get; init; } = string.Empty;
+    }
 
     public static string GetBundleDirectory()
     {
@@ -140,13 +184,224 @@ public static class TelegramWsProxyHandler
             : "Telegram идёт через VPN-маршрутизацию NetCat.";
     }
 
+    public static string GetEmbeddedRevisionDisplay()
+    {
+        return NetCatVersionInfo.TelegramWsProxyDisplay;
+    }
+
     public static string GetRuntimeSummary(string? trafficMode)
     {
+        var config = LoadConfig();
         var address = GetConfiguredAddress();
         var state = IsRunning() ? "running" : "stopped";
         var mode = IsLocalSocksMode(trafficMode) ? "embedded" : "disabled";
+        var lastSeen = _lastActivityUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "none";
+        var lastDomain = _lastWsDomain.IsNullOrEmpty() ? "-" : _lastWsDomain;
+        var lastTargetIp = _lastTargetIp.IsNullOrEmpty() ? "-" : _lastTargetIp;
+        var lastDc = _lastDc > 0 ? _lastDc.ToString() : "-";
         var suffix = _lastError.IsNullOrEmpty() ? string.Empty : $" | last_error={_lastError}";
-        return $"TG WS Proxy: {mode}/{state} | {address.Host}:{address.Port} | connections={Interlocked.Read(ref _activeConnections)}{suffix}";
+        return $"TG WS Proxy: {mode}/{state} rev={GetEmbeddedRevisionDisplay()} schema={config.SchemaVersion} | {address.Host}:{address.Port} | active={Interlocked.Read(ref _activeConnections)} total={Interlocked.Read(ref _acceptedConnections)} ws_ok={Interlocked.Read(ref _webSocketSuccessConnections)} ws_try={Interlocked.Read(ref _webSocketAttemptCount)} tcp_fallback={Interlocked.Read(ref _tcpFallbackConnections)} passthrough={Interlocked.Read(ref _passthroughConnections)} dc_user={config.CountUserDcIpEntries()} dc_bundled={config.CountBundledDcIpEntries()} dc_effective={config.CountConfiguredDcIpEntries()} | last_route={_lastRoute} dc={lastDc} host={lastDomain} ip={lastTargetIp} at={lastSeen}{suffix}";
+    }
+
+    public static string GetUiDiagnosticsSummary(string? trafficMode)
+    {
+        var config = LoadConfig();
+        var address = GetConfiguredAddress();
+        var state = IsRunning() ? "running" : "stopped";
+        var mode = IsLocalSocksMode(trafficMode) ? "local-socks" : "vpn";
+        var lastSeen = _lastActivityUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "none";
+        var lastDomain = _lastWsDomain.IsNullOrEmpty() ? "-" : _lastWsDomain;
+        var lastTargetIp = _lastTargetIp.IsNullOrEmpty() ? "-" : _lastTargetIp;
+        var lastDc = _lastDc > 0 ? _lastDc.ToString() : "-";
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"Режим: {mode}");
+        sb.AppendLine($"Локальный listener: {address.Host}:{address.Port} ({state})");
+        sb.AppendLine($"Ревизия: {GetEmbeddedRevisionDisplay()}");
+        sb.AppendLine($"Схема конфига: {config.SchemaVersion}");
+        sb.AppendLine($"DC IP overrides: user={config.CountUserDcIpEntries()}, bundled={config.CountBundledDcIpEntries()}, effective={config.CountConfiguredDcIpEntries()}");
+        sb.AppendLine($"Сессии: active={Interlocked.Read(ref _activeConnections)}, total={Interlocked.Read(ref _acceptedConnections)}");
+        sb.AppendLine($"Маршруты: ws_ok={Interlocked.Read(ref _webSocketSuccessConnections)}, ws_try={Interlocked.Read(ref _webSocketAttemptCount)}, tcp_fallback={Interlocked.Read(ref _tcpFallbackConnections)}, passthrough={Interlocked.Read(ref _passthroughConnections)}");
+        sb.AppendLine($"Последний маршрут: {_lastRoute}");
+        sb.AppendLine($"Последняя цель: dc={lastDc}, host={lastDomain}, ip={lastTargetIp}");
+        sb.AppendLine($"Последняя активность: {lastSeen}");
+        if (_lastError.IsNotEmpty())
+        {
+            sb.AppendLine($"Последняя ошибка: {_lastError}");
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
+    public static TelegramWsProxyConfigSnapshot GetConfigSnapshot()
+    {
+        var config = LoadConfig();
+        return new TelegramWsProxyConfigSnapshot
+        {
+            Host = config.Host,
+            Port = config.Port,
+            UserDcIps = config.GetUserDcIpEntriesSnapshot(),
+            BundledDcIps = config.GetBundledDcIpEntriesSnapshot()
+        };
+    }
+
+    public static bool TrySaveConfig(string host, int port, IEnumerable<string>? dcIps, out string error)
+    {
+        error = string.Empty;
+
+        if (!IPAddress.TryParse(host, out var parsedHost) || parsedHost.AddressFamily != AddressFamily.InterNetwork)
+        {
+            error = "Telegram proxy host must be a valid IPv4 address.";
+            return false;
+        }
+
+        if (port is <= 0 or > 65535)
+        {
+            error = "Telegram proxy port must be between 1 and 65535.";
+            return false;
+        }
+
+        if (!TryNormalizeUserDcIpEntries(dcIps, out var normalizedDcIps, out error))
+        {
+            return false;
+        }
+
+        var config = new TelegramWsProxyConfig
+        {
+            SchemaVersion = ConfigSchemaVersion,
+            Host = parsedHost.ToString(),
+            Port = port,
+            DcIps = normalizedDcIps
+        }.Normalize();
+
+        try
+        {
+            PersistConfig(config);
+
+            if (IsRunning())
+            {
+                Stop();
+                if (!TryStart(out var restartError))
+                {
+                    error = restartError.IsNullOrEmpty()
+                        ? "Config saved, but failed to restart Telegram local SOCKS listener."
+                        : $"Config saved, but listener restart failed: {restartError}";
+                    return false;
+                }
+            }
+
+            _lastError = string.Empty;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            Logging.SaveLog("TelegramWsProxyHandler", ex);
+            return false;
+        }
+    }
+
+    public static bool TryResetConfig(out string error)
+    {
+        return TrySaveConfig(DefaultHost, DefaultPort, [], out error);
+    }
+
+    public static async Task<TelegramWsProxyProbeResult> ProbeAsync(CancellationToken cancellationToken = default)
+    {
+        var address = GetConfiguredAddress();
+        var snapshot = GetConfigSnapshot();
+        var targetIp = snapshot.UserDcIps
+            .Concat(snapshot.BundledDcIps)
+            .Select(entry => entry.Split(':', 2, StringSplitOptions.TrimEntries))
+            .Where(parts => parts.Length == 2 && parts[1].IsNotEmpty())
+            .Select(parts => parts[1])
+            .FirstOrDefault()
+            ?? "149.154.167.220";
+
+        var startedTemporarily = false;
+        try
+        {
+            if (!IsRunning())
+            {
+                if (!TryStart(out var startError))
+                {
+                    return new TelegramWsProxyProbeResult
+                    {
+                        Success = false,
+                        Status = "listener-start-failed",
+                        Summary = startError.IsNullOrEmpty()
+                            ? "Telegram proxy probe failed: listener did not start."
+                            : $"Telegram proxy probe failed: {startError}"
+                    };
+                }
+
+                startedTemporarily = true;
+                await Task.Delay(250, cancellationToken);
+            }
+
+            var acceptedBefore = Interlocked.Read(ref _acceptedConnections);
+            var wsBefore = Interlocked.Read(ref _webSocketAttemptCount);
+            var tcpFallbackBefore = Interlocked.Read(ref _tcpFallbackConnections);
+            var previousRoute = _lastRoute;
+
+            using var probeCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            probeCts.CancelAfter(TimeSpan.FromSeconds(12));
+            await RunProbeThroughLocalSocksAsync(address.Host, address.Port, targetIp, probeCts.Token);
+
+            var deadline = DateTimeOffset.UtcNow.AddSeconds(4);
+            while (DateTimeOffset.UtcNow < deadline)
+            {
+                var route = _lastRoute;
+                var hasAccepted = Interlocked.Read(ref _acceptedConnections) > acceptedBefore;
+                var hasAttemptedWs = Interlocked.Read(ref _webSocketAttemptCount) > wsBefore;
+                var hasTcpFallback = Interlocked.Read(ref _tcpFallbackConnections) > tcpFallbackBefore;
+                if (hasAccepted && (hasAttemptedWs || hasTcpFallback || !string.Equals(route, previousRoute, StringComparison.Ordinal)))
+                {
+                    break;
+                }
+
+                await Task.Delay(150, probeCts.Token);
+            }
+
+            var lastRoute = _lastRoute;
+            var success = lastRoute is "ws" or "tcp-fallback" or "ws->tcp-fallback";
+            var details = $"route={lastRoute}, last_error={(_lastError.IsNullOrEmpty() ? "none" : _lastError)}, target={targetIp}";
+            return new TelegramWsProxyProbeResult
+            {
+                Success = success,
+                Status = success ? "ok" : "degraded",
+                Summary = success
+                    ? $"Telegram proxy probe passed: {details}"
+                    : $"Telegram proxy probe did not confirm a working data path: {details}"
+            };
+        }
+        catch (OperationCanceledException)
+        {
+            return new TelegramWsProxyProbeResult
+            {
+                Success = false,
+                Status = "timeout",
+                Summary = "Telegram proxy probe timed out."
+            };
+        }
+        catch (Exception ex)
+        {
+            _lastError = ex.Message;
+            Logging.SaveLog("TelegramWsProxyHandler", ex);
+            return new TelegramWsProxyProbeResult
+            {
+                Success = false,
+                Status = "error",
+                Summary = $"Telegram proxy probe failed: {ex.Message}"
+            };
+        }
+        finally
+        {
+            if (startedTemporarily)
+            {
+                Stop();
+            }
+        }
     }
 
     public static bool TryStart(out string error)
@@ -295,6 +550,8 @@ public static class TelegramWsProxyHandler
 
     private static async Task HandleClientAsync(TcpClient client, CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref _acceptedConnections);
+        _lastActivityUtc = DateTimeOffset.UtcNow;
         Interlocked.Increment(ref _activeConnections);
         try
         {
@@ -405,6 +662,12 @@ public static class TelegramWsProxyHandler
 
     private static async Task HandlePassthroughAsync(NetworkStream clientStream, string destinationIp, int destinationPort, CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref _passthroughConnections);
+        _lastRoute = "passthrough";
+        _lastTargetIp = destinationIp;
+        _lastWsDomain = string.Empty;
+        _lastDc = 0;
+        _lastActivityUtc = DateTimeOffset.UtcNow;
         using var remoteClient = new TcpClient();
         remoteClient.NoDelay = true;
         await remoteClient.ConnectAsync(destinationIp, destinationPort, cancellationToken);
@@ -415,6 +678,11 @@ public static class TelegramWsProxyHandler
 
     private static async Task HandleTcpFallbackAsync(NetworkStream clientStream, string destinationIp, int destinationPort, byte[] initPacket, CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref _tcpFallbackConnections);
+        _lastRoute = "tcp-fallback";
+        _lastTargetIp = destinationIp;
+        _lastWsDomain = string.Empty;
+        _lastActivityUtc = DateTimeOffset.UtcNow;
         using var remoteClient = new TcpClient();
         remoteClient.NoDelay = true;
         await remoteClient.ConnectAsync(destinationIp, destinationPort, cancellationToken);
@@ -426,22 +694,39 @@ public static class TelegramWsProxyHandler
 
     private static async Task<bool> TryHandleTelegramWebSocketAsync(NetworkStream clientStream, string destinationIp, int destinationPort, byte[] initPacket, int dc, bool isMedia, AbridgedMessageSplitter? splitter, CancellationToken cancellationToken)
     {
-        var targetIp = ResolveTargetDcIp(dc, destinationIp);
-        foreach (var domain in GetWsDomains(dc, isMedia))
+        foreach (var targetIp in ResolveTargetDcIps(dc, isMedia, destinationIp))
         {
-            try
+            foreach (var domain in GetWsDomains(dc, isMedia))
             {
-                await using var webSocket = await RawWebSocket.ConnectAsync(targetIp, domain, cancellationToken);
-                await webSocket.SendBinaryAsync(initPacket, cancellationToken);
-                await BridgeWebSocketAsync(clientStream, webSocket, splitter, cancellationToken);
-                return true;
-            }
-            catch (Exception ex) when (ex is IOException or SocketException or AuthenticationException or TaskCanceledException)
-            {
-                _lastError = $"{domain} via {targetIp}: {ex.Message}";
+                try
+                {
+                    Interlocked.Increment(ref _webSocketAttemptCount);
+                    _lastRoute = "ws-connect";
+                    _lastDc = dc;
+                    _lastTargetIp = targetIp;
+                    _lastWsDomain = domain;
+                    _lastActivityUtc = DateTimeOffset.UtcNow;
+
+                    await using var webSocket = await RawWebSocket.ConnectAsync(targetIp, domain, cancellationToken);
+                    await webSocket.SendBinaryAsync(initPacket, cancellationToken);
+                    Interlocked.Increment(ref _webSocketSuccessConnections);
+                    _lastRoute = "ws";
+                    _lastError = string.Empty;
+                    await BridgeWebSocketAsync(clientStream, webSocket, splitter, cancellationToken);
+                    return true;
+                }
+                catch (Exception ex) when (ex is IOException or SocketException or AuthenticationException or TaskCanceledException)
+                {
+                    _lastError = $"{domain} via {targetIp}: {ex.Message}";
+                }
             }
         }
 
+        _lastDc = dc;
+        _lastTargetIp = destinationIp;
+        _lastWsDomain = string.Empty;
+        _lastRoute = "ws->tcp-fallback";
+        _lastActivityUtc = DateTimeOffset.UtcNow;
         _lastError = $"WS fallback to TCP for {destinationIp}:{destinationPort}";
         return false;
     }
@@ -726,10 +1011,55 @@ public static class TelegramWsProxyHandler
             : [$"kws{resolvedDc}.web.telegram.org", $"kws{resolvedDc}-1.web.telegram.org"];
     }
 
-    private static string ResolveTargetDcIp(int dc, string destinationIp)
+    private static string[] ResolveTargetDcIps(int dc, bool isMedia, string destinationIp)
     {
-        var configuredDcIps = LoadConfig().GetDcIpMap();
-        return configuredDcIps.TryGetValue(dc, out var targetIp) ? targetIp : destinationIp;
+        var candidates = new List<string>();
+        var config = LoadConfig();
+
+        foreach (var configuredIp in config.GetDcIpCandidates(dc))
+        {
+            AddUniqueCandidateIp(candidates, configuredIp);
+        }
+
+        if (IpToDc.TryGetValue(destinationIp, out var destinationDcInfo)
+            && destinationDcInfo.Dc == dc
+            && destinationDcInfo.IsMedia == isMedia)
+        {
+            AddUniqueCandidateIp(candidates, destinationIp);
+        }
+
+        foreach (var knownIp in GetKnownDcIpCandidates(dc, isMedia))
+        {
+            AddUniqueCandidateIp(candidates, knownIp);
+        }
+
+        AddUniqueCandidateIp(candidates, destinationIp);
+
+        return candidates.Count > 0 ? candidates.ToArray() : [destinationIp];
+    }
+
+    private static IEnumerable<string> GetKnownDcIpCandidates(int dc, bool isMedia)
+    {
+        return IpToDc
+            .Where(entry => entry.Value.Dc == dc && entry.Value.IsMedia == isMedia)
+            .Select(entry => entry.Key);
+    }
+
+    private static void AddUniqueCandidateIp(ICollection<string> candidates, string? ip)
+    {
+        if (ip.IsNullOrEmpty()
+            || !IPAddress.TryParse(ip, out var parsed)
+            || parsed.AddressFamily != AddressFamily.InterNetwork
+            || IsPoisonedAddress(ip))
+        {
+            return;
+        }
+
+        var normalizedIp = parsed.ToString();
+        if (!candidates.Any(candidate => string.Equals(candidate, normalizedIp, StringComparison.OrdinalIgnoreCase)))
+        {
+            candidates.Add(normalizedIp);
+        }
     }
 
     private static byte[] PatchInitPacketDc(byte[] initPacket, int dc, bool isMedia)
@@ -773,12 +1103,22 @@ public static class TelegramWsProxyHandler
         {
             EnsureConfigFile();
             var json = File.ReadAllText(GetConfigPath());
-            return JsonSerializer.Deserialize<TelegramWsProxyConfig>(json) ?? TelegramWsProxyConfig.CreateDefault();
+            return (JsonSerializer.Deserialize<TelegramWsProxyConfig>(json) ?? TelegramWsProxyConfig.CreateDefault()).Normalize();
         }
         catch
         {
-            return TelegramWsProxyConfig.CreateDefault();
+            return TelegramWsProxyConfig.CreateDefault().Normalize();
         }
+    }
+
+    private static void PersistConfig(TelegramWsProxyConfig config)
+    {
+        Directory.CreateDirectory(GetAppDataDirectory());
+        var json = JsonSerializer.Serialize(config.Normalize(), new JsonSerializerOptions
+        {
+            WriteIndented = true
+        });
+        File.WriteAllText(GetConfigPath(), json);
     }
 
     private static void EnsureConfigFile()
@@ -787,12 +1127,115 @@ public static class TelegramWsProxyHandler
         var configPath = GetConfigPath();
         if (!File.Exists(configPath))
         {
-            var json = JsonSerializer.Serialize(TelegramWsProxyConfig.CreateDefault(), new JsonSerializerOptions
-            {
-                WriteIndented = true
-            });
-            File.WriteAllText(configPath, json);
+            PersistConfig(TelegramWsProxyConfig.CreateDefault());
         }
+    }
+
+    private static bool TryNormalizeUserDcIpEntries(IEnumerable<string>? rawEntries, out List<string> normalizedEntries, out string error)
+    {
+        normalizedEntries = [];
+        error = string.Empty;
+
+        foreach (var rawEntry in rawEntries ?? [])
+        {
+            var entry = rawEntry.Trim();
+            if (entry.IsNullOrEmpty())
+            {
+                continue;
+            }
+
+            var parts = entry.Split(':', 2, StringSplitOptions.TrimEntries);
+            if (parts.Length != 2 || !int.TryParse(parts[0], out var dc) || dc <= 0)
+            {
+                error = $"Invalid Telegram DC override '{entry}'. Expected format: dc:ip";
+                return false;
+            }
+
+            if (!IPAddress.TryParse(parts[1], out var address) || address.AddressFamily != AddressFamily.InterNetwork)
+            {
+                error = $"Invalid Telegram DC override IP in '{entry}'.";
+                return false;
+            }
+
+            var normalizedEntry = $"{dc}:{address}";
+            if (!normalizedEntries.Any(existing => string.Equals(existing, normalizedEntry, StringComparison.OrdinalIgnoreCase)))
+            {
+                normalizedEntries.Add(normalizedEntry);
+            }
+        }
+
+        return true;
+    }
+
+    private static async Task RunProbeThroughLocalSocksAsync(string socksHost, int socksPort, string targetIp, CancellationToken cancellationToken)
+    {
+        using var tcpClient = new TcpClient();
+        tcpClient.NoDelay = true;
+        await tcpClient.ConnectAsync(socksHost, socksPort, cancellationToken);
+        await using var stream = tcpClient.GetStream();
+
+        await stream.WriteAsync(new byte[] { 0x05, 0x01, 0x00 }, cancellationToken);
+        var methodReply = await ReadExactlyAsync(stream, 2, cancellationToken);
+        if (methodReply[0] != 0x05 || methodReply[1] != 0x00)
+        {
+            throw new IOException($"Unexpected SOCKS greeting reply: {BitConverter.ToString(methodReply)}");
+        }
+
+        var ipBytes = IPAddress.Parse(targetIp).GetAddressBytes();
+        var request = new byte[10];
+        request[0] = 0x05;
+        request[1] = 0x01;
+        request[2] = 0x00;
+        request[3] = 0x01;
+        Buffer.BlockCopy(ipBytes, 0, request, 4, ipBytes.Length);
+        request[8] = 0x01;
+        request[9] = 0xBB;
+        await stream.WriteAsync(request, cancellationToken);
+
+        await ReadSocksConnectReplyAsync(stream, cancellationToken);
+
+        var probeInit = CreateProbeInitPacket(2, isMedia: false);
+        await stream.WriteAsync(probeInit, cancellationToken);
+        await stream.FlushAsync(cancellationToken);
+    }
+
+    private static async Task ReadSocksConnectReplyAsync(NetworkStream stream, CancellationToken cancellationToken)
+    {
+        var header = await ReadExactlyAsync(stream, 4, cancellationToken);
+        if (header[0] != 0x05 || header[1] != 0x00)
+        {
+            throw new IOException($"SOCKS connect failed with reply code 0x{header[1]:X2}");
+        }
+
+        var addressLength = header[3] switch
+        {
+            0x01 => 4,
+            0x04 => 16,
+            0x03 => (await ReadExactlyAsync(stream, 1, cancellationToken))[0],
+            _ => throw new IOException($"Unsupported SOCKS ATYP: 0x{header[3]:X2}")
+        };
+
+        _ = await ReadExactlyAsync(stream, addressLength + 2, cancellationToken);
+    }
+
+    private static byte[] CreateProbeInitPacket(int dc, bool isMedia)
+    {
+        var packet = new byte[64];
+        RandomNumberGenerator.Fill(packet);
+
+        Span<byte> plain = stackalloc byte[8];
+        BinaryPrimitives.WriteUInt32LittleEndian(plain, 0xEFEFEFEF);
+        BinaryPrimitives.WriteInt16LittleEndian(plain.Slice(4, 2), (short)(isMedia ? dc : -dc));
+
+        var key = packet.AsSpan(8, 32).ToArray();
+        var iv = packet.AsSpan(40, 16).ToArray();
+        var keystream = TransformCtr(key, iv, Zero64);
+        for (var i = 0; i < plain.Length; i++)
+        {
+            packet[56 + i] = (byte)(plain[i] ^ keystream[56 + i]);
+        }
+
+        return packet;
     }
 
     private static (int Dc, bool IsMedia)? TryResolveDcInfo(string resolvedAddress, byte[] initPacket)
@@ -1279,20 +1722,104 @@ public static class TelegramWsProxyHandler
 
     private sealed class TelegramWsProxyConfig
     {
+        public int SchemaVersion { get; set; } = ConfigSchemaVersion;
         public string Host { get; set; } = DefaultHost;
         public int Port { get; set; } = DefaultPort;
-        public List<string>? DcIps { get; set; } = DefaultDcIpEntries.ToList();
+        public List<string>? DcIps { get; set; } = [];
 
         public static TelegramWsProxyConfig CreateDefault()
         {
             return new TelegramWsProxyConfig();
         }
 
-        public Dictionary<int, string> GetDcIpMap()
+        public TelegramWsProxyConfig Normalize()
         {
-            var map = new Dictionary<int, string>();
-            IEnumerable<string> entries = DcIps?.ToArray() ?? DefaultDcIpEntries;
-            foreach (var entry in entries)
+            var incomingSchemaVersion = SchemaVersion > 0 ? SchemaVersion : 1;
+            Host = IPAddress.TryParse(Host, out var parsedHost) && parsedHost.AddressFamily == AddressFamily.InterNetwork
+                ? parsedHost.ToString()
+                : DefaultHost;
+            Port = Port is > 0 and <= 65535 ? Port : DefaultPort;
+            var userEntries = NormalizeEntries(DcIps);
+            if (incomingSchemaVersion < ConfigSchemaVersion && IsLegacyBundledDefaultSet(userEntries))
+            {
+                userEntries = [];
+            }
+
+            SchemaVersion = ConfigSchemaVersion;
+            DcIps = userEntries;
+            return this;
+        }
+
+        public int CountConfiguredDcIpEntries()
+        {
+            return GetEffectiveDcIpEntries().Count;
+        }
+
+        public int CountUserDcIpEntries()
+        {
+            return GetUserDcIpEntries().Count;
+        }
+
+        public int CountBundledDcIpEntries()
+        {
+            return GetBundledDcIpEntries().Count;
+        }
+
+        public IReadOnlyList<string> GetUserDcIpEntriesSnapshot()
+        {
+            return GetUserDcIpEntries().ToList();
+        }
+
+        public IReadOnlyList<string> GetBundledDcIpEntriesSnapshot()
+        {
+            return GetBundledDcIpEntries().ToList();
+        }
+
+        public IReadOnlyList<string> GetDcIpCandidates(int dc)
+        {
+            return GetEffectiveDcIpEntries()
+                .Select(entry => entry.Split(':', 2, StringSplitOptions.TrimEntries))
+                .Where(parts => parts.Length == 2 && int.TryParse(parts[0], out var parsedDc) && parsedDc == dc)
+                .Select(parts => parts[1])
+                .ToList();
+        }
+
+        private IReadOnlyList<string> GetUserDcIpEntries()
+        {
+            return NormalizeEntries(DcIps);
+        }
+
+        private static IReadOnlyList<string> GetBundledDcIpEntries()
+        {
+            return NormalizeEntries(BundledDefaultDcIpEntries);
+        }
+
+        private List<string> GetEffectiveDcIpEntries()
+        {
+            var entries = new List<string>();
+            foreach (var entry in GetUserDcIpEntries())
+            {
+                if (!entries.Any(existing => string.Equals(existing, entry, StringComparison.OrdinalIgnoreCase)))
+                {
+                    entries.Add(entry);
+                }
+            }
+
+            foreach (var entry in GetBundledDcIpEntries())
+            {
+                if (!entries.Any(existing => string.Equals(existing, entry, StringComparison.OrdinalIgnoreCase)))
+                {
+                    entries.Add(entry);
+                }
+            }
+
+            return entries;
+        }
+
+        private static List<string> NormalizeEntries(IEnumerable<string>? rawEntries)
+        {
+            var entries = new List<string>();
+            foreach (var entry in rawEntries ?? [])
             {
                 var parts = entry.Split(':', 2, StringSplitOptions.TrimEntries);
                 if (parts.Length != 2 || !int.TryParse(parts[0], out var dc) || !IPAddress.TryParse(parts[1], out var address) || address.AddressFamily != AddressFamily.InterNetwork)
@@ -1300,10 +1827,33 @@ public static class TelegramWsProxyHandler
                     continue;
                 }
 
-                map[dc] = address.ToString();
+                var normalizedEntry = $"{dc}:{address}";
+                if (!entries.Any(existing => string.Equals(existing, normalizedEntry, StringComparison.OrdinalIgnoreCase)))
+                {
+                    entries.Add(normalizedEntry);
+                }
             }
 
-            return map;
+            return entries;
+        }
+
+        private static bool IsLegacyBundledDefaultSet(IReadOnlyCollection<string> userEntries)
+        {
+            var bundledEntries = GetBundledDcIpEntries();
+            if (userEntries.Count != bundledEntries.Count)
+            {
+                return false;
+            }
+
+            foreach (var bundledEntry in bundledEntries)
+            {
+                if (!userEntries.Any(entry => string.Equals(entry, bundledEntry, StringComparison.OrdinalIgnoreCase)))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
     }
 }

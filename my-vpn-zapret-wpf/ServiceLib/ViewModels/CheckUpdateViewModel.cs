@@ -6,7 +6,6 @@ public class CheckUpdateViewModel : MyReactiveObject
 {
     private const string _geo = "GeoFiles";
     private const string _zapret = "Zapret";
-    private const string _telegramWsProxy = "TelegramWsProxy";
     private static readonly string[] _retryFailureMarkers =
     [
         "failed",
@@ -89,7 +88,6 @@ public class CheckUpdateViewModel : MyReactiveObject
         if (RuntimeInformation.ProcessArchitecture != Architecture.X86)
         {
             CheckUpdateModels.Add(GetCheckUpdateModel(_v2rayN));
-            CheckUpdateModels.Add(GetCheckUpdateModel(_telegramWsProxy));
             //Not Windows and under Win10
             if (!(Utils.IsWindows() && Environment.OSVersion.Version.Major < 10))
             {
@@ -104,27 +102,6 @@ public class CheckUpdateViewModel : MyReactiveObject
 
     private CheckUpdateModel GetCheckUpdateModel(string coreType)
     {
-        if (coreType == _telegramWsProxy)
-        {
-            return new()
-            {
-                IsSelected = false,
-                CoreType = coreType,
-                DisplayName = "Telegram WS Proxy",
-                CanUseLocalPackage = false,
-                Hint = GetModuleHint(coreType),
-                Remarks = "Embedded into NetCat and updated together with the NetCat package.",
-                CurrentVersion = "loading...",
-                LatestVersion = string.Empty,
-                StatusLabel = "Bundled",
-                StatusTone = "success",
-                ShowStatusLabel = true,
-                ShowLatestVersion = false,
-                ActionLabel = "Update",
-                CanRunUpdate = false,
-            };
-        }
-
         if (coreType == _v2rayN && Utils.IsPackagedInstall())
         {
             return new()
@@ -903,7 +880,6 @@ public class CheckUpdateViewModel : MyReactiveObject
         {
             "GeoFiles" => GetResourceText("UpdateHintGeoFiles", "Geo databases and sing-box rule sets used by routing and DNS."),
             "Zapret" => GetResourceText("UpdateHintZapret", "Zapret bundle with winws, service.bat and bundled DPI bypass presets."),
-            "TelegramWsProxy" => "Embedded Telegram local SOCKS5 to WebSocket bridge. It does not have a separate auto-update path and ships with NetCat releases.",
             "Xray" => GetResourceText("UpdateHintXray", "Xray core used for proxy protocols and connections."),
             "mihomo" => GetResourceText("UpdateHintMihomo", "Mihomo core used for Clash-compatible profiles and rule processing."),
             "sing_box" => GetResourceText("UpdateHintSingBox", "sing-box core used for sing-box profiles, DNS and rule sets."),

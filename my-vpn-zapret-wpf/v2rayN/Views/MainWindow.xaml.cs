@@ -45,6 +45,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     private readonly DispatcherTimer _connectionPingTimer;
     private bool _closing;
     private bool _isPickingCustomColor;
+    private bool _isPickingInterfaceColor;
     private bool _isUpdatingConnectionPing;
     private bool _isRefreshingZapretConfigs;
     private bool _isSwitchingZapretConfig;
@@ -284,8 +285,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         {
             if (SetField(ref _telegramUseLocalSocks, value))
             {
-                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TelegramTrafficSummary)));
-                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TelegramTrafficModeLabel)));
+                NotifyTelegramStateChanged();
             }
         }
     }
@@ -435,6 +435,51 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     public double CustomColorCursorLeft => Math.Clamp(CustomSaturation * CustomColorPlaneWidth - 6, -6, CustomColorPlaneWidth - 6);
     public double CustomColorCursorTop => Math.Clamp((1 - CustomValue) * CustomColorPlaneHeight - 6, -6, CustomColorPlaneHeight - 6);
 
+    private double _interfaceHue = 220;
+    public double InterfaceHue
+    {
+        get => _interfaceHue;
+        set
+        {
+            if (SetField(ref _interfaceHue, value))
+            {
+                NotifyInterfaceColorStateChanged();
+            }
+        }
+    }
+
+    private double _interfaceSaturation = 0.55;
+    public double InterfaceSaturation
+    {
+        get => _interfaceSaturation;
+        set
+        {
+            if (SetField(ref _interfaceSaturation, value))
+            {
+                NotifyInterfaceColorStateChanged();
+            }
+        }
+    }
+
+    private double _interfaceValue = 0.18;
+    public double InterfaceValue
+    {
+        get => _interfaceValue;
+        set
+        {
+            if (SetField(ref _interfaceValue, value))
+            {
+                NotifyInterfaceColorStateChanged();
+            }
+        }
+    }
+
+    public Brush InterfaceBaseBrush => new SolidColorBrush(ColorFromHsv(InterfaceHue, 1, 1));
+    public Brush InterfacePreviewBrush => new SolidColorBrush(GetSelectedInterfaceColor());
+    public string InterfaceColorHex => $"#{GetSelectedInterfaceColor().R:X2}{GetSelectedInterfaceColor().G:X2}{GetSelectedInterfaceColor().B:X2}";
+    public double InterfaceColorCursorLeft => Math.Clamp(InterfaceSaturation * CustomColorPlaneWidth - 6, -6, CustomColorPlaneWidth - 6);
+    public double InterfaceColorCursorTop => Math.Clamp((1 - InterfaceValue) * CustomColorPlaneHeight - 6, -6, CustomColorPlaneHeight - 6);
+
     private string _connectionPing = "Connection ping: --";
     public string ConnectionPing
     {
@@ -497,9 +542,6 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         UseProxyDomainsPreset = _quickRules.UseProxyDomainsPreset;
         TelegramUseLocalSocks = TelegramWsProxyHandler.IsLocalSocksMode(_quickRules.TelegramTrafficMode);
         TunEnabled = _config.TunModeItem.EnableTun;
-        LoadInterfaceVariants();
-        SelectedInterfaceVariant = InterfaceVariants.FirstOrDefault(t => string.Equals(t.Key, _config.UiItem.MainWindowPreset, StringComparison.OrdinalIgnoreCase))
-            ?? InterfaceVariants.FirstOrDefault();
         LoadCustomAppearance();
         ApplyAppearance();
         LoadQuickLists();
@@ -710,6 +752,12 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         UpdateTrayToolTip();
     }
 
+    private void NotifyTelegramStateChanged()
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TelegramTrafficSummary)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TelegramTrafficModeLabel)));
+    }
+
     private void SetZapretStatus(string message)
     {
         ZapretStatus = message;
@@ -720,6 +768,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         SystemStatusSummary = await BuildSystemStatusSummaryAsync();
         DataLayoutSummary = BuildDataLayoutSummary();
         DiagnosticOverview = await BuildDiagnosticOverviewAsync();
+        NotifyTelegramStateChanged();
 
         if (refreshDebugLog || string.IsNullOrWhiteSpace(DebugLog))
         {
@@ -738,7 +787,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         sb.AppendLine($"Temp folder: {Utils.GetTempPath()}");
         sb.AppendLine($"Generated configs: {Utils.GetBinConfigPath()}");
         sb.AppendLine($"Updater: {Utils.GetUpgradeAppPath()}");
-        sb.AppendLine("TG WS Proxy: embedded in NetCat");
+        sb.AppendLine($"TG WS Proxy: embedded in NetCat ({TelegramWsProxyHandler.GetEmbeddedRevisionDisplay()})");
         return sb.ToString().TrimEnd();
     }
 
@@ -1008,12 +1057,6 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         await EnsureTelegramTrafficModeAsync(openInTelegram: TelegramUseLocalSocks);
     }
 
-    private void OnOpenTelegramProxyInTelegram(object sender, RoutedEventArgs e)
-    {
-        TelegramWsProxyHandler.OpenInTelegram();
-        SetStatus("Открыта настройка SOCKS5 в Telegram.");
-    }
-
     private async void OnToggleMainVpn(object sender, RoutedEventArgs e)
     {
         if (_suppressConnectionToggleEvents)
@@ -1083,34 +1126,6 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             : "Preset blocked domains list disabled");
     }
 
-    private async void OnPrimaryColorChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
-    {
-        UseCustomPrimaryColor = true;
-        ApplyAppearance();
-        await ConfigHandler.SaveConfig(_config);
-        SetStatus($"Accent color set to {CustomPrimaryColorHex}");
-    }
-
-    private async void OnUseCustomPrimaryColorChanged(object sender, RoutedEventArgs e)
-    {
-        UseCustomPrimaryColor = true;
-        ApplyAppearance();
-        await ConfigHandler.SaveConfig(_config);
-        SetStatus($"Accent color set to {CustomPrimaryColorHex}");
-    }
-
-    private async void OnInterfaceVariantChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
-    {
-        if (SelectedInterfaceVariant == null || !IsLoaded)
-        {
-            return;
-        }
-
-        ApplyAppearance();
-        await ConfigHandler.SaveConfig(_config);
-        SetStatus($"Interface preset: {SelectedInterfaceVariant.Title}");
-    }
-
     private async Task CheckStartupGuiUpdateAsync()
     {
         try
@@ -1165,13 +1180,9 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             return;
         }
 
-        if (!UseCustomPrimaryColor)
-        {
-            return;
-        }
-
         ApplyAppearance();
         await ConfigHandler.SaveConfig(_config);
+        SetStatus($"Accent color set to {CustomPrimaryColorHex}");
     }
 
     private async void OnCustomColorPlaneMouseDown(object sender, MouseButtonEventArgs e)
@@ -1186,9 +1197,9 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         {
             UpdateCustomColorFromPoint(e.GetPosition(activeInputElement));
         }
-        UseCustomPrimaryColor = true;
         ApplyAppearance();
         await ConfigHandler.SaveConfig(_config);
+        SetStatus($"Accent color set to {CustomPrimaryColorHex}");
     }
 
     private async void OnCustomColorPlaneMouseMove(object sender, MouseEventArgs e)
@@ -1202,10 +1213,6 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         {
             UpdateCustomColorFromPoint(e.GetPosition(activeInputElement));
         }
-        if (!UseCustomPrimaryColor)
-        {
-            UseCustomPrimaryColor = true;
-        }
 
         ApplyAppearance();
         await ConfigHandler.SaveConfig(_config);
@@ -1214,6 +1221,58 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     private void OnCustomColorPlaneMouseUp(object sender, MouseButtonEventArgs e)
     {
         _isPickingCustomColor = false;
+        Mouse.Capture(null);
+    }
+
+    private async void OnInterfaceHueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!IsLoaded)
+        {
+            return;
+        }
+
+        ApplyAppearance();
+        await ConfigHandler.SaveConfig(_config);
+        SetStatus($"Interface color set to {InterfaceColorHex}");
+    }
+
+    private async void OnInterfaceColorPlaneMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        _isPickingInterfaceColor = true;
+        if (sender is IInputElement inputElement)
+        {
+            Mouse.Capture(inputElement);
+        }
+
+        if (sender is IInputElement activeInputElement)
+        {
+            UpdateInterfaceColorFromPoint(e.GetPosition(activeInputElement));
+        }
+
+        ApplyAppearance();
+        await ConfigHandler.SaveConfig(_config);
+        SetStatus($"Interface color set to {InterfaceColorHex}");
+    }
+
+    private async void OnInterfaceColorPlaneMouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_isPickingInterfaceColor)
+        {
+            return;
+        }
+
+        if (sender is IInputElement activeInputElement)
+        {
+            UpdateInterfaceColorFromPoint(e.GetPosition(activeInputElement));
+        }
+
+        ApplyAppearance();
+        await ConfigHandler.SaveConfig(_config);
+    }
+
+    private void OnInterfaceColorPlaneMouseUp(object sender, MouseButtonEventArgs e)
+    {
+        _isPickingInterfaceColor = false;
         Mouse.Capture(null);
     }
 
@@ -1316,6 +1375,60 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         }
 
         await RefreshProfilesAsync();
+    }
+
+    private void OnCreateConfigClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement element || element.ContextMenu == null)
+        {
+            return;
+        }
+
+        element.ContextMenu.PlacementTarget = element;
+        element.ContextMenu.IsOpen = true;
+    }
+
+    private async void OnCreateConfigMenuItemClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem { Tag: string tag } || !Enum.TryParse<EConfigType>(tag, out var configType))
+        {
+            SetStatus("Unknown configuration type");
+            return;
+        }
+
+        ProfileItem item = new()
+        {
+            Subid = _config.SubIndexId,
+            ConfigType = configType,
+            IsSub = false,
+        };
+
+        bool? result;
+        if (configType == EConfigType.Custom)
+        {
+            result = new AddServer2Window(item).ShowDialog();
+        }
+        else if (configType.IsGroupType())
+        {
+            result = new AddGroupServerWindow(item).ShowDialog();
+        }
+        else
+        {
+            result = new AddServerWindow(item).ShowDialog();
+        }
+
+        if (result != true)
+        {
+            return;
+        }
+
+        await RefreshProfilesAsync();
+        if (item.IndexId == _config.IndexId)
+        {
+            await ViewModel.Reload();
+        }
+
+        SetStatus($"{configType} configuration created");
     }
 
     private async void OnSetActive(object sender, RoutedEventArgs e)
@@ -2857,135 +2970,72 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         PrimaryColors.Clear();
     }
 
-    private void LoadInterfaceVariants()
-    {
-        InterfaceVariants.Clear();
-        InterfaceVariants.Add(new()
-        {
-            Key = DefaultInterfacePresetKey,
-            Title = "Night Shift",
-            Description = "Тёмная базовая схема с компактными контрастами и спокойной рабочей подачей.",
-            IsLight = false,
-            WindowBackgroundColor = (Color)ColorConverter.ConvertFromString("#0B1220"),
-            WindowChromeColor = (Color)ColorConverter.ConvertFromString("#253246"),
-            SurfaceColor = (Color)ColorConverter.ConvertFromString("#111A2B"),
-            SurfaceAltColor = (Color)ColorConverter.ConvertFromString("#162235"),
-            SurfaceHeaderColor = (Color)ColorConverter.ConvertFromString("#182538"),
-            MutedTextColor = (Color)ColorConverter.ConvertFromString("#8EA0B8"),
-            StrongTextColor = (Color)ColorConverter.ConvertFromString("#E8EEF7"),
-            HeroStartColor = (Color)ColorConverter.ConvertFromString("#0D1626"),
-            HeroEndColor = (Color)ColorConverter.ConvertFromString("#111C2F"),
-            FooterColor = (Color)ColorConverter.ConvertFromString("#0E1727")
-        });
-        InterfaceVariants.Add(new()
-        {
-            Key = "CarbonBlue",
-            Title = "Carbon Blue",
-            Description = "Более холодный тёмный вариант с выраженным синим акцентом и плотной сеткой поверхностей.",
-            IsLight = false,
-            WindowBackgroundColor = (Color)ColorConverter.ConvertFromString("#0A1020"),
-            WindowChromeColor = (Color)ColorConverter.ConvertFromString("#22314A"),
-            SurfaceColor = (Color)ColorConverter.ConvertFromString("#0F182A"),
-            SurfaceAltColor = (Color)ColorConverter.ConvertFromString("#14213A"),
-            SurfaceHeaderColor = (Color)ColorConverter.ConvertFromString("#172742"),
-            MutedTextColor = (Color)ColorConverter.ConvertFromString("#8CA3C3"),
-            StrongTextColor = (Color)ColorConverter.ConvertFromString("#E7F0FF"),
-            HeroStartColor = (Color)ColorConverter.ConvertFromString("#0E1830"),
-            HeroEndColor = (Color)ColorConverter.ConvertFromString("#12203D"),
-            FooterColor = (Color)ColorConverter.ConvertFromString("#0B1324")
-        });
-        InterfaceVariants.Add(new()
-        {
-            Key = "SlateMono",
-            Title = "Slate Mono",
-            Description = "Нейтральный графитовый пресет без яркой подачи, если нужен максимально спокойный фон.",
-            IsLight = false,
-            WindowBackgroundColor = (Color)ColorConverter.ConvertFromString("#101318"),
-            WindowChromeColor = (Color)ColorConverter.ConvertFromString("#303640"),
-            SurfaceColor = (Color)ColorConverter.ConvertFromString("#151A21"),
-            SurfaceAltColor = (Color)ColorConverter.ConvertFromString("#1A2028"),
-            SurfaceHeaderColor = (Color)ColorConverter.ConvertFromString("#212933"),
-            MutedTextColor = (Color)ColorConverter.ConvertFromString("#98A2B3"),
-            StrongTextColor = (Color)ColorConverter.ConvertFromString("#F2F5F8"),
-            HeroStartColor = (Color)ColorConverter.ConvertFromString("#161B22"),
-            HeroEndColor = (Color)ColorConverter.ConvertFromString("#1B222B"),
-            FooterColor = (Color)ColorConverter.ConvertFromString("#12161C")
-        });
-    }
-
     private void LoadCustomAppearance()
     {
         UseCustomPrimaryColor = true;
 
-        var customColor = TryParseColor(_config.UiItem.CustomPrimaryColor);
-        if (customColor.HasValue)
-        {
-            var hsv = ColorToHsv(customColor.Value);
-            _customHue = hsv.Hue;
-            _customSaturation = hsv.Saturation;
-            _customValue = hsv.Value;
-        }
-        else
-        {
-            var fallback = (Color)ColorConverter.ConvertFromString("#4F8CFF");
-            var hsv = ColorToHsv(fallback);
-            _customHue = hsv.Hue;
-            _customSaturation = hsv.Saturation;
-            _customValue = hsv.Value;
-        }
+        var accentColor = TryParseColor(_config.UiItem.CustomPrimaryColor)
+            ?? (Color)ColorConverter.ConvertFromString("#4F8CFF");
+        var accentHsv = ColorToHsv(accentColor);
+        _customHue = accentHsv.Hue;
+        _customSaturation = accentHsv.Saturation;
+        _customValue = accentHsv.Value;
+
+        var interfaceColor = TryParseColor(_config.UiItem.CustomInterfaceColor)
+            ?? GetLegacyInterfaceFallbackColor(_config.UiItem.MainWindowPreset);
+        var interfaceHsv = ColorToHsv(interfaceColor);
+        _interfaceHue = interfaceHsv.Hue;
+        _interfaceSaturation = interfaceHsv.Saturation;
+        _interfaceValue = interfaceHsv.Value;
     }
 
     private void ApplyAppearance()
     {
-        var variant = GetActiveInterfaceVariant();
-        _config.UiItem.MainWindowPreset = variant.Key;
-        _config.UiItem.CurrentTheme = variant.IsLight ? nameof(ETheme.Light) : nameof(ETheme.Dark);
+        var accentColor = GetSelectedPrimaryColor();
+        var interfaceColor = GetSelectedInterfaceColor();
+        var palette = BuildInterfacePalette(interfaceColor, accentColor);
+
+        _config.UiItem.MainWindowPreset = null;
+        _config.UiItem.CurrentTheme = palette.IsLight ? nameof(ETheme.Light) : nameof(ETheme.Dark);
         _config.UiItem.ColorPrimaryName = "Custom";
         _config.UiItem.UseCustomPrimaryColor = true;
         _config.UiItem.CustomPrimaryColor = CustomPrimaryColorHex;
+        _config.UiItem.CustomInterfaceColor = InterfaceColorHex;
 
         var theme = _paletteHelper.GetTheme();
-        theme.SetBaseTheme(variant.IsLight ? BaseTheme.Light : BaseTheme.Dark);
-
-        var color = GetSelectedPrimaryColor();
-        theme.PrimaryLight = new ColorPair(color.Lighten());
-        theme.PrimaryMid = new ColorPair(color);
-        theme.PrimaryDark = new ColorPair(color.Darken());
-        theme.SecondaryLight = new ColorPair(color.Lighten());
-        theme.SecondaryMid = new ColorPair(color);
-        theme.SecondaryDark = new ColorPair(color.Darken());
+        theme.SetBaseTheme(palette.IsLight ? BaseTheme.Light : BaseTheme.Dark);
+        theme.PrimaryLight = new ColorPair(BlendWith(accentColor, Colors.White, 0.18));
+        theme.PrimaryMid = new ColorPair(accentColor, palette.OnAccentColor);
+        theme.PrimaryDark = new ColorPair(BlendWith(accentColor, Colors.Black, 0.16), palette.OnAccentColor);
+        theme.SecondaryLight = new ColorPair(BlendWith(interfaceColor, Colors.White, palette.IsLight ? 0.1 : 0.06), palette.OnSurfaceColor);
+        theme.SecondaryMid = new ColorPair(interfaceColor, palette.OnSurfaceColor);
+        theme.SecondaryDark = new ColorPair(BlendWith(interfaceColor, Colors.Black, palette.IsLight ? 0.12 : 0.14), palette.OnSurfaceColor);
         _paletteHelper.SetTheme(theme);
 
-        ApplyInterfacePresetResources(variant, color);
+        ApplyInterfaceColorResources(palette);
         WindowsUtils.SetDarkBorder(this, _config.UiItem.CurrentTheme);
     }
 
-    private InterfaceVariantOption GetActiveInterfaceVariant()
+    private void ApplyInterfaceColorResources(InterfacePalette palette)
     {
-        return SelectedInterfaceVariant
-            ?? InterfaceVariants.FirstOrDefault(t => string.Equals(t.Key, _config.UiItem.MainWindowPreset, StringComparison.OrdinalIgnoreCase))
-            ?? InterfaceVariants.First();
-    }
-
-    private void ApplyInterfacePresetResources(InterfaceVariantOption variant, Color accentColor)
-    {
-        SetThemeResource("NetCatWindowBackgroundBrush", CreateFrozenBrush(variant.WindowBackgroundColor));
-        SetThemeResource("NetCatWindowChromeBrush", CreateFrozenBrush(variant.WindowChromeColor));
-        SetThemeResource("NetCatSurfaceBrush", CreateFrozenBrush(variant.SurfaceColor));
-        SetThemeResource("NetCatSurfaceAltBrush", CreateFrozenBrush(variant.SurfaceAltColor));
-        SetThemeResource("NetCatSurfaceHeaderBrush", CreateFrozenBrush(variant.SurfaceHeaderColor));
-        SetThemeResource("NetCatMutedTextBrush", CreateFrozenBrush(variant.MutedTextColor));
-        SetThemeResource("NetCatStrongTextBrush", CreateFrozenBrush(variant.StrongTextColor));
-        SetThemeResource("NetCatFooterBrush", CreateFrozenBrush(variant.FooterColor));
-        SetThemeResource("NetCatAccentBrush", CreateFrozenBrush(accentColor));
-        SetThemeResource("NetCatAccentSoftBrush", CreateFrozenBrush(Color.FromArgb(48, accentColor.R, accentColor.G, accentColor.B)));
-        SetThemeResource("NetCatScrollBarTrackBrush", CreateFrozenBrush(Color.FromArgb(48, accentColor.R, accentColor.G, accentColor.B)));
-        SetThemeResource("NetCatScrollBarThumbBrush", CreateFrozenBrush(Color.FromArgb(200, accentColor.R, accentColor.G, accentColor.B)));
-        SetThemeResource("NetCatScrollBarThumbBorderBrush", CreateFrozenBrush(accentColor.Lighten()));
-        SetThemeResource("NetCatScrollBarThumbHoverBrush", CreateFrozenBrush(accentColor.Lighten()));
-        SetThemeResource("NetCatScrollBarThumbDragBrush", CreateFrozenBrush(accentColor.Darken()));
-        SetThemeResource("NetCatHeroGradientBrush", CreateFrozenGradientBrush(variant.HeroStartColor, variant.HeroEndColor));
-        Background = CreateFrozenBrush(variant.WindowBackgroundColor);
+        SetThemeResource("NetCatWindowBackgroundBrush", CreateFrozenBrush(palette.WindowBackgroundColor));
+        SetThemeResource("NetCatWindowChromeBrush", CreateFrozenBrush(palette.WindowChromeColor));
+        SetThemeResource("NetCatSurfaceBrush", CreateFrozenBrush(palette.SurfaceColor));
+        SetThemeResource("NetCatSurfaceAltBrush", CreateFrozenBrush(palette.SurfaceAltColor));
+        SetThemeResource("NetCatSurfaceHeaderBrush", CreateFrozenBrush(palette.SurfaceHeaderColor));
+        SetThemeResource("NetCatMutedTextBrush", CreateFrozenBrush(palette.MutedTextColor));
+        SetThemeResource("NetCatStrongTextBrush", CreateFrozenBrush(palette.OnSurfaceColor));
+        SetThemeResource("NetCatAccentForegroundBrush", CreateFrozenBrush(palette.OnAccentColor));
+        SetThemeResource("NetCatFooterBrush", CreateFrozenBrush(palette.FooterColor));
+        SetThemeResource("NetCatAccentBrush", CreateFrozenBrush(palette.AccentColor));
+        SetThemeResource("NetCatAccentSoftBrush", CreateFrozenBrush(Color.FromArgb(48, palette.AccentColor.R, palette.AccentColor.G, palette.AccentColor.B)));
+        SetThemeResource("NetCatScrollBarTrackBrush", CreateFrozenBrush(Color.FromArgb(48, palette.AccentColor.R, palette.AccentColor.G, palette.AccentColor.B)));
+        SetThemeResource("NetCatScrollBarThumbBrush", CreateFrozenBrush(Color.FromArgb(200, palette.AccentColor.R, palette.AccentColor.G, palette.AccentColor.B)));
+        SetThemeResource("NetCatScrollBarThumbBorderBrush", CreateFrozenBrush(BlendWith(palette.AccentColor, palette.OnAccentColor, 0.18)));
+        SetThemeResource("NetCatScrollBarThumbHoverBrush", CreateFrozenBrush(BlendWith(palette.AccentColor, palette.OnAccentColor, 0.12)));
+        SetThemeResource("NetCatScrollBarThumbDragBrush", CreateFrozenBrush(BlendWith(palette.AccentColor, Colors.Black, 0.18)));
+        SetThemeResource("NetCatHeroGradientBrush", CreateFrozenGradientBrush(palette.HeroStartColor, palette.HeroEndColor));
+        Background = CreateFrozenBrush(palette.WindowBackgroundColor);
     }
 
     private void SetThemeResource(string key, object value)
@@ -3016,12 +3066,25 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         return ColorFromHsv(CustomHue, CustomSaturation, CustomValue);
     }
 
+    private Color GetSelectedInterfaceColor()
+    {
+        return ColorFromHsv(InterfaceHue, InterfaceSaturation, InterfaceValue);
+    }
+
     private void UpdateCustomColorFromPoint(Point point)
     {
         var x = Math.Clamp(point.X, 0, CustomColorPlaneWidth);
         var y = Math.Clamp(point.Y, 0, CustomColorPlaneHeight);
         CustomSaturation = x / CustomColorPlaneWidth;
         CustomValue = 1 - (y / CustomColorPlaneHeight);
+    }
+
+    private void UpdateInterfaceColorFromPoint(Point point)
+    {
+        var x = Math.Clamp(point.X, 0, CustomColorPlaneWidth);
+        var y = Math.Clamp(point.Y, 0, CustomColorPlaneHeight);
+        InterfaceSaturation = x / CustomColorPlaneWidth;
+        InterfaceValue = 1 - (y / CustomColorPlaneHeight);
     }
 
     private void NotifyCustomColorStateChanged()
@@ -3031,6 +3094,15 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CustomPrimaryColorHex)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CustomColorCursorLeft)));
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CustomColorCursorTop)));
+    }
+
+    private void NotifyInterfaceColorStateChanged()
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(InterfaceBaseBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(InterfacePreviewBrush)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(InterfaceColorHex)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(InterfaceColorCursorLeft)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(InterfaceColorCursorTop)));
     }
 
     private static Color? TryParseColor(string? value)
@@ -3054,6 +3126,84 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         }
 
         return null;
+    }
+
+    private static Color GetLegacyInterfaceFallbackColor(string? presetKey)
+    {
+        return presetKey switch
+        {
+            "CarbonBlue" => (Color)ColorConverter.ConvertFromString("#0F182A"),
+            "SlateMono" => (Color)ColorConverter.ConvertFromString("#151A21"),
+            _ => (Color)ColorConverter.ConvertFromString("#111A2B")
+        };
+    }
+
+    private static InterfacePalette BuildInterfacePalette(Color interfaceColor, Color accentColor)
+    {
+        var onSurfaceColor = GetContrastingTextColor(interfaceColor);
+        var onAccentColor = GetContrastingTextColor(accentColor);
+        var isLight = GetRelativeLuminance(interfaceColor) >= 0.52;
+
+        return new InterfacePalette
+        {
+            IsLight = isLight,
+            AccentColor = accentColor,
+            OnAccentColor = onAccentColor,
+            SurfaceColor = interfaceColor,
+            SurfaceAltColor = BlendWith(interfaceColor, isLight ? Colors.White : Colors.White, isLight ? 0.18 : 0.08),
+            SurfaceHeaderColor = BlendWith(interfaceColor, isLight ? Colors.Black : Colors.White, isLight ? 0.06 : 0.04),
+            WindowBackgroundColor = BlendWith(interfaceColor, Colors.Black, isLight ? 0.1 : 0.24),
+            WindowChromeColor = BlendWith(interfaceColor, isLight ? Colors.Black : Colors.White, isLight ? 0.18 : 0.14),
+            FooterColor = BlendWith(interfaceColor, Colors.Black, isLight ? 0.14 : 0.18),
+            HeroStartColor = BlendWith(interfaceColor, isLight ? Colors.White : Colors.White, isLight ? 0.12 : 0.05),
+            HeroEndColor = BlendWith(interfaceColor, Colors.Black, isLight ? 0.12 : 0.1),
+            OnSurfaceColor = onSurfaceColor,
+            MutedTextColor = BlendWith(onSurfaceColor, interfaceColor, isLight ? 0.52 : 0.46)
+        };
+    }
+
+    private static Color BlendWith(Color color, Color overlay, double overlayWeight)
+    {
+        overlayWeight = Math.Clamp(overlayWeight, 0, 1);
+        var baseWeight = 1 - overlayWeight;
+        return Color.FromRgb(
+            (byte)Math.Round((color.R * baseWeight) + (overlay.R * overlayWeight)),
+            (byte)Math.Round((color.G * baseWeight) + (overlay.G * overlayWeight)),
+            (byte)Math.Round((color.B * baseWeight) + (overlay.B * overlayWeight)));
+    }
+
+    private static Color GetContrastingTextColor(Color background)
+    {
+        var white = Color.FromRgb(248, 250, 252);
+        var dark = Color.FromRgb(11, 18, 32);
+        var whiteContrast = GetContrastRatio(background, white);
+        var darkContrast = GetContrastRatio(background, dark);
+        return whiteContrast >= darkContrast ? white : dark;
+    }
+
+    private static double GetContrastRatio(Color a, Color b)
+    {
+        var l1 = GetRelativeLuminance(a);
+        var l2 = GetRelativeLuminance(b);
+        var lighter = Math.Max(l1, l2);
+        var darker = Math.Min(l1, l2);
+        return (lighter + 0.05) / (darker + 0.05);
+    }
+
+    private static double GetRelativeLuminance(Color color)
+    {
+        static double Linearize(byte channel)
+        {
+            var value = channel / 255d;
+            return value <= 0.03928
+                ? value / 12.92
+                : Math.Pow((value + 0.055) / 1.055, 2.4);
+        }
+
+        var r = Linearize(color.R);
+        var g = Linearize(color.G);
+        var b = Linearize(color.B);
+        return (0.2126 * r) + (0.7152 * g) + (0.0722 * b);
     }
 
     private static Color ColorFromHsv(double hue, double saturation, double value)
@@ -3335,6 +3485,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         finally
         {
             _isUpdatingConnectionPing = false;
+            NotifyTelegramStateChanged();
         }
     }
 
@@ -3636,6 +3787,23 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         return true;
     }
+}
+
+public sealed class InterfacePalette
+{
+    public bool IsLight { get; init; }
+    public Color AccentColor { get; init; }
+    public Color OnAccentColor { get; init; }
+    public Color WindowBackgroundColor { get; init; }
+    public Color WindowChromeColor { get; init; }
+    public Color SurfaceColor { get; init; }
+    public Color SurfaceAltColor { get; init; }
+    public Color SurfaceHeaderColor { get; init; }
+    public Color MutedTextColor { get; init; }
+    public Color OnSurfaceColor { get; init; }
+    public Color HeroStartColor { get; init; }
+    public Color HeroEndColor { get; init; }
+    public Color FooterColor { get; init; }
 }
 
 public sealed class InterfaceVariantOption

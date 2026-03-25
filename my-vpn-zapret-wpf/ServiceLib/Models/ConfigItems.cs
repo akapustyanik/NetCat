@@ -97,6 +97,7 @@ public class UIItem
     public string? ColorPrimaryName { get; set; }
     public bool UseCustomPrimaryColor { get; set; }
     public string? CustomPrimaryColor { get; set; }
+    public string? CustomInterfaceColor { get; set; }
     public string? CurrentTheme { get; set; }
     public string? MainWindowPreset { get; set; }
     public string CurrentLanguage { get; set; }

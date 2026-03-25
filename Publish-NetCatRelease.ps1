@@ -29,13 +29,90 @@ $repoRoot = if (Test-Path (Join-Path $PSScriptRoot "my-vpn-zapret-wpf")) {
 function Get-NetCatVersion {
     param([string]$PropsPath)
 
-    [xml]$props = Get-Content $PropsPath
-    $versionNode = $props.Project.PropertyGroup.Version | Select-Object -First 1
+    $propertyMap = Get-ResolvedPropsMap -PropsPath $PropsPath
+    $versionNode = $propertyMap["Version"]
     if ([string]::IsNullOrWhiteSpace($versionNode)) {
         throw "Failed to read Version from $PropsPath"
     }
 
     return $versionNode.Trim()
+}
+
+function Get-ResolvedPropsMap {
+    param([string]$PropsPath)
+
+    [xml]$props = Get-Content $PropsPath
+    $propertyMap = @{}
+
+    foreach ($propertyGroup in @($props.Project.PropertyGroup)) {
+        foreach ($node in @($propertyGroup.ChildNodes)) {
+            if ($node.NodeType -ne [System.Xml.XmlNodeType]::Element) {
+                continue
+            }
+
+            $propertyMap[$node.Name] = $node.InnerText.Trim()
+        }
+    }
+
+    $tokenPattern = '\$\(([A-Za-z0-9_.-]+)\)'
+    for ($iteration = 0; $iteration -lt 8; $iteration++) {
+        $changed = $false
+        foreach ($key in @($propertyMap.Keys)) {
+            $value = [string]$propertyMap[$key]
+            $resolvedValue = [System.Text.RegularExpressions.Regex]::Replace($value, $tokenPattern, {
+                    param($match)
+
+                    $tokenKey = $match.Groups[1].Value
+                    if ($propertyMap.ContainsKey($tokenKey)) {
+                        return [string]$propertyMap[$tokenKey]
+                    }
+
+                    return $match.Value
+                })
+
+            if ($resolvedValue -ne $value) {
+                $propertyMap[$key] = $resolvedValue
+                $changed = $true
+            }
+        }
+
+        if (-not $changed) {
+            break
+        }
+    }
+
+    return $propertyMap
+}
+
+function Get-NetCatVersioningMetadata {
+    param([string]$PropsPath)
+
+    $propertyMap = Get-ResolvedPropsMap -PropsPath $PropsPath
+
+    $versionFamily = $propertyMap["NetCatVersionFamily"]
+    $embeddedImplementation = $propertyMap["NetCatTelegramWsProxyImplementation"]
+    $embeddedSchemaVersion = $propertyMap["NetCatTelegramWsProxySchemaVersion"]
+    $embeddedVersionFamily = $propertyMap["NetCatTelegramWsProxyVersionFamily"]
+
+    if ([string]::IsNullOrWhiteSpace($versionFamily)) {
+        $versionFamily = Get-NetCatVersion -PropsPath $PropsPath
+    }
+    if ([string]::IsNullOrWhiteSpace($embeddedImplementation)) {
+        $embeddedImplementation = "tg-ws-proxy-main"
+    }
+    if ([string]::IsNullOrWhiteSpace($embeddedSchemaVersion)) {
+        $embeddedSchemaVersion = "1"
+    }
+    if ([string]::IsNullOrWhiteSpace($embeddedVersionFamily)) {
+        $embeddedVersionFamily = "netcat-v$versionFamily+schema.$embeddedSchemaVersion"
+    }
+
+    return @{
+        VersionFamily = $versionFamily.Trim()
+        EmbeddedImplementation = $embeddedImplementation.Trim()
+        EmbeddedSchemaVersion = [int]$embeddedSchemaVersion
+        EmbeddedVersionFamily = $embeddedVersionFamily.Trim()
+    }
 }
 
 function Get-TargetFramework {
@@ -362,6 +439,7 @@ try {
     $targetFramework = Get-TargetFramework -ProjectPath $projectPath
     $stagingDir = Join-Path $repoRoot ".publish-staging"
     $zipStagingDir = Join-Path $repoRoot ".zip-staging"
+    $testInstallRoot = Join-Path $repoRoot ".test-installs"
     $archiveRootName = "NetCat"
     $publishSourceDir = Resolve-PublishOutputDirectory `
         -RepoRoot $repoRoot `
@@ -370,7 +448,9 @@ try {
         -Runtime $Runtime `
         -ExplicitSourcePublishDir $SourcePublishDir
 
-    $version = Get-NetCatVersion -PropsPath (Join-Path $repoRoot "my-vpn-zapret-wpf\Directory.Build.props")
+    $propsPath = Join-Path $repoRoot "my-vpn-zapret-wpf\Directory.Build.props"
+    $version = Get-NetCatVersion -PropsPath $propsPath
+    $versioningMetadata = Get-NetCatVersioningMetadata -PropsPath $propsPath
     if ([string]::IsNullOrWhiteSpace($OutputDir)) {
         $OutputDir = ".\artifacts\NetCat-releaseV$version"
     }
@@ -394,6 +474,9 @@ try {
     }
     if (Test-Path $zipStagingDir) {
         Remove-Item $zipStagingDir -Recurse -Force
+    }
+    if (Test-Path $testInstallRoot) {
+        Remove-Item $testInstallRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
     if ([string]::IsNullOrWhiteSpace($SourcePublishDir)) {
         if (Test-Path $publishSourceDir) {
@@ -449,8 +532,12 @@ try {
     $manifest = @{
         app = "NetCat"
         version = $version
+        version_family = $versioningMetadata.VersionFamily
         runtime = $Runtime
         configuration = $Configuration
+        embedded_proxy_implementation = $versioningMetadata.EmbeddedImplementation
+        embedded_proxy_schema = $versioningMetadata.EmbeddedSchemaVersion
+        embedded_proxy_version_family = $versioningMetadata.EmbeddedVersionFamily
         built_at = (Get-Date).ToString("o")
         package_root = $archiveRootName
     } | ConvertTo-Json
@@ -472,7 +559,8 @@ try {
             -OutputDir $OutputDir `
             -ZipPath $ZipPath `
             -VerifySelfUpdate $VerifySelfUpdateSmoke `
-            -RequireCodeSigning $RequireCodeSigning
+            -RequireCodeSigning $RequireCodeSigning `
+            -TestInstallRoot $testInstallRoot
     }
 
     Write-Host "Published folder: $OutputDir"

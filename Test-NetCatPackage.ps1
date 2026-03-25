@@ -4,7 +4,8 @@ param(
 
     [string]$ZipPath = "",
     [bool]$VerifySelfUpdate = $false,
-    [bool]$RequireCodeSigning = $false
+    [bool]$RequireCodeSigning = $false,
+    [string]$TestInstallRoot = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -87,6 +88,25 @@ function Assert-ManifestMetadata {
     if ($manifest.version -ne $normalizedExpectedVersion) {
         throw "release-manifest.json version '$($manifest.version)' does not match package version '$ExpectedVersion'."
     }
+    if ([string]::IsNullOrWhiteSpace($manifest.version_family)) {
+        throw "release-manifest.json is missing version_family."
+    }
+    if ($manifest.version_family -ne $normalizedExpectedVersion) {
+        throw "release-manifest.json version_family '$($manifest.version_family)' does not match package version '$ExpectedVersion'."
+    }
+    if ([string]::IsNullOrWhiteSpace($manifest.embedded_proxy_implementation)) {
+        throw "release-manifest.json is missing embedded_proxy_implementation."
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$manifest.embedded_proxy_schema)) {
+        throw "release-manifest.json is missing embedded_proxy_schema."
+    }
+    if ([string]::IsNullOrWhiteSpace($manifest.embedded_proxy_version_family)) {
+        throw "release-manifest.json is missing embedded_proxy_version_family."
+    }
+    $expectedEmbeddedVersionFamily = "netcat-v$normalizedExpectedVersion+schema.$($manifest.embedded_proxy_schema)"
+    if ($manifest.embedded_proxy_version_family -ne $expectedEmbeddedVersionFamily) {
+        throw "release-manifest.json embedded_proxy_version_family '$($manifest.embedded_proxy_version_family)' does not match expected '$expectedEmbeddedVersionFamily'."
+    }
 }
 
 function Get-StaleUpdaterDirs {
@@ -109,22 +129,98 @@ function Assert-AuthenticodeSigned {
     }
 }
 
+function New-TestInstallWorkspace {
+    param(
+        [string]$WorkRoot,
+        [string]$Prefix
+    )
+
+    $baseRoot = if ([string]::IsNullOrWhiteSpace($WorkRoot)) {
+        Join-Path $PSScriptRoot ".test-installs"
+    }
+    else {
+        [System.IO.Path]::GetFullPath($WorkRoot)
+    }
+
+    New-Item -ItemType Directory -Path $baseRoot -Force | Out-Null
+    return Join-Path $baseRoot ("$Prefix-" + [guid]::NewGuid().ToString("N"))
+}
+
+function Get-FreeTcpPort {
+    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    try {
+        $listener.Start()
+        return ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
+    }
+    finally {
+        $listener.Stop()
+    }
+}
+
+function Wait-TcpListener {
+    param(
+        [string]$TcpHost,
+        [int]$Port,
+        [int]$TimeoutSeconds = 20
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        $client = [System.Net.Sockets.TcpClient]::new()
+        try {
+            $connectTask = $client.ConnectAsync($TcpHost, $Port)
+            if ($connectTask.Wait(500) -and $client.Connected) {
+                return $true
+            }
+        }
+        catch {
+        }
+        finally {
+            $client.Dispose()
+        }
+
+        Start-Sleep -Milliseconds 300
+    }
+
+    return $false
+}
+
+function Stop-NetCatProcessSafe {
+    param([System.Diagnostics.Process]$Process)
+
+    if ($null -eq $Process) {
+        return
+    }
+
+    try {
+        if (-not $Process.HasExited) {
+            Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+            $Process.WaitForExit(5000) | Out-Null
+        }
+    }
+    catch {
+    }
+}
+
 function Invoke-SelfUpdateSmoke {
     param(
         [string]$SourceDir,
-        [string]$ArchivePath
+        [string]$ArchivePath,
+        [string]$WorkRoot
     )
 
-    $smokeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("NetCat-smoke-" + [guid]::NewGuid().ToString("N"))
+    $smokeRoot = New-TestInstallWorkspace -WorkRoot $WorkRoot -Prefix "self-update"
     $workDir = Join-Path $smokeRoot "NetCat"
+    $archiveCopyPath = Join-Path $smokeRoot ([System.IO.Path]::GetFileName($ArchivePath))
     New-Item -ItemType Directory -Path $smokeRoot -Force | Out-Null
     Copy-Item $SourceDir $workDir -Recurse
+    Copy-Item $ArchivePath $archiveCopyPath -Force
 
     try {
         $updaterPath = Join-Path $workDir "updater\AmazTool.exe"
         Assert-PathExists $updaterPath "Smoke test updater is missing: $updaterPath"
 
-        & $updaterPath upgrade $workDir $ArchivePath | Out-Null
+        & $updaterPath upgrade $workDir $archiveCopyPath | Out-Null
         Start-Sleep -Seconds 8
 
         $appPath = Join-Path $workDir "NetCat.exe"
@@ -160,6 +256,104 @@ function Invoke-SelfUpdateSmoke {
             }
         }
 
+        Remove-Item $smokeRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Invoke-TelegramLocalSocksSmoke {
+    param(
+        [string]$SourceDir,
+        [string]$WorkRoot
+    )
+
+    $smokeRoot = New-TestInstallWorkspace -WorkRoot $WorkRoot -Prefix "telegram-socks"
+    $workDir = Join-Path $smokeRoot "NetCat"
+    $process = $null
+    Copy-Item $SourceDir $workDir -Recurse
+
+    try {
+        $port = Get-FreeTcpPort
+        $quickRulesPath = Join-Path $workDir "userdata\\guiConfigs\\quick-rules.json"
+        $telegramConfigPath = Join-Path $workDir "userdata\\telegram-ws-proxy\\config.json"
+        New-Item -ItemType Directory -Path (Split-Path -Parent $quickRulesPath) -Force | Out-Null
+        New-Item -ItemType Directory -Path (Split-Path -Parent $telegramConfigPath) -Force | Out-Null
+
+        $quickRules = @{
+            DirectProcesses = @()
+            DirectDomains = @()
+            ProxyProcesses = @()
+            ProxyDomains = @()
+            BlockDomains = @()
+            UseProxyDomainsPreset = $false
+            ProxyOnlyMode = $false
+            BypassPrivate = $true
+            TelegramTrafficMode = "local-socks"
+            RoutingId = $null
+        } | ConvertTo-Json -Depth 4
+        Set-Content -Path $quickRulesPath -Value $quickRules -Encoding UTF8
+
+        $telegramConfig = @{
+            SchemaVersion = 3
+            Host = "127.0.0.1"
+            Port = $port
+            DcIps = @(
+                "1:149.154.175.50",
+                "2:149.154.167.220",
+                "3:149.154.175.100",
+                "4:149.154.167.91",
+                "5:91.108.56.100"
+            )
+        } | ConvertTo-Json -Depth 4
+        Set-Content -Path $telegramConfigPath -Value $telegramConfig -Encoding UTF8
+
+        $appPath = Join-Path $workDir "NetCat.exe"
+        $process = Start-Process -FilePath $appPath -WorkingDirectory $workDir -PassThru -WindowStyle Hidden
+
+        if (-not (Wait-TcpListener -TcpHost "127.0.0.1" -Port $port -TimeoutSeconds 25)) {
+            throw "Telegram SOCKS smoke test listener did not start on 127.0.0.1:$port"
+        }
+
+        Start-Sleep -Seconds 3
+        if ($process.HasExited) {
+            throw "Telegram SOCKS smoke test process exited prematurely with code $($process.ExitCode)"
+        }
+
+        $curlSucceeded = $false
+        $curlErrors = @()
+        foreach ($target in @("https://api.telegram.org", "https://149.154.167.220")) {
+            $curlOutput = & curl.exe --socks5-hostname "127.0.0.1:$port" --max-time 45 --connect-timeout 25 -k -o NUL -D - $target 2>&1
+            $curlText = ($curlOutput | Out-String)
+            if ($LASTEXITCODE -eq 0 -and $curlText -match "HTTP/\d\.\d\s+(200|30[12378]|40[013])") {
+                $curlSucceeded = $true
+                break
+            }
+
+            $curlErrors += "target=$target exit=$LASTEXITCODE output=$curlText"
+            Start-Sleep -Seconds 2
+        }
+
+        if (-not $curlSucceeded) {
+            throw "Telegram SOCKS smoke test curl failed: $($curlErrors -join ' || ')"
+        }
+
+        $logDir = Join-Path $workDir "userdata\\guiLogs"
+        if (-not (Test-Path $logDir)) {
+            throw "Telegram SOCKS smoke test did not create guiLogs."
+        }
+
+        $latestLog = Get-ChildItem -Path $logDir -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if ($null -eq $latestLog) {
+            throw "Telegram SOCKS smoke test did not create a log file."
+        }
+
+        $logTail = Get-Content $latestLog.FullName -Tail 200 -ErrorAction SilentlyContinue
+        $logText = $logTail | Out-String
+        if ($logText -match "IO_SharingViolation|App_DispatcherUnhandledException") {
+            throw "Telegram SOCKS smoke test detected runtime error in log $($latestLog.Name): $logText"
+        }
+    }
+    finally {
+        Stop-NetCatProcessSafe -Process $process
         Remove-Item $smokeRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
@@ -223,8 +417,10 @@ if ($VerifySelfUpdate) {
         throw "VerifySelfUpdate requires -ZipPath."
     }
 
-    Invoke-SelfUpdateSmoke -SourceDir $OutputDir -ArchivePath $ZipPath
+    Invoke-SelfUpdateSmoke -SourceDir $OutputDir -ArchivePath $ZipPath -WorkRoot $TestInstallRoot
 }
+
+Invoke-TelegramLocalSocksSmoke -SourceDir $OutputDir -WorkRoot $TestInstallRoot
 
 if ($RequireCodeSigning) {
     foreach ($relativePath in @("NetCat.exe", "updater\\AmazTool.exe")) {

@@ -2,6 +2,19 @@ namespace v2rayN.Views;
 
 public partial class AddGroupServerWindow
 {
+    private enum GroupEditorPage
+    {
+        Subscriptions,
+        Children,
+        Preview
+    }
+
+    private sealed class PolicyGroupFilterPreset
+    {
+        public required string Label { get; init; }
+        public required string Pattern { get; init; }
+    }
+
     public AddGroupServerWindow(ProfileItem profileItem)
     {
         InitializeComponent();
@@ -11,7 +24,7 @@ public partial class AddGroupServerWindow
         PreviewKeyDown += AddGroupServerWindow_PreviewKeyDown;
         lstChild.SelectionChanged += LstChild_SelectionChanged;
         menuSelectAllChild.Click += MenuSelectAllChild_Click;
-        tabControl.SelectionChanged += TabControl_SelectionChanged;
+        cmbFilter.SelectionChanged += CmbFilter_SelectionChanged;
 
         ViewModel = new AddGroupServerViewModel(profileItem, UpdateViewHandler);
 
@@ -24,21 +37,21 @@ public partial class AddGroupServerWindow
             ResUI.TbRoundRobin,
             ResUI.TbLeastLoad,
         };
-        cmbFilter.ItemsSource = Global.PolicyGroupDefaultFilterList;
+        cmbFilter.ItemsSource = CreatePolicyGroupFilterPresets();
 
         switch (profileItem.ConfigType)
         {
             case EConfigType.PolicyGroup:
                 Title = ResUI.TbConfigTypePolicyGroup;
+                SetActivePage(GroupEditorPage.Subscriptions);
                 break;
 
             case EConfigType.ProxyChain:
                 Title = ResUI.TbConfigTypeProxyChain;
                 gridPolicyGroup.Visibility = Visibility.Collapsed;
-                if (tabControl.Items.Count > 0)
-                {
-                    tabControl.Items.RemoveAt(0);
-                }
+                btnSubscriptionsPage.Visibility = Visibility.Collapsed;
+                subscriptionsPage.Visibility = Visibility.Collapsed;
+                SetActivePage(GroupEditorPage.Children);
                 break;
         }
 
@@ -81,6 +94,33 @@ public partial class AddGroupServerWindow
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
         txtRemarks.Focus();
+    }
+
+    private static List<PolicyGroupFilterPreset> CreatePolicyGroupFilterPresets()
+    {
+        return
+        [
+            new PolicyGroupFilterPreset
+            {
+                Label = "Все серверы",
+                Pattern = Global.PolicyGroupDefaultAllFilter
+            },
+            new PolicyGroupFilterPreset
+            {
+                Label = "Низкий множитель",
+                Pattern = @"^.*(?:[×xX✕*]\s*0\.[0-9]+|0\.[0-9]+\s*[×xX✕*倍]).*$"
+            },
+            new PolicyGroupFilterPreset
+            {
+                Label = "Выделенные линии",
+                Pattern = $@"^(?!.*(?:{Global.PolicyGroupExcludeKeywords})).*(?:专线|IPLC|IEPL|中转).*$"
+            },
+            new PolicyGroupFilterPreset
+            {
+                Label = "Япония",
+                Pattern = $@"^(?!.*(?:{Global.PolicyGroupExcludeKeywords})).*(?:日本|\b[Jj][Pp]\b|🇯🇵|[Jj]apan).*$"
+            }
+        ];
     }
 
     private void AddGroupServerWindow_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -150,28 +190,44 @@ public partial class AddGroupServerWindow
         lstChild.SelectAll();
     }
 
-    private async void TabControl_SelectionChanged(object? sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    private void CmbFilter_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
-        try
+        if (cmbFilter.SelectedItem is not PolicyGroupFilterPreset preset)
         {
-            if (e.Source is not System.Windows.Controls.TabControl tc)
-            {
-                return;
-            }
-            if (!(tc.SelectedIndex == tc.Items.Count - 1 && tc.Items.Count > 0))
-            {
-                return;
-            }
-            if (ViewModel == null)
-            {
-                return;
-            }
+            return;
+        }
 
+        cmbFilter.Text = preset.Pattern;
+        cmbFilter.SelectedIndex = -1;
+    }
+
+    private void OnSubscriptionsPageClick(object sender, RoutedEventArgs e)
+    {
+        SetActivePage(GroupEditorPage.Subscriptions);
+    }
+
+    private void OnChildrenPageClick(object sender, RoutedEventArgs e)
+    {
+        SetActivePage(GroupEditorPage.Children);
+    }
+
+    private async void OnPreviewPageClick(object sender, RoutedEventArgs e)
+    {
+        SetActivePage(GroupEditorPage.Preview);
+        if (ViewModel != null)
+        {
             await ViewModel.UpdatePreviewList();
         }
-        catch
-        {
-            // ignored
-        }
+    }
+
+    private void SetActivePage(GroupEditorPage page)
+    {
+        subscriptionsPage.Visibility = page == GroupEditorPage.Subscriptions ? Visibility.Visible : Visibility.Collapsed;
+        lstChild.Visibility = page == GroupEditorPage.Children ? Visibility.Visible : Visibility.Collapsed;
+        lstPreviewChild.Visibility = page == GroupEditorPage.Preview ? Visibility.Visible : Visibility.Collapsed;
+
+        btnSubscriptionsPage.Style = (Style)FindResource(page == GroupEditorPage.Subscriptions ? "DefButton" : "SubtleButton");
+        btnChildrenPage.Style = (Style)FindResource(page == GroupEditorPage.Children ? "DefButton" : "SubtleButton");
+        btnPreviewPage.Style = (Style)FindResource(page == GroupEditorPage.Preview ? "DefButton" : "SubtleButton");
     }
 }

@@ -2,6 +2,9 @@ namespace ServiceLib.ViewModels;
 
 public class AddGroupServerViewModel : MyReactiveObject
 {
+    private const string EmptySubscriptionGroupLabel = "Не использовать";
+    private const string NoSubscriptionGroupsLabel = "Нет групп подписок";
+
     [Reactive]
     public ProfileItem SelectedSource { get; set; }
 
@@ -92,10 +95,32 @@ public class AddGroupServerViewModel : MyReactiveObject
             _ => ResUI.TbLeastPing,
         };
 
-        var subs = await AppManager.Instance.SubItems();
-        subs.Add(new SubItem());
-        SubItems.AddRange(subs);
-        SelectedSubItem = SubItems.FirstOrDefault(s => s.Id == protocolExtra?.SubChildItems);
+        var subs = await AppManager.Instance.SubItems() ?? [];
+        SubItems.Clear();
+
+        if (subs.Count == 0)
+        {
+            var noSubscriptionsItem = new SubItem
+            {
+                Id = string.Empty,
+                Remarks = NoSubscriptionGroupsLabel
+            };
+            SubItems.Add(noSubscriptionsItem);
+            SelectedSubItem = noSubscriptionsItem;
+        }
+        else
+        {
+            var emptySelectionItem = new SubItem
+            {
+                Id = string.Empty,
+                Remarks = EmptySubscriptionGroupLabel
+            };
+
+            SubItems.Add(emptySelectionItem);
+            SubItems.AddRange(subs);
+            SelectedSubItem = SubItems.FirstOrDefault(s => s.Id == protocolExtra?.SubChildItems) ?? emptySelectionItem;
+        }
+
         Filter = protocolExtra?.Filter;
 
         var childIndexIds = Utils.String2List(protocolExtra?.ChildItems) ?? [];

@@ -21,259 +21,6 @@
     Style="{StaticResource WindowGlobal}"
     WindowStartupLocation="CenterScreen"
     mc:Ignorable="d">
-    <Window.Resources>
-        <SolidColorBrush x:Key="NetCatWindowBackgroundBrush" Color="#0B1220" />
-        <SolidColorBrush x:Key="NetCatWindowChromeBrush" Color="#253246" />
-        <SolidColorBrush x:Key="NetCatSurfaceBrush" Color="#111A2B" />
-        <SolidColorBrush x:Key="NetCatSurfaceAltBrush" Color="#162235" />
-        <SolidColorBrush x:Key="NetCatSurfaceHeaderBrush" Color="#182538" />
-        <SolidColorBrush x:Key="NetCatMutedTextBrush" Color="#8EA0B8" />
-        <SolidColorBrush x:Key="NetCatStrongTextBrush" Color="#E8EEF7" />
-        <SolidColorBrush x:Key="NetCatAccentBrush" Color="#4F8CFF" />
-        <SolidColorBrush x:Key="NetCatAccentSoftBrush" Color="#264F8CFF" />
-        <SolidColorBrush x:Key="NetCatScrollBarTrackBrush" Color="#142033" />
-        <SolidColorBrush x:Key="NetCatScrollBarThumbBrush" Color="#4F8CFF" />
-        <SolidColorBrush x:Key="NetCatScrollBarThumbBorderBrush" Color="#7AA6FF" />
-        <SolidColorBrush x:Key="NetCatScrollBarThumbHoverBrush" Color="#6B9CFF" />
-        <SolidColorBrush x:Key="NetCatScrollBarThumbDragBrush" Color="#88B0FF" />
-        <SolidColorBrush x:Key="NetCatFooterBrush" Color="#0E1727" />
-        <LinearGradientBrush x:Key="NetCatHeroGradientBrush" StartPoint="0,0" EndPoint="1,1">
-            <GradientStop Offset="0" Color="#0D1626" />
-            <GradientStop Offset="1" Color="#111C2F" />
-        </LinearGradientBrush>
-
-        <Style x:Key="DefButton" BasedOn="{StaticResource MaterialDesignRaisedButton}" TargetType="{x:Type ButtonBase}">
-            <Setter Property="FontSize" Value="{DynamicResource StdFontSize}" />
-            <Setter Property="MinHeight" Value="42" />
-            <Setter Property="MinWidth" Value="96" />
-            <Setter Property="Padding" Value="16,10" />
-            <Setter Property="VerticalContentAlignment" Value="Center" />
-            <Setter Property="HorizontalContentAlignment" Value="Center" />
-            <Setter Property="UseLayoutRounding" Value="True" />
-            <Setter Property="SnapsToDevicePixels" Value="True" />
-            <Setter Property="TextBlock.LineHeight" Value="16" />
-            <Setter Property="TextBlock.LineStackingStrategy" Value="BlockLineHeight" />
-            <Setter Property="Foreground" Value="White" />
-            <Setter Property="Background" Value="{DynamicResource NetCatAccentBrush}" />
-            <Setter Property="materialDesign:ButtonAssist.CornerRadius" Value="14" />
-        </Style>
-
-        <Style x:Key="SubtleButton" BasedOn="{StaticResource MaterialDesignOutlinedButton}" TargetType="{x:Type ButtonBase}">
-            <Setter Property="FontSize" Value="{DynamicResource StdFontSize}" />
-            <Setter Property="MinHeight" Value="40" />
-            <Setter Property="MinWidth" Value="88" />
-            <Setter Property="Padding" Value="14,9" />
-            <Setter Property="VerticalContentAlignment" Value="Center" />
-            <Setter Property="HorizontalContentAlignment" Value="Center" />
-            <Setter Property="UseLayoutRounding" Value="True" />
-            <Setter Property="SnapsToDevicePixels" Value="True" />
-            <Setter Property="TextBlock.LineHeight" Value="16" />
-            <Setter Property="TextBlock.LineStackingStrategy" Value="BlockLineHeight" />
-            <Setter Property="Foreground" Value="{DynamicResource NetCatStrongTextBrush}" />
-            <Setter Property="Background" Value="{DynamicResource NetCatSurfaceAltBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource NetCatWindowChromeBrush}" />
-            <Setter Property="materialDesign:ButtonAssist.CornerRadius" Value="12" />
-        </Style>
-
-        <Style x:Key="DefComboBox" BasedOn="{StaticResource MaterialDesignOutlinedComboBox}" TargetType="{x:Type ComboBox}">
-            <Setter Property="FontSize" Value="{DynamicResource StdFontSize}" />
-            <Setter Property="HorizontalAlignment" Value="Stretch" />
-            <Setter Property="MinHeight" Value="42" />
-            <Setter Property="Padding" Value="10,6" />
-        </Style>
-
-        <Style x:Key="MyOutlinedTextBox" BasedOn="{StaticResource MaterialDesignOutlinedTextBox}" TargetType="{x:Type TextBox}">
-            <Setter Property="FontSize" Value="{DynamicResource StdFontSize}" />
-            <Setter Property="Padding" Value="{StaticResource OutlinedTextBoxDefaultPadding}" />
-            <Setter Property="MinHeight" Value="42" />
-        </Style>
-
-        <Style x:Key="ModernSlider" BasedOn="{StaticResource MaterialDesignSlider}" TargetType="{x:Type Slider}">
-            <Setter Property="Foreground" Value="{DynamicResource NetCatAccentBrush}" />
-            <Setter Property="Height" Value="34" />
-            <Setter Property="Margin" Value="0,4,0,0" />
-        </Style>
-
-        <Style x:Key="ScrollBarTrackButtonStyle" TargetType="{x:Type RepeatButton}">
-            <Setter Property="OverridesDefaultStyle" Value="True" />
-            <Setter Property="Focusable" Value="False" />
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="{x:Type RepeatButton}">
-                        <Border Background="{TemplateBinding Background}" />
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <Style x:Key="RoundedScrollBarThumbStyle" TargetType="{x:Type Thumb}">
-            <Setter Property="OverridesDefaultStyle" Value="True" />
-            <Setter Property="Focusable" Value="False" />
-            <Setter Property="Background" Value="{DynamicResource NetCatScrollBarThumbBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource NetCatScrollBarThumbBorderBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="{x:Type Thumb}">
-                        <Border
-                            Margin="2"
-                            Background="{TemplateBinding Background}"
-                            BorderBrush="{TemplateBinding BorderBrush}"
-                            BorderThickness="{TemplateBinding BorderThickness}"
-                            CornerRadius="6" />
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter Property="Background" Value="{DynamicResource NetCatScrollBarThumbHoverBrush}" />
-                                <Setter Property="BorderBrush" Value="{DynamicResource NetCatScrollBarThumbBorderBrush}" />
-                            </Trigger>
-                            <Trigger Property="IsDragging" Value="True">
-                                <Setter Property="Background" Value="{DynamicResource NetCatScrollBarThumbDragBrush}" />
-                                <Setter Property="BorderBrush" Value="{DynamicResource NetCatScrollBarThumbBorderBrush}" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <ControlTemplate x:Key="RoundedVerticalScrollBarTemplate" TargetType="{x:Type ScrollBar}">
-            <Border
-                Background="{TemplateBinding Background}"
-                CornerRadius="7"
-                SnapsToDevicePixels="True">
-                <Track
-                    x:Name="PART_Track"
-                    Margin="1"
-                    IsDirectionReversed="True">
-                    <Track.DecreaseRepeatButton>
-                        <RepeatButton Command="ScrollBar.PageUpCommand" Style="{StaticResource ScrollBarTrackButtonStyle}" />
-                    </Track.DecreaseRepeatButton>
-                    <Track.Thumb>
-                        <Thumb MinHeight="40" Style="{StaticResource RoundedScrollBarThumbStyle}" />
-                    </Track.Thumb>
-                    <Track.IncreaseRepeatButton>
-                        <RepeatButton Command="ScrollBar.PageDownCommand" Style="{StaticResource ScrollBarTrackButtonStyle}" />
-                    </Track.IncreaseRepeatButton>
-                </Track>
-            </Border>
-        </ControlTemplate>
-
-        <ControlTemplate x:Key="RoundedHorizontalScrollBarTemplate" TargetType="{x:Type ScrollBar}">
-            <Border
-                Background="{TemplateBinding Background}"
-                CornerRadius="7"
-                SnapsToDevicePixels="True">
-                <Track
-                    x:Name="PART_Track"
-                    Margin="1"
-                    IsDirectionReversed="False">
-                    <Track.DecreaseRepeatButton>
-                        <RepeatButton Command="ScrollBar.PageLeftCommand" Style="{StaticResource ScrollBarTrackButtonStyle}" />
-                    </Track.DecreaseRepeatButton>
-                    <Track.Thumb>
-                        <Thumb MinWidth="40" Style="{StaticResource RoundedScrollBarThumbStyle}" />
-                    </Track.Thumb>
-                    <Track.IncreaseRepeatButton>
-                        <RepeatButton Command="ScrollBar.PageRightCommand" Style="{StaticResource ScrollBarTrackButtonStyle}" />
-                    </Track.IncreaseRepeatButton>
-                </Track>
-            </Border>
-        </ControlTemplate>
-
-        <Style TargetType="{x:Type ScrollBar}">
-            <Setter Property="Background" Value="{DynamicResource NetCatScrollBarTrackBrush}" />
-            <Setter Property="Width" Value="14" />
-            <Setter Property="Template" Value="{StaticResource RoundedVerticalScrollBarTemplate}" />
-            <Style.Triggers>
-                <Trigger Property="Orientation" Value="Horizontal">
-                    <Setter Property="Width" Value="Auto" />
-                    <Setter Property="Height" Value="14" />
-                    <Setter Property="Template" Value="{StaticResource RoundedHorizontalScrollBarTemplate}" />
-                </Trigger>
-                <Trigger Property="Orientation" Value="Vertical">
-                    <Setter Property="Width" Value="14" />
-                    <Setter Property="Height" Value="Auto" />
-                    <Setter Property="Template" Value="{StaticResource RoundedVerticalScrollBarTemplate}" />
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-
-        <Style x:Key="CompactTabItem" TargetType="{x:Type TabItem}">
-            <Setter Property="Padding" Value="14,8" />
-            <Setter Property="Margin" Value="0,0,0,8" />
-            <Setter Property="MinWidth" Value="148" />
-            <Setter Property="MinHeight" Value="40" />
-            <Setter Property="UseLayoutRounding" Value="True" />
-            <Setter Property="SnapsToDevicePixels" Value="True" />
-            <Setter Property="Foreground" Value="{DynamicResource NetCatMutedTextBrush}" />
-            <Setter Property="Background" Value="{DynamicResource NetCatSurfaceAltBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource NetCatWindowChromeBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="{x:Type TabItem}">
-                        <Border
-                            x:Name="TabBorder"
-                            Padding="{TemplateBinding Padding}"
-                            Background="{TemplateBinding Background}"
-                            BorderBrush="{TemplateBinding BorderBrush}"
-                            BorderThickness="{TemplateBinding BorderThickness}"
-                            CornerRadius="14">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" ContentSource="Header" />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsSelected" Value="True">
-                                <Setter TargetName="TabBorder" Property="Background" Value="{DynamicResource NetCatAccentSoftBrush}" />
-                                <Setter TargetName="TabBorder" Property="BorderBrush" Value="{DynamicResource NetCatAccentBrush}" />
-                                <Setter Property="Foreground" Value="{DynamicResource NetCatStrongTextBrush}" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <Style x:Key="MyGroupBox" TargetType="{x:Type GroupBox}">
-            <Setter Property="Margin" Value="0,0,0,14" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="{x:Type GroupBox}">
-                        <Border
-                            Background="{DynamicResource NetCatSurfaceBrush}"
-                            BorderBrush="{DynamicResource NetCatWindowChromeBrush}"
-                            BorderThickness="1"
-                            CornerRadius="22"
-                            SnapsToDevicePixels="True">
-                            <Grid>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="*" />
-                                </Grid.RowDefinitions>
-                                <Border
-                                    Grid.Row="0"
-                                    Padding="18,14,18,12"
-                                    Background="{DynamicResource NetCatSurfaceHeaderBrush}"
-                                    CornerRadius="22,22,0,0">
-                                    <ContentPresenter ContentSource="Header">
-                                        <ContentPresenter.Resources>
-                                            <Style TargetType="{x:Type TextBlock}">
-                                                <Setter Property="FontSize" Value="15" />
-                                                <Setter Property="FontWeight" Value="SemiBold" />
-                                                <Setter Property="Foreground" Value="{DynamicResource NetCatStrongTextBrush}" />
-                                            </Style>
-                                        </ContentPresenter.Resources>
-                                    </ContentPresenter>
-                                </Border>
-                                <ContentPresenter Grid.Row="1" />
-                            </Grid>
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-    </Window.Resources>
     <Grid Margin="16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -427,12 +174,44 @@
                                     MinHeight="40"
                                     VerticalContentAlignment="Center"
                                     ToolTip="Ссылка подписки или vless:// ссылка" />
-                                <Button
-                                    Grid.Row="1"
-                                    Content="Добавить ссылку"
-                                    Style="{StaticResource DefButton}"
-                                    Margin="0,8,0,0"
-                                    Click="OnAddLink" />
+                                <Grid Grid.Row="1" Margin="0,8,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Button
+                                        Grid.Column="0"
+                                        Content="Добавить ссылку"
+                                        Style="{StaticResource DefButton}"
+                                        Margin="0,0,6,0"
+                                        Click="OnAddLink" />
+                                    <Button
+                                        Grid.Column="1"
+                                        Content="Создать конфиг"
+                                        Style="{StaticResource SubtleButton}"
+                                        Margin="6,0,0,0"
+                                        Click="OnCreateConfigClick">
+                                        <Button.ContextMenu>
+                                            <ContextMenu>
+                                                <MenuItem Header="VLESS" Tag="VLESS" Click="OnCreateConfigMenuItemClick" />
+                                                <MenuItem Header="VMess" Tag="VMess" Click="OnCreateConfigMenuItemClick" />
+                                                <MenuItem Header="Trojan" Tag="Trojan" Click="OnCreateConfigMenuItemClick" />
+                                                <MenuItem Header="Shadowsocks" Tag="Shadowsocks" Click="OnCreateConfigMenuItemClick" />
+                                                <MenuItem Header="Hysteria2" Tag="Hysteria2" Click="OnCreateConfigMenuItemClick" />
+                                                <MenuItem Header="TUIC" Tag="TUIC" Click="OnCreateConfigMenuItemClick" />
+                                                <MenuItem Header="WireGuard" Tag="WireGuard" Click="OnCreateConfigMenuItemClick" />
+                                                <MenuItem Header="AnyTLS" Tag="Anytls" Click="OnCreateConfigMenuItemClick" />
+                                                <Separator />
+                                                <MenuItem Header="SOCKS" Tag="SOCKS" Click="OnCreateConfigMenuItemClick" />
+                                                <MenuItem Header="HTTP" Tag="HTTP" Click="OnCreateConfigMenuItemClick" />
+                                                <MenuItem Header="Custom" Tag="Custom" Click="OnCreateConfigMenuItemClick" />
+                                                <Separator />
+                                                <MenuItem Header="Policy Group" Tag="PolicyGroup" Click="OnCreateConfigMenuItemClick" />
+                                                <MenuItem Header="Proxy Chain" Tag="ProxyChain" Click="OnCreateConfigMenuItemClick" />
+                                            </ContextMenu>
+                                        </Button.ContextMenu>
+                                    </Button>
+                                </Grid>
                                 <ListBox
                                     Grid.Row="2"
                                     Margin="0,12,0,0"
@@ -778,12 +557,6 @@
                                             <StackPanel Margin="0,0,12,0">
                                                 <TextBlock FontSize="13" FontWeight="SemiBold" Text="Telegram Desktop" />
                                                 <TextBlock Margin="0,6,0,0" FontSize="12" Opacity="0.75" Text="{Binding TelegramTrafficSummary}" TextWrapping="Wrap" />
-                                                <WrapPanel Margin="0,10,0,0">
-                                                    <Button
-                                                        Content="Открыть в Telegram"
-                                                        Style="{StaticResource SubtleButton}"
-                                                        Click="OnOpenTelegramProxyInTelegram" />
-                                                </WrapPanel>
                                             </StackPanel>
                                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                                 <TextBlock Margin="0,0,10,0" VerticalAlignment="Center" FontSize="12" Opacity="0.75" Text="VPN" />
@@ -807,13 +580,12 @@
                                 </StackPanel>
                             </GroupBox>
 
-                            <GroupBox Header="Theme" Style="{StaticResource MyGroupBox}" Margin="0,12,0,0">
+                            <GroupBox Header="Colors" Style="{StaticResource MyGroupBox}" Margin="0,12,0,0">
                                 <StackPanel Margin="12">
-                                    <ComboBox Margin="0,0,0,0" ItemsSource="{Binding InterfaceVariants}" SelectedItem="{Binding SelectedInterfaceVariant}" DisplayMemberPath="Title" Style="{StaticResource DefComboBox}" SelectionChanged="OnInterfaceVariantChanged" />
-                                    <TextBlock Margin="0,6,0,0" FontSize="12" Opacity="0.7" Text="{Binding CurrentInterfaceVariantDescription}" TextWrapping="Wrap" />
-                                    <TextBlock Margin="0,10,0,0" FontSize="12" Opacity="0.75" Text="Акцентный цвет интерфейса" />
+                                    <TextBlock FontSize="12" Opacity="0.7" Text="Отдельно настраиваются акцент и основной цвет поверхностей интерфейса." TextWrapping="Wrap" />
+                                    <TextBlock Margin="0,10,0,0" FontSize="12" Opacity="0.75" Text="Акцентный цвет" />
                                     <Grid
-                                        x:Name="CustomColorPlaneNew"
+                                        x:Name="AccentColorPlaneMain"
                                         Width="260"
                                         Height="160"
                                         Margin="0,12,0,0"
@@ -845,6 +617,40 @@
                                     <TextBlock Margin="0,8,0,0" FontSize="12" Opacity="0.7" Text="Оттенок" />
                                     <Slider Style="{StaticResource ModernSlider}" Minimum="0" Maximum="360" Value="{Binding CustomHue, Mode=TwoWay}" TickFrequency="30" IsSnapToTickEnabled="False" ValueChanged="OnCustomHueChanged" />
                                     <TextBlock Margin="0,8,0,0" FontSize="12" Opacity="0.7" Text="{Binding CustomPrimaryColorHex}" />
+                                    <TextBlock Margin="0,14,0,0" FontSize="12" Opacity="0.75" Text="Основной цвет интерфейса" />
+                                    <Grid
+                                        x:Name="InterfaceColorPlaneMain"
+                                        Width="260"
+                                        Height="160"
+                                        Margin="0,12,0,0"
+                                        HorizontalAlignment="Left"
+                                        MouseLeftButtonDown="OnInterfaceColorPlaneMouseDown"
+                                        MouseMove="OnInterfaceColorPlaneMouseMove"
+                                        MouseLeftButtonUp="OnInterfaceColorPlaneMouseUp">
+                                        <Rectangle Fill="{Binding InterfaceBaseBrush}" RadiusX="16" RadiusY="16" />
+                                        <Rectangle RadiusX="16" RadiusY="16">
+                                            <Rectangle.Fill>
+                                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                                    <GradientStop Color="#FFFFFFFF" Offset="0" />
+                                                    <GradientStop Color="#00FFFFFF" Offset="1" />
+                                                </LinearGradientBrush>
+                                            </Rectangle.Fill>
+                                        </Rectangle>
+                                        <Rectangle RadiusX="16" RadiusY="16">
+                                            <Rectangle.Fill>
+                                                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                                    <GradientStop Color="#00000000" Offset="0" />
+                                                    <GradientStop Color="#FF000000" Offset="1" />
+                                                </LinearGradientBrush>
+                                            </Rectangle.Fill>
+                                        </Rectangle>
+                                        <Canvas IsHitTestVisible="False">
+                                            <Ellipse Width="12" Height="12" Stroke="White" StrokeThickness="2" Fill="Transparent" Canvas.Left="{Binding InterfaceColorCursorLeft}" Canvas.Top="{Binding InterfaceColorCursorTop}" />
+                                        </Canvas>
+                                    </Grid>
+                                    <TextBlock Margin="0,8,0,0" FontSize="12" Opacity="0.7" Text="Оттенок" />
+                                    <Slider Style="{StaticResource ModernSlider}" Minimum="0" Maximum="360" Value="{Binding InterfaceHue, Mode=TwoWay}" TickFrequency="30" IsSnapToTickEnabled="False" ValueChanged="OnInterfaceHueChanged" />
+                                    <TextBlock Margin="0,8,0,0" FontSize="12" Opacity="0.7" Text="{Binding InterfaceColorHex}" />
                                 </StackPanel>
                             </GroupBox>
                         </StackPanel>
@@ -934,11 +740,44 @@
                                 MinHeight="40"
                                 VerticalContentAlignment="Center"
                                 ToolTip="Ссылка подписки или vless:// ссылка" />
-                            <Button
-                                Content="Добавить ссылку"
-                                Style="{StaticResource DefButton}"
-                                Margin="0,8,0,0"
-                                Click="OnAddLink" />
+                            <Grid Margin="0,8,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Button
+                                    Grid.Column="0"
+                                    Content="Добавить ссылку"
+                                    Style="{StaticResource DefButton}"
+                                    Margin="0,0,6,0"
+                                    Click="OnAddLink" />
+                                <Button
+                                    Grid.Column="1"
+                                    Content="Создать конфиг"
+                                    Style="{StaticResource SubtleButton}"
+                                    Margin="6,0,0,0"
+                                    Click="OnCreateConfigClick">
+                                    <Button.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="VLESS" Tag="VLESS" Click="OnCreateConfigMenuItemClick" />
+                                            <MenuItem Header="VMess" Tag="VMess" Click="OnCreateConfigMenuItemClick" />
+                                            <MenuItem Header="Trojan" Tag="Trojan" Click="OnCreateConfigMenuItemClick" />
+                                            <MenuItem Header="Shadowsocks" Tag="Shadowsocks" Click="OnCreateConfigMenuItemClick" />
+                                            <MenuItem Header="Hysteria2" Tag="Hysteria2" Click="OnCreateConfigMenuItemClick" />
+                                            <MenuItem Header="TUIC" Tag="TUIC" Click="OnCreateConfigMenuItemClick" />
+                                            <MenuItem Header="WireGuard" Tag="WireGuard" Click="OnCreateConfigMenuItemClick" />
+                                            <MenuItem Header="AnyTLS" Tag="Anytls" Click="OnCreateConfigMenuItemClick" />
+                                            <Separator />
+                                            <MenuItem Header="SOCKS" Tag="SOCKS" Click="OnCreateConfigMenuItemClick" />
+                                            <MenuItem Header="HTTP" Tag="HTTP" Click="OnCreateConfigMenuItemClick" />
+                                            <MenuItem Header="Custom" Tag="Custom" Click="OnCreateConfigMenuItemClick" />
+                                            <Separator />
+                                            <MenuItem Header="Policy Group" Tag="PolicyGroup" Click="OnCreateConfigMenuItemClick" />
+                                            <MenuItem Header="Proxy Chain" Tag="ProxyChain" Click="OnCreateConfigMenuItemClick" />
+                                        </ContextMenu>
+                                    </Button.ContextMenu>
+                                </Button>
+                            </Grid>
                         </StackPanel>
                         <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
                             <Grid>
@@ -1602,35 +1441,15 @@
                             </StackPanel>
                         </TabItem>
 
-                        <TabItem Header="Theme">
+                        <TabItem Header="Colors">
                             <StackPanel Margin="0,12,0,0">
 
-                            <GroupBox Header="Theme" Style="{StaticResource MyGroupBox}" Margin="0,0,0,12">
+                            <GroupBox Header="Colors" Style="{StaticResource MyGroupBox}" Margin="0,0,0,12">
                                 <StackPanel Margin="12">
-                                    <TextBlock FontSize="12" Opacity="0.7" Text="Выбор варианта интерфейса и акцентного цвета" />
-                                    <ComboBox
-                                        Margin="0,8,0,0"
-                                        ItemsSource="{Binding InterfaceVariants}"
-                                        SelectedItem="{Binding SelectedInterfaceVariant}"
-                                        DisplayMemberPath="Title"
-                                        Style="{StaticResource DefComboBox}"
-                                        SelectionChanged="OnInterfaceVariantChanged" />
-                                    <TextBlock Margin="0,6,0,0" FontSize="12" Opacity="0.7" Text="{Binding CurrentInterfaceVariantDescription}" TextWrapping="Wrap" />
-                                    <CheckBox
-                                        Content="Использовать собственный акцентный цвет"
-                                        IsChecked="{Binding UseCustomPrimaryColor, Mode=TwoWay}"
-                                        Margin="0,10,0,0"
-                                        Checked="OnUseCustomPrimaryColorChanged"
-                                        Unchecked="OnUseCustomPrimaryColorChanged" />
-                                    <ComboBox
-                                        Margin="0,8,0,0"
-                                        ItemsSource="{Binding PrimaryColors}"
-                                        SelectedItem="{Binding SelectedPrimaryColor}"
-                                        DisplayMemberPath="Name"
-                                        Style="{StaticResource DefComboBox}"
-                                        SelectionChanged="OnPrimaryColorChanged" />
+                                    <TextBlock FontSize="12" Opacity="0.7" Text="Настройка двух цветов: акцентного и основного цвета интерфейса." TextWrapping="Wrap" />
+                                    <TextBlock Margin="0,10,0,0" FontSize="12" Opacity="0.75" Text="Акцентный цвет" />
                                     <Grid
-                                        x:Name="CustomColorPlane"
+                                        x:Name="AccentColorPlaneTab"
                                         Width="260"
                                         Height="160"
                                         Margin="0,12,0,0"
@@ -1676,7 +1495,57 @@
                                         ValueChanged="OnCustomHueChanged" />
                                     <TextBlock Margin="0,8,0,0" FontSize="12" Opacity="0.7" Text="{Binding CustomPrimaryColorHex}" />
                                     <TextBlock Margin="0,6,0,0" FontSize="12" Opacity="0.7" TextWrapping="Wrap">
-                                        Меняет основной цвет кнопок, акцентов и выделений интерфейса.
+                                        Меняет цвет основных кнопок, акцентов и выделений интерфейса.
+                                    </TextBlock>
+                                    <TextBlock Margin="0,14,0,0" FontSize="12" Opacity="0.75" Text="Основной цвет интерфейса" />
+                                    <Grid
+                                        x:Name="InterfaceColorPlaneTab"
+                                        Width="260"
+                                        Height="160"
+                                        Margin="0,12,0,0"
+                                        MouseLeftButtonDown="OnInterfaceColorPlaneMouseDown"
+                                        MouseMove="OnInterfaceColorPlaneMouseMove"
+                                        MouseLeftButtonUp="OnInterfaceColorPlaneMouseUp">
+                                        <Rectangle Fill="{Binding InterfaceBaseBrush}" />
+                                        <Rectangle>
+                                            <Rectangle.Fill>
+                                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                                    <GradientStop Color="#FFFFFFFF" Offset="0" />
+                                                    <GradientStop Color="#00FFFFFF" Offset="1" />
+                                                </LinearGradientBrush>
+                                            </Rectangle.Fill>
+                                        </Rectangle>
+                                        <Rectangle>
+                                            <Rectangle.Fill>
+                                                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                                    <GradientStop Color="#00000000" Offset="0" />
+                                                    <GradientStop Color="#FF000000" Offset="1" />
+                                                </LinearGradientBrush>
+                                            </Rectangle.Fill>
+                                        </Rectangle>
+                                        <Canvas IsHitTestVisible="False">
+                                            <Ellipse
+                                                Width="12"
+                                                Height="12"
+                                                Stroke="White"
+                                                StrokeThickness="2"
+                                                Fill="Transparent"
+                                                Canvas.Left="{Binding InterfaceColorCursorLeft}"
+                                                Canvas.Top="{Binding InterfaceColorCursorTop}" />
+                                        </Canvas>
+                                    </Grid>
+                                    <TextBlock Margin="0,8,0,0" FontSize="12" Opacity="0.7" Text="Оттенок" />
+                                    <Slider
+                                        Style="{StaticResource ModernSlider}"
+                                        Minimum="0"
+                                        Maximum="360"
+                                        Value="{Binding InterfaceHue, Mode=TwoWay}"
+                                        TickFrequency="30"
+                                        IsSnapToTickEnabled="False"
+                                        ValueChanged="OnInterfaceHueChanged" />
+                                    <TextBlock Margin="0,8,0,0" FontSize="12" Opacity="0.7" Text="{Binding InterfaceColorHex}" />
+                                    <TextBlock Margin="0,6,0,0" FontSize="12" Opacity="0.7" TextWrapping="Wrap">
+                                        Меняет фон окна, карточек, панелей и автоматически подбирает контраст текста под этот фон.
                                     </TextBlock>
                                 </StackPanel>
                             </GroupBox>

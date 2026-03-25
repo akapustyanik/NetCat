@@ -82,9 +82,7 @@ public sealed class AppManager
         SQLiteHelper.Instance.CreateTable<ProfileExItem>();
         SQLiteHelper.Instance.CreateTable<DNSItem>();
         SQLiteHelper.Instance.CreateTable<FullConfigTemplateItem>();
-#pragma warning disable CS0618
-        SQLiteHelper.Instance.CreateTable<ProfileGroupItem>();
-#pragma warning restore CS0618
+        SQLiteHelper.Instance.CreateTable<LegacyProfileGroupItem>();
         return true;
     }
 
@@ -323,8 +321,6 @@ public sealed class AppManager
     {
         await MigrateProfileExtraGroup();
 
-#pragma warning disable CS0618
-
         const int pageSize = 100;
         var offset = 0;
 
@@ -348,7 +344,6 @@ public sealed class AppManager
         }
 
         //await ProfileGroupItemManager.Instance.ClearAll();
-#pragma warning restore CS0618
     }
 
     private async Task<int> MigrateProfileExtraSub(List<ProfileItem> batch)
@@ -363,22 +358,22 @@ public sealed class AppManager
                 switch (item.ConfigType)
                 {
                     case EConfigType.Shadowsocks:
-                        extra = extra with { SsMethod = item.Security.NullIfEmpty() };
+                        extra = extra with { SsMethod = GetLegacyString(item, "Security").NullIfEmpty() };
                         break;
 
                     case EConfigType.VMess:
                         extra = extra with
                         {
-                            AlterId = item.AlterId.ToString(),
-                            VmessSecurity = item.Security.NullIfEmpty(),
+                            AlterId = GetLegacyInt(item, "AlterId") > 0 ? GetLegacyInt(item, "AlterId").ToString() : null,
+                            VmessSecurity = GetLegacyString(item, "Security").NullIfEmpty(),
                         };
                         break;
 
                     case EConfigType.VLESS:
                         extra = extra with
                         {
-                            Flow = item.Flow.NullIfEmpty(),
-                            VlessEncryption = item.Security,
+                            Flow = GetLegacyString(item, "Flow").NullIfEmpty(),
+                            VlessEncryption = GetLegacyString(item, "Security"),
                         };
                         break;
 
@@ -386,7 +381,7 @@ public sealed class AppManager
                         extra = extra with
                         {
                             SalamanderPass = item.Path.NullIfEmpty(),
-                            Ports = item.Ports.NullIfEmpty(),
+                            Ports = GetLegacyString(item, "Ports").NullIfEmpty(),
                             UpMbps = _config.HysteriaItem.UpMbps,
                             DownMbps = _config.HysteriaItem.DownMbps,
                             HopInterval = _config.HysteriaItem.HopInterval.ToString(),
@@ -394,14 +389,14 @@ public sealed class AppManager
                         break;
 
                     case EConfigType.TUIC:
-                        item.Username = item.Id;
-                        item.Id = item.Security;
-                        item.Password = item.Security;
+                        item.Username = GetLegacyString(item, "Id");
+                        SetLegacyString(item, "Id", GetLegacyString(item, "Security"));
+                        item.Password = GetLegacyString(item, "Security");
                         break;
 
                     case EConfigType.HTTP:
                     case EConfigType.SOCKS:
-                        item.Username = item.Security;
+                        item.Username = GetLegacyString(item, "Security");
                         break;
 
                     case EConfigType.WireGuard:
@@ -417,7 +412,7 @@ public sealed class AppManager
 
                 item.SetProtocolExtra(extra);
 
-                item.Password = item.Id;
+                item.Password = GetLegacyString(item, "Id");
 
                 item.ConfigVersion = 3;
 
@@ -450,9 +445,8 @@ public sealed class AppManager
 
     private async Task<bool> MigrateProfileExtraGroup()
     {
-#pragma warning disable CS0618
-        var list = await SQLiteHelper.Instance.TableAsync<ProfileGroupItem>().ToListAsync();
-        var groupItems = new ConcurrentDictionary<string, ProfileGroupItem>(list.Where(t => !string.IsNullOrEmpty(t.IndexId)).ToDictionary(t => t.IndexId!));
+        var list = await SQLiteHelper.Instance.TableAsync<LegacyProfileGroupItem>().ToListAsync();
+        var groupItems = new ConcurrentDictionary<string, LegacyProfileGroupItem>(list.Where(t => !string.IsNullOrEmpty(t.IndexId)).ToDictionary(t => t.IndexId!));
 
         var sql = $"SELECT * FROM ProfileItem WHERE ConfigVersion < 3 AND ConfigType IN ({(int)EConfigType.PolicyGroup}, {(int)EConfigType.ProxyChain})";
         var items = await SQLiteHelper.Instance.QueryAsync<ProfileItem>(sql);
@@ -515,7 +509,49 @@ public sealed class AppManager
         return true;
 
         //await ProfileGroupItemManager.Instance.ClearAll();
-#pragma warning restore CS0618
+    }
+
+    private static string GetLegacyString(ProfileItem item, string propertyName)
+    {
+        return item.GetType().GetProperty(propertyName)?.GetValue(item)?.ToString() ?? string.Empty;
+    }
+
+    private static int GetLegacyInt(ProfileItem item, string propertyName)
+    {
+        var value = item.GetType().GetProperty(propertyName)?.GetValue(item);
+        return value switch
+        {
+            int intValue => intValue,
+            short shortValue => shortValue,
+            long longValue when longValue is >= int.MinValue and <= int.MaxValue => (int)longValue,
+            string textValue when int.TryParse(textValue, out var parsed) => parsed,
+            _ => 0
+        };
+    }
+
+    private static void SetLegacyString(ProfileItem item, string propertyName, string? value)
+    {
+        item.GetType().GetProperty(propertyName)?.SetValue(item, value ?? string.Empty);
+    }
+
+    [Table("ProfileGroupItem")]
+    private sealed class LegacyProfileGroupItem
+    {
+        [PrimaryKey]
+        public string IndexId { get; set; } = string.Empty;
+
+        public string ChildItems { get; set; } = string.Empty;
+
+        public string? SubChildItems { get; set; }
+
+        public string? Filter { get; set; }
+
+        public EMultipleLoad MultipleLoad { get; set; } = EMultipleLoad.LeastPing;
+
+        public bool NotHasChild()
+        {
+            return string.IsNullOrWhiteSpace(ChildItems) && string.IsNullOrWhiteSpace(SubChildItems);
+        }
     }
 
     #endregion SqliteHelper

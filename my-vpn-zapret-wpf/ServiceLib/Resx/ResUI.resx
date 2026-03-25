@@ -901,7 +901,7 @@
     <value>Failed to run Core, please check the prompt information</value>
   </data>
   <data name="LvFilter" xml:space="preserve">
-    <value>Remarks regular filter</value>
+    <value>Remarks filter (regex)</value>
   </data>
   <data name="TbDisplayLog" xml:space="preserve">
     <value>Display Log</value>
@@ -1537,7 +1537,7 @@
     <value>Remove Child </value>
   </data>
   <data name="menuServerList" xml:space="preserve">
-    <value>Configuration item 1, Auto add from subscription group</value>
+    <value>From subscriptions</value>
   </data>
   <data name="TbFallback" xml:space="preserve">
     <value>Fallback</value>
@@ -1576,7 +1576,7 @@
     <value>Test real delay</value>
   </data>
   <data name="TbPolicyGroupSubChildTip" xml:space="preserve">
-    <value>Auto add filtered configuration from subscription groups</value>
+    <value>Automatically adds filtered configurations from the selected subscription group</value>
   </data>
   <data name="TbCertPinning" xml:space="preserve">
     <value>Certificate Pinning</value>
@@ -1612,7 +1612,7 @@ The "Get Certificate" action may fail if a self-signed certificate is used or if
     <value>macOS displays this in the Dock (requires restart)</value>
   </data>
   <data name="menuServerList2" xml:space="preserve">
-    <value>Configuration Item 2, Select and add from self-built</value>
+    <value>Child servers</value>
   </data>
   <data name="TbEchConfigList" xml:space="preserve">
     <value>EchConfigList</value>
@@ -1648,7 +1648,7 @@ The "Get Certificate" action may fail if a self-signed certificate is used or if
     <value>Port hopping interval</value>
   </data>
   <data name="menuServerListPreview" xml:space="preserve">
-    <value>Configuration item preview</value>
+    <value>Preview</value>
   </data>
   <data name="TbFinalmask" xml:space="preserve">
     <value>Finalmask</value>

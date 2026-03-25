@@ -1,12 +1,17 @@
 <Project>
 
     <PropertyGroup>
-        <Version>0.3.0</Version>
+        <Version>0.3.1</Version>
+        <NetCatVersionFamily>$(Version)</NetCatVersionFamily>
+        <NetCatTelegramWsProxyImplementation>tg-ws-proxy-main</NetCatTelegramWsProxyImplementation>
+        <NetCatTelegramWsProxySchemaVersion>3</NetCatTelegramWsProxySchemaVersion>
+        <NetCatTelegramWsProxyVersionFamily>netcat-v$(NetCatVersionFamily)+schema.$(NetCatTelegramWsProxySchemaVersion)</NetCatTelegramWsProxyVersionFamily>
     </PropertyGroup>
 
     <PropertyGroup>
         <TargetFramework>net8.0</TargetFramework>
         <TargetLatestRuntimePatch>true</TargetLatestRuntimePatch>
+        <UseRidGraph>true</UseRidGraph>
         <CheckForOverflowUnderflow>true</CheckForOverflowUnderflow>
         <NoWarn>CA1031;CS1591;NU1507;NU1701;CA1416;IDE0058;IDE0053;IDE0200</NoWarn>
         <Nullable>annotations</Nullable>
@@ -30,4 +35,23 @@
         <PublishSingleFile>true</PublishSingleFile>
         <PublishReadyToRun>false</PublishReadyToRun>
     </PropertyGroup>
+
+    <ItemGroup>
+        <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+            <_Parameter1>NetCatVersionFamily</_Parameter1>
+            <_Parameter2>$(NetCatVersionFamily)</_Parameter2>
+        </AssemblyAttribute>
+        <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+            <_Parameter1>NetCatTelegramWsProxyImplementation</_Parameter1>
+            <_Parameter2>$(NetCatTelegramWsProxyImplementation)</_Parameter2>
+        </AssemblyAttribute>
+        <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+            <_Parameter1>NetCatTelegramWsProxySchemaVersion</_Parameter1>
+            <_Parameter2>$(NetCatTelegramWsProxySchemaVersion)</_Parameter2>
+        </AssemblyAttribute>
+        <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+            <_Parameter1>NetCatTelegramWsProxyVersionFamily</_Parameter1>
+            <_Parameter2>$(NetCatTelegramWsProxyVersionFamily)</_Parameter2>
+        </AssemblyAttribute>
+    </ItemGroup>
 </Project>

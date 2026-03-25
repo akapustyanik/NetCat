@@ -445,7 +445,7 @@
     <value>Обновить подписку через прокси</value>
   </data>
   <data name="menuSubscription" xml:space="preserve">
-    <value>Группа подписки</value>
+    <value>Группа подписок</value>
   </data>
   <data name="menuSubSetting" xml:space="preserve">
     <value>Настройки группы подписки</value>
@@ -1537,7 +1537,7 @@
     <value>Remove Child Configuration</value>
   </data>
   <data name="menuServerList" xml:space="preserve">
-    <value>Configuration item 1, Auto add from subscription group</value>
+    <value>Из подписок</value>
   </data>
   <data name="TbFallback" xml:space="preserve">
     <value>Fallback</value>
@@ -1576,7 +1576,7 @@
     <value>Test real delay</value>
   </data>
   <data name="TbPolicyGroupSubChildTip" xml:space="preserve">
-    <value>Auto add filtered configuration from subscription groups</value>
+    <value>Автоматически добавляет отфильтрованные конфиги из выбранной группы подписок</value>
   </data>
   <data name="TbCertPinning" xml:space="preserve">
     <value>Certificate Pinning</value>
@@ -1612,7 +1612,7 @@ The "Get Certificate" action may fail if a self-signed certificate is used or if
     <value>macOS displays this in the Dock (requires restart)</value>
   </data>
   <data name="menuServerList2" xml:space="preserve">
-    <value>Configuration Item 2, Select and add from self-built</value>
+    <value>Серверы</value>
   </data>
   <data name="TbEchConfigList" xml:space="preserve">
     <value>EchConfigList</value>
@@ -1648,7 +1648,7 @@ The "Get Certificate" action may fail if a self-signed certificate is used or if
     <value>Port hopping interval</value>
   </data>
   <data name="menuServerListPreview" xml:space="preserve">
-    <value>Configuration item preview</value>
+    <value>Предпросмотр</value>
   </data>
   <data name="TbFinalmask" xml:space="preserve">
     <value>Finalmask</value>

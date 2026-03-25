@@ -2,7 +2,6 @@ namespace ServiceLib.Services;
 
 public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
 {
-    private const string _telegramWsProxyModuleName = "TelegramWsProxy";
     private const string _zapretModuleName = "Zapret";
     private const string _zapretRepository = "Flowseal/zapret-discord-youtube";
     private const string _zapretReleaseApiUrl = $"{Global.GithubApiUrl}/{_zapretRepository}/releases";
@@ -137,8 +136,6 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
             {
                 "GeoFiles" => GetInstalledGeoFilesVersionDisplay(),
                 "Zapret" => GetInstalledZapretVersionDisplay(),
-                _ when string.Equals(moduleName, _telegramWsProxyModuleName, StringComparison.OrdinalIgnoreCase)
-                    => $"embedded ({Utils.GetVersionInfo()})",
                 _ when string.Equals(moduleName, ECoreType.v2rayN.ToString(), StringComparison.OrdinalIgnoreCase)
                     => Utils.GetVersionInfo(),
                 _ => await GetInstalledCoreVersionDisplayAsync(moduleName)

@@ -793,12 +793,12 @@ public class Utils
     {
         try
         {
-            return Assembly.GetExecutingAssembly()?.GetName()?.Version?.ToString(3) ?? "0.0";
+            return NetCatVersionInfo.VersionFamily;
         }
         catch (Exception ex)
         {
             Logging.SaveLog(_tag, ex);
-            return "0.0";
+            return "0.0.0";
         }
     }
 
