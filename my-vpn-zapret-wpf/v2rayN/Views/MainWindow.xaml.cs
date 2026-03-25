@@ -3013,7 +3013,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         _paletteHelper.SetTheme(theme);
 
         ApplyInterfaceColorResources(palette);
-        WindowsUtils.SetDarkBorder(this, _config.UiItem.CurrentTheme);
+        ApplyAppearanceToOpenWindows();
     }
 
     private void ApplyInterfaceColorResources(InterfacePalette palette)
@@ -3036,6 +3036,22 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         SetThemeResource("NetCatScrollBarThumbDragBrush", CreateFrozenBrush(BlendWith(palette.AccentColor, Colors.Black, 0.18)));
         SetThemeResource("NetCatHeroGradientBrush", CreateFrozenGradientBrush(palette.HeroStartColor, palette.HeroEndColor));
         Background = CreateFrozenBrush(palette.WindowBackgroundColor);
+    }
+
+    private void ApplyAppearanceToOpenWindows()
+    {
+        if (Application.Current == null)
+        {
+            WindowsUtils.SetDarkBorder(this, _config.UiItem.CurrentTheme);
+            return;
+        }
+
+        foreach (Window window in Application.Current.Windows)
+        {
+            window.SetResourceReference(Window.BackgroundProperty, "NetCatWindowBackgroundBrush");
+            window.SetResourceReference(Window.ForegroundProperty, "NetCatStrongTextBrush");
+            WindowsUtils.SetDarkBorder(window, _config.UiItem.CurrentTheme);
+        }
     }
 
     private void SetThemeResource(string key, object value)

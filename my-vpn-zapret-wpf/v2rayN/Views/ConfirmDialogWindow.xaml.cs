@@ -6,7 +6,8 @@ public partial class ConfirmDialogWindow : Window
     {
         InitializeComponent();
 
-        Owner = Application.Current?.Windows.OfType<Window>().FirstOrDefault(w => w.IsActive);
+        Owner = Application.Current?.Windows.OfType<Window>().FirstOrDefault(w => w.IsActive)
+            ?? Application.Current?.MainWindow;
         Title = Global.AppName;
         txtTitle.Text = title;
         txtMessage.Text = message;
@@ -25,7 +26,11 @@ public partial class ConfirmDialogWindow : Window
             Close();
         };
 
-        Loaded += (_, _) => btnCancel.Focus();
+        Loaded += (_, _) =>
+        {
+            btnCancel.Focus();
+            Activate();
+        };
         WindowsUtils.SetDarkBorder(this, AppManager.Instance.Config.UiItem.CurrentTheme);
     }
 }

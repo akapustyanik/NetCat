@@ -3,16 +3,20 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:materialDesign="http://materialdesigninxaml.net/winfx/xaml/themes"
+    AllowsTransparency="True"
+    Background="Transparent"
     Title="NetCat"
-    Width="460"
-    MinWidth="400"
-    SizeToContent="Height"
+    MinWidth="360"
+    MaxWidth="460"
+    SizeToContent="WidthAndHeight"
     ResizeMode="NoResize"
     ShowInTaskbar="False"
+    ShowActivated="True"
     Style="{StaticResource WindowGlobal}"
+    WindowStyle="None"
     WindowStartupLocation="CenterOwner">
     <Border
-        Margin="16"
+        Margin="10"
         Padding="24"
         Background="{DynamicResource NetCatSurfaceBrush}"
         BorderBrush="{DynamicResource NetCatWindowChromeBrush}"
@@ -36,7 +40,7 @@
                     x:Name="txtTitle"
                     Margin="12,0,0,0"
                     VerticalAlignment="Center"
-                    FontSize="18"
+                    FontSize="17"
                     FontWeight="SemiBold"
                     Foreground="{DynamicResource NetCatStrongTextBrush}"
                     Text="Confirm" />
@@ -45,27 +49,27 @@
             <TextBlock
                 x:Name="txtMessage"
                 Grid.Row="1"
-                Margin="0,18,0,0"
+                Margin="0,16,0,0"
                 FontSize="13"
                 Foreground="{DynamicResource NetCatMutedTextBrush}"
                 TextWrapping="Wrap" />
 
             <StackPanel
                 Grid.Row="2"
-                Margin="0,24,0,0"
+                Margin="0,20,0,0"
                 HorizontalAlignment="Right"
                 Orientation="Horizontal">
                 <Button
                     x:Name="btnCancel"
-                    MinWidth="104"
+                    MinWidth="96"
                     Margin="0"
                     Content="Cancel"
                     IsCancel="True"
                     Style="{StaticResource SubtleButton}" />
                 <Button
                     x:Name="btnConfirm"
-                    MinWidth="110"
-                    Margin="10,0,0,0"
+                    MinWidth="100"
+                    Margin="8,0,0,0"
                     Content="Confirm"
                     IsDefault="True"
                     Style="{StaticResource DefButton}" />
