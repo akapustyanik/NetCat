@@ -2,6 +2,7 @@ namespace ServiceLib.Services;
 
 public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
 {
+    private const string _telegramWsProxyModuleName = "TelegramWsProxy";
     private const string _zapretModuleName = "Zapret";
     private const string _zapretRepository = "Flowseal/zapret-discord-youtube";
     private const string _zapretReleaseApiUrl = $"{Global.GithubApiUrl}/{_zapretRepository}/releases";
@@ -12,6 +13,13 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
         public long? ContentLength { get; set; }
         public string? ETag { get; set; }
         public DateTimeOffset? LastModified { get; set; }
+    }
+
+    private sealed class GuiUpdateManifestMetadata
+    {
+        public string? App { get; set; }
+        public string? Version { get; set; }
+        public string? Runtime { get; set; }
     }
 
     private static readonly string[] _zipExtensions = [".zip"];
@@ -38,6 +46,111 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
         }
     }
 
+    public async Task<UpdateResult> CheckCoreUpdateAvailability(ECoreType type, bool preRelease)
+    {
+        try
+        {
+            var downloadHandle = new DownloadService();
+            return await CheckUpdateAsync(downloadHandle, type, preRelease);
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog(_tag, ex);
+            return new UpdateResult(false, ex.Message)
+            {
+                Status = EUpdateAvailabilityStatus.Failed,
+                FailureStage = EUpdateFailureStage.Check
+            };
+        }
+    }
+
+    public async Task<UpdateResult> CheckZapretUpdateAvailability()
+    {
+        try
+        {
+            var downloadHandle = new DownloadService();
+            var release = await GetGitHubRelease(downloadHandle, _zapretReleaseApiUrl, false);
+            if (release == null)
+            {
+                return new UpdateResult(false, "Failed to resolve Zapret release information.")
+                {
+                    Status = EUpdateAvailabilityStatus.Failed,
+                    FailureStage = EUpdateFailureStage.ReleaseLookup
+                };
+            }
+
+            var asset = GetPreferredZapretAsset(release);
+            if (asset?.BrowserDownloadUrl.IsNullOrEmpty() != false)
+            {
+                return new UpdateResult(false, "GitHub release does not contain a compatible Zapret .zip asset.")
+                {
+                    Status = EUpdateAvailabilityStatus.Failed,
+                    FailureStage = EUpdateFailureStage.AssetSelection,
+                    Release = release,
+                    Asset = asset
+                };
+            }
+
+            var targetPath = GetZapretInstallPath();
+            var currentVersion = GetZapretLocalVersion(targetPath);
+            var latestVersion = NormalizeZapretVersion(release.TagName)
+                ?? NormalizeZapretVersion(release.Name)
+                ?? NormalizeZapretVersion(asset.Name);
+
+            if (currentVersion.IsNotEmpty()
+                && latestVersion.IsNotEmpty()
+                && string.Equals(currentVersion, latestVersion, StringComparison.OrdinalIgnoreCase))
+            {
+                return new UpdateResult(false, $"Zapret {currentVersion} is already up to date.")
+                {
+                    Status = EUpdateAvailabilityStatus.UpToDate,
+                    Release = release,
+                    Asset = asset,
+                    Version = new SemanticVersion(latestVersion)
+                };
+            }
+
+            return new UpdateResult(true, $"Update available: {latestVersion ?? release.TagName ?? asset.Name ?? "latest"}")
+            {
+                Status = EUpdateAvailabilityStatus.Available,
+                Release = release,
+                Asset = asset,
+                Version = latestVersion.IsNullOrEmpty() ? null : new SemanticVersion(latestVersion)
+            };
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog(_tag, ex);
+            return new UpdateResult(false, ex.Message)
+            {
+                Status = EUpdateAvailabilityStatus.Failed,
+                FailureStage = EUpdateFailureStage.Check
+            };
+        }
+    }
+
+    public async Task<string> GetInstalledModuleVersionDisplayAsync(string moduleName)
+    {
+        try
+        {
+            return moduleName switch
+            {
+                "GeoFiles" => GetInstalledGeoFilesVersionDisplay(),
+                "Zapret" => GetInstalledZapretVersionDisplay(),
+                _ when string.Equals(moduleName, _telegramWsProxyModuleName, StringComparison.OrdinalIgnoreCase)
+                    => $"embedded ({Utils.GetVersionInfo()})",
+                _ when string.Equals(moduleName, ECoreType.v2rayN.ToString(), StringComparison.OrdinalIgnoreCase)
+                    => Utils.GetVersionInfo(),
+                _ => await GetInstalledCoreVersionDisplayAsync(moduleName)
+            };
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog(_tag, ex);
+            return "unknown";
+        }
+    }
+
     public UpdateResult PrepareLocalGuiUpdateArchive(string sourceArchivePath)
     {
         try
@@ -61,6 +174,48 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
             }
 
             FileUtils.TryUnblockFile(sourceArchivePath);
+            if (!TryReadGuiUpdateManifestMetadata(sourceArchivePath, out var manifest))
+            {
+                return new UpdateResult(false, "Selected .zip is missing release metadata.")
+                {
+                    Status = EUpdateAvailabilityStatus.Failed,
+                    FailureStage = EUpdateFailureStage.Unpack
+                };
+            }
+
+            if (!string.Equals(manifest?.App, Global.AppName, StringComparison.OrdinalIgnoreCase))
+            {
+                return new UpdateResult(false, $"Selected package is for '{manifest?.App ?? "unknown"}', not for {Global.AppName}.")
+                {
+                    Status = EUpdateAvailabilityStatus.Failed,
+                    FailureStage = EUpdateFailureStage.AssetSelection
+                };
+            }
+
+            if (!IsGuiUpdateRuntimeCompatible(manifest?.Runtime, out var expectedRuntime))
+            {
+                return new UpdateResult(false, $"Selected package targets '{manifest?.Runtime ?? "unknown"}', but this app expects '{expectedRuntime}'.")
+                {
+                    Status = EUpdateAvailabilityStatus.Failed,
+                    FailureStage = EUpdateFailureStage.AssetSelection
+                };
+            }
+
+            if (!manifest?.Version.IsNullOrEmpty() ?? false)
+            {
+                var currentVersion = new SemanticVersion(Utils.GetVersionInfo());
+                var selectedVersion = new SemanticVersion(manifest!.Version);
+                if (selectedVersion <= currentVersion)
+                {
+                    return new UpdateResult(false, $"Selected package version {selectedVersion} is not newer than current {currentVersion}.")
+                    {
+                        Status = EUpdateAvailabilityStatus.UpToDate,
+                        FailureStage = EUpdateFailureStage.None,
+                        Version = selectedVersion
+                    };
+                }
+            }
+
             if (!IsValidGuiUpdateArchive(sourceArchivePath, null))
             {
                 return new UpdateResult(false, "Selected .zip does not contain a valid NetCat update package.")
@@ -74,7 +229,7 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
             Directory.CreateDirectory(cacheDirectory);
 
             var sourceFileName = SanitizeFileName(Path.GetFileName(sourceArchivePath));
-            var versionToken = ExtractGuiUpdateVersionToken(sourceArchivePath);
+            var versionToken = manifest?.Version ?? ExtractGuiUpdateVersionToken(sourceArchivePath);
             var cachedArchivePath = Path.Combine(
                 cacheDirectory,
                 versionToken.IsNullOrEmpty()
@@ -101,7 +256,8 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
             return new UpdateResult(true, $"Local update package ready: {Path.GetFileName(cachedArchivePath)}")
             {
                 Status = EUpdateAvailabilityStatus.Available,
-                LocalArchivePath = cachedArchivePath
+                LocalArchivePath = cachedArchivePath,
+                Version = manifest?.Version.IsNullOrEmpty() == false ? new SemanticVersion(manifest!.Version) : null
             };
         }
         catch (Exception ex)
@@ -115,7 +271,7 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
         }
     }
 
-    public async Task CheckUpdateGuiN(bool preRelease)
+    public async Task<UpdateResult> CheckUpdateGuiN(bool preRelease)
     {
         var url = string.Empty;
         var fileName = string.Empty;
@@ -157,18 +313,17 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
                 await UpdateFunc(false, "Using previously downloaded update package.");
                 await UpdateFunc(false, ResUI.MsgDownloadV2rayCoreSuccessfully);
                 await UpdateFunc(true, Utils.UrlEncode(fileName));
-                return;
+                return result;
             }
 
             await downloadHandle.DownloadFileAsync(url, fileName, true, _timeout);
+            return result;
         }
-        else
-        {
-            await UpdateFunc(false, FormatUpdateStatusMessage(result));
-        }
+        await UpdateFunc(false, FormatUpdateStatusMessage(result));
+        return result;
     }
 
-    public async Task CheckUpdateCore(ECoreType type, bool preRelease)
+    public async Task<UpdateResult> CheckUpdateCore(ECoreType type, bool preRelease)
     {
         var url = string.Empty;
         var fileName = string.Empty;
@@ -212,14 +367,13 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
             var ext = url.Contains(".tar.gz") ? ".tar.gz" : Path.GetExtension(url);
             fileName = Utils.GetTempPath(Utils.GetGuid() + ext);
             await downloadHandle.DownloadFileAsync(url, fileName, true, _timeout);
+            return result;
         }
-        else
+        if (!result.Msg.IsNullOrEmpty())
         {
-            if (!result.Msg.IsNullOrEmpty())
-            {
-                await UpdateFunc(false, result.Msg);
-            }
+            await UpdateFunc(false, result.Msg);
         }
+        return result;
     }
 
     public async Task CheckUpdateZapret()
@@ -733,29 +887,112 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
     {
         try
         {
-            using var archive = System.IO.Compression.ZipFile.OpenRead(archivePath);
-            var manifestEntry = archive.Entries.FirstOrDefault(entry =>
-                string.Equals(entry.Name, "release-manifest.json", StringComparison.OrdinalIgnoreCase));
-            if (manifestEntry == null)
-            {
-                return null;
-            }
-
-            using var stream = manifestEntry.Open();
-            using StreamReader reader = new(stream);
-            var manifest = reader.ReadToEnd();
-            if (manifest.IsNullOrEmpty())
-            {
-                return null;
-            }
-
-            var match = Regex.Match(manifest, "\"version\"\\s*:\\s*\"([^\"]+)\"", RegexOptions.IgnoreCase);
-            return match.Success ? match.Groups[1].Value : null;
+            return TryReadGuiUpdateManifestMetadata(archivePath, out var manifest) ? manifest?.Version : null;
         }
         catch
         {
             return null;
         }
+    }
+
+    private async Task<string> GetInstalledCoreVersionDisplayAsync(string moduleName)
+    {
+        if (!Enum.TryParse<ECoreType>(moduleName, out var coreType))
+        {
+            return "unknown";
+        }
+
+        var version = await GetCoreVersion(coreType);
+        return version == new SemanticVersion("") || version == new SemanticVersion(0, 0, 0)
+            ? "not installed"
+            : version.ToString();
+    }
+
+    private static string GetInstalledGeoFilesVersionDisplay()
+    {
+        var geoFiles = new[]
+        {
+            Utils.GetBinPath("geoip.dat"),
+            Utils.GetBinPath("geosite.dat")
+        }
+            .Where(File.Exists)
+            .Select(path => new FileInfo(path))
+            .OrderByDescending(info => info.LastWriteTimeUtc)
+            .ToList();
+
+        if (geoFiles.Count == 0)
+        {
+            return "not installed";
+        }
+
+        return geoFiles[0].LastWriteTimeUtc.ToLocalTime().ToString("yyyy-MM-dd");
+    }
+
+    private string GetInstalledZapretVersionDisplay()
+    {
+        var zapretPath = ZapretHandler.FindZapretPath(_config?.GuiItem.ZapretPath);
+        return GetZapretLocalVersion(zapretPath).IsNullOrEmpty()
+            ? "not installed"
+            : GetZapretLocalVersion(zapretPath)!;
+    }
+
+    private static bool TryReadGuiUpdateManifestMetadata(string archivePath, out GuiUpdateManifestMetadata? manifest)
+    {
+        manifest = null;
+        try
+        {
+            using var archive = System.IO.Compression.ZipFile.OpenRead(archivePath);
+            var manifestEntry = archive.Entries.FirstOrDefault(entry =>
+                string.Equals(entry.Name, "release-manifest.json", StringComparison.OrdinalIgnoreCase));
+            if (manifestEntry == null)
+            {
+                return false;
+            }
+
+            using var stream = manifestEntry.Open();
+            using StreamReader reader = new(stream);
+            var manifestJson = reader.ReadToEnd();
+            if (manifestJson.IsNullOrEmpty())
+            {
+                return false;
+            }
+
+            manifest = new GuiUpdateManifestMetadata
+            {
+                App = MatchManifestValue(manifestJson, "app"),
+                Version = MatchManifestValue(manifestJson, "version"),
+                Runtime = MatchManifestValue(manifestJson, "runtime")
+            };
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string? MatchManifestValue(string manifestJson, string key)
+    {
+        var match = Regex.Match(manifestJson, $"\"{Regex.Escape(key)}\"\\s*:\\s*\"([^\"]+)\"", RegexOptions.IgnoreCase);
+        return match.Success ? match.Groups[1].Value : null;
+    }
+
+    private static bool IsGuiUpdateRuntimeCompatible(string? manifestRuntime, out string expectedRuntime)
+    {
+        expectedRuntime = RuntimeInformation.ProcessArchitecture switch
+        {
+            Architecture.Arm64 => "win-arm64",
+            Architecture.X64 => "win-x64",
+            Architecture.X86 => "win-x86",
+            _ => $"win-{RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant()}"
+        };
+
+        if (manifestRuntime.IsNullOrEmpty())
+        {
+            return true;
+        }
+
+        return string.Equals(manifestRuntime, expectedRuntime, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string SanitizeFileName(string value)

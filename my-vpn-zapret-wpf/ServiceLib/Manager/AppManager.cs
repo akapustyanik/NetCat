@@ -137,6 +137,7 @@ public sealed class AppManager
             await ProfileExManager.Instance.SaveTo();
             await StatisticsManager.Instance.SaveTo();
             ZapretHandler.Stop();
+            TelegramWsProxyHandler.Stop();
             await CoreManager.Instance.CoreStop();
             StatisticsManager.Instance.Close();
 

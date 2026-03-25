@@ -763,6 +763,39 @@
                                             </StackPanel>
                                         </Grid>
                                     </Border>
+                                    <Border
+                                        Margin="0,12,0,0"
+                                        Padding="12"
+                                        Background="{DynamicResource NetCatSurfaceAltBrush}"
+                                        BorderBrush="{DynamicResource NetCatWindowChromeBrush}"
+                                        BorderThickness="1"
+                                        CornerRadius="16">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Margin="0,0,12,0">
+                                                <TextBlock FontSize="13" FontWeight="SemiBold" Text="Telegram Desktop" />
+                                                <TextBlock Margin="0,6,0,0" FontSize="12" Opacity="0.75" Text="{Binding TelegramTrafficSummary}" TextWrapping="Wrap" />
+                                                <WrapPanel Margin="0,10,0,0">
+                                                    <Button
+                                                        Content="Открыть в Telegram"
+                                                        Style="{StaticResource SubtleButton}"
+                                                        Click="OnOpenTelegramProxyInTelegram" />
+                                                </WrapPanel>
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                                <TextBlock Margin="0,0,10,0" VerticalAlignment="Center" FontSize="12" Opacity="0.75" Text="VPN" />
+                                                <ToggleButton
+                                                    IsChecked="{Binding TelegramUseLocalSocks, Mode=TwoWay}"
+                                                    Style="{StaticResource MaterialDesignSwitchToggleButton}"
+                                                    Checked="OnTelegramTrafficModeChanged"
+                                                    Unchecked="OnTelegramTrafficModeChanged" />
+                                                <TextBlock Margin="10,0,0,0" VerticalAlignment="Center" FontSize="12" Opacity="0.75" Text="SOCKS5" />
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
                                     <WrapPanel Margin="0,12,0,0">
                                         <Button Content="Данные" Style="{StaticResource SubtleButton}" Click="OnOpenUserDataFolder" />
                                     </WrapPanel>
@@ -1295,7 +1328,7 @@
                                         MinHeight="160"
                                         MaxHeight="220" />
                                     <TextBlock Margin="0,6,0,0" FontSize="12" Opacity="0.7">
-                                        YouTube всегда идёт напрямую через zapret. Telegram всегда идёт через прокси.
+                                        YouTube всегда идёт напрямую через zapret. Режим Telegram теперь задаётся отдельно в Settings.
                                     </TextBlock>
                                 </StackPanel>
                             </GroupBox>
@@ -1315,7 +1348,7 @@
                                         Checked="UseProxyDomainsPreset_Checked"
                                         Unchecked="UseProxyDomainsPreset_Checked" />
                                     <TextBlock Margin="0,6,0,0" FontSize="12" Opacity="0.7" TextWrapping="Wrap">
-                                        В этом режиме VPN используется только для доменов из этого списка. Всё остальное идёт напрямую, кроме Telegram, который всё равно использует прокси.
+                                        В этом режиме VPN используется только для доменов из этого списка. Всё остальное идёт напрямую. Режим Telegram задаётся отдельно в Settings.
                                     </TextBlock>
                                     <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                                         <Button
@@ -1543,10 +1576,20 @@
                                             Style="{StaticResource SubtleButton}"
                                             Click="OnRefreshDebug" />
                                         <Button
+                                            Content="Housekeeping"
+                                            Style="{StaticResource SubtleButton}"
+                                            Margin="8,0,0,0"
+                                            Click="OnRunHousekeeping" />
+                                        <Button
                                             Content="Open Temp"
                                             Style="{StaticResource SubtleButton}"
                                             Margin="8,0,0,0"
                                             Click="OnOpenTempFolder" />
+                                        <Button
+                                            Content="Update Cache"
+                                            Style="{StaticResource SubtleButton}"
+                                            Margin="8,0,0,0"
+                                            Click="OnOpenUpdateCacheFolder" />
                                         <Button
                                             Content="Open Logs"
                                             Style="{StaticResource SubtleButton}"

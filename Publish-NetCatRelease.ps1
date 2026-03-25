@@ -10,6 +10,10 @@ param(
     [bool]$RequireCodeSigning = $false,
     [string]$CodeSigningPfxPath = $env:NETCAT_CODESIGN_PFX,
     [string]$CodeSigningPassword = $env:NETCAT_CODESIGN_PASSWORD,
+    [string]$CodeSigningThumbprint = $env:NETCAT_CODESIGN_THUMBPRINT,
+    [string]$CodeSigningSubject = $env:NETCAT_CODESIGN_SUBJECT,
+    [string]$CodeSigningStoreLocation = $env:NETCAT_CODESIGN_STORE_LOCATION,
+    [string]$CodeSigningStoreName = $env:NETCAT_CODESIGN_STORE_NAME,
     [string]$TimestampUrl = $env:NETCAT_CODESIGN_TIMESTAMP_URL,
     [string]$SignToolPath = $env:NETCAT_SIGNTOOL_PATH
 )
@@ -187,12 +191,69 @@ function Resolve-SignToolPath {
     return $null
 }
 
+function Resolve-CodeSigningStoreLocation {
+    param([string]$StoreLocation)
+
+    if ([string]::IsNullOrWhiteSpace($StoreLocation)) {
+        return "CurrentUser"
+    }
+
+    if ($StoreLocation -in @("CurrentUser", "LocalMachine")) {
+        return $StoreLocation
+    }
+
+    throw "Unsupported code-signing store location: $StoreLocation"
+}
+
+function Resolve-CodeSigningStoreName {
+    param([string]$StoreName)
+
+    if ([string]::IsNullOrWhiteSpace($StoreName)) {
+        return "My"
+    }
+
+    return $StoreName
+}
+
+function Resolve-CodeSigningCertificate {
+    param(
+        [string]$Thumbprint,
+        [string]$Subject,
+        [string]$StoreLocation,
+        [string]$StoreName
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Thumbprint) -and [string]::IsNullOrWhiteSpace($Subject)) {
+        return $null
+    }
+
+    $resolvedStoreLocation = Resolve-CodeSigningStoreLocation -StoreLocation $StoreLocation
+    $resolvedStoreName = Resolve-CodeSigningStoreName -StoreName $StoreName
+    $certStorePath = "Cert:\$resolvedStoreLocation\$resolvedStoreName"
+    if (-not (Test-Path $certStorePath)) {
+        throw "Certificate store was not found: $certStorePath"
+    }
+
+    $certificates = Get-ChildItem -Path $certStorePath
+    if (-not [string]::IsNullOrWhiteSpace($Thumbprint)) {
+        $normalizedThumbprint = ($Thumbprint -replace '\s+', '').ToUpperInvariant()
+        return $certificates | Where-Object { $_.Thumbprint -eq $normalizedThumbprint } | Select-Object -First 1
+    }
+
+    return $certificates | Where-Object {
+        $_.Subject -like "*$Subject*" -or $_.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) -like "*$Subject*"
+    } | Select-Object -First 1
+}
+
 function Sign-Executable {
     param(
         [string]$TargetPath,
         [string]$ResolvedSignToolPath,
         [string]$ResolvedCodeSigningPfxPath,
         [string]$ResolvedCodeSigningPassword,
+        [System.Security.Cryptography.X509Certificates.X509Certificate2]$ResolvedStoreCertificate,
+        [string]$ResolvedStoreLocation,
+        [string]$ResolvedStoreName,
         [string]$ResolvedTimestampUrl
     )
 
@@ -209,9 +270,20 @@ function Sign-Executable {
         $arguments += @("/tr", $ResolvedTimestampUrl, "/td", "SHA256")
     }
 
-    $arguments += @("/f", $ResolvedCodeSigningPfxPath)
-    if (-not [string]::IsNullOrWhiteSpace($ResolvedCodeSigningPassword)) {
-        $arguments += @("/p", $ResolvedCodeSigningPassword)
+    if (-not [string]::IsNullOrWhiteSpace($ResolvedCodeSigningPfxPath)) {
+        $arguments += @("/f", $ResolvedCodeSigningPfxPath)
+        if (-not [string]::IsNullOrWhiteSpace($ResolvedCodeSigningPassword)) {
+            $arguments += @("/p", $ResolvedCodeSigningPassword)
+        }
+    }
+    elseif ($null -ne $ResolvedStoreCertificate) {
+        $arguments += @("/sha1", $ResolvedStoreCertificate.Thumbprint, "/s", (Resolve-CodeSigningStoreName -StoreName $ResolvedStoreName))
+        if ((Resolve-CodeSigningStoreLocation -StoreLocation $ResolvedStoreLocation) -eq "LocalMachine") {
+            $arguments += "/sm"
+        }
+    }
+    else {
+        throw "No code-signing certificate source was configured."
     }
 
     $arguments += $TargetPath
@@ -229,6 +301,10 @@ function Try-SignPackageExecutables {
         [bool]$RequireSigning,
         [string]$ResolvedCodeSigningPfxPath,
         [string]$ResolvedCodeSigningPassword,
+        [string]$ResolvedCodeSigningThumbprint,
+        [string]$ResolvedCodeSigningSubject,
+        [string]$ResolvedCodeSigningStoreLocation,
+        [string]$ResolvedCodeSigningStoreName,
         [string]$ResolvedTimestampUrl,
         [string]$ExplicitSignToolPath
     )
@@ -238,15 +314,24 @@ function Try-SignPackageExecutables {
         return
     }
 
+    $storeCertificate = $null
     if ([string]::IsNullOrWhiteSpace($ResolvedCodeSigningPfxPath)) {
+        $storeCertificate = Resolve-CodeSigningCertificate `
+            -Thumbprint $ResolvedCodeSigningThumbprint `
+            -Subject $ResolvedCodeSigningSubject `
+            -StoreLocation $ResolvedCodeSigningStoreLocation `
+            -StoreName $ResolvedCodeSigningStoreName
+    }
+
+    if ([string]::IsNullOrWhiteSpace($ResolvedCodeSigningPfxPath) -and $null -eq $storeCertificate) {
         if ($RequireSigning) {
-            throw "Code signing is required, but NETCAT_CODESIGN_PFX is not configured."
+            throw "Code signing is required, but no signing certificate source is configured."
         }
-        Write-Warning "Skipping code signing because NETCAT_CODESIGN_PFX is not configured."
+        Write-Warning "Skipping code signing because no signing certificate source is configured."
         return
     }
 
-    if (-not (Test-Path $ResolvedCodeSigningPfxPath)) {
+    if (-not [string]::IsNullOrWhiteSpace($ResolvedCodeSigningPfxPath) -and -not (Test-Path $ResolvedCodeSigningPfxPath)) {
         throw "Code-signing certificate was not found: $ResolvedCodeSigningPfxPath"
     }
 
@@ -262,6 +347,9 @@ function Try-SignPackageExecutables {
             -ResolvedSignToolPath $resolvedSignToolPath `
             -ResolvedCodeSigningPfxPath $ResolvedCodeSigningPfxPath `
             -ResolvedCodeSigningPassword $ResolvedCodeSigningPassword `
+            -ResolvedStoreCertificate $storeCertificate `
+            -ResolvedStoreLocation $ResolvedCodeSigningStoreLocation `
+            -ResolvedStoreName $ResolvedCodeSigningStoreName `
             -ResolvedTimestampUrl $ResolvedTimestampUrl
     }
 }
@@ -339,6 +427,10 @@ try {
         -RequireSigning $RequireCodeSigning `
         -ResolvedCodeSigningPfxPath $CodeSigningPfxPath `
         -ResolvedCodeSigningPassword $CodeSigningPassword `
+        -ResolvedCodeSigningThumbprint $CodeSigningThumbprint `
+        -ResolvedCodeSigningSubject $CodeSigningSubject `
+        -ResolvedCodeSigningStoreLocation $CodeSigningStoreLocation `
+        -ResolvedCodeSigningStoreName $CodeSigningStoreName `
         -ResolvedTimestampUrl $TimestampUrl `
         -ExplicitSignToolPath $SignToolPath
 

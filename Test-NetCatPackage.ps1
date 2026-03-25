@@ -36,6 +36,59 @@ function Test-ZipContainsEntry {
     }
 }
 
+function Get-ZipEntryContent {
+    param(
+        [string]$ArchivePath,
+        [string]$EntryName
+    )
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($ArchivePath)
+    try {
+        $entry = $zip.Entries | Where-Object { $_.FullName -eq $EntryName } | Select-Object -First 1
+        if ($null -eq $entry) {
+            return $null
+        }
+
+        $reader = New-Object System.IO.StreamReader($entry.Open())
+        try {
+            return $reader.ReadToEnd()
+        }
+        finally {
+            $reader.Dispose()
+        }
+    }
+    finally {
+        $zip.Dispose()
+    }
+}
+
+function Assert-ManifestMetadata {
+    param(
+        [string]$ManifestJson,
+        [string]$ExpectedVersion
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ManifestJson)) {
+        throw "release-manifest.json is empty."
+    }
+
+    $manifest = $ManifestJson | ConvertFrom-Json
+    if ($manifest.app -ne "NetCat") {
+        throw "release-manifest.json contains unexpected app: $($manifest.app)"
+    }
+    if ([string]::IsNullOrWhiteSpace($manifest.version)) {
+        throw "release-manifest.json is missing version."
+    }
+    if ([string]::IsNullOrWhiteSpace($manifest.runtime)) {
+        throw "release-manifest.json is missing runtime."
+    }
+    $normalizedExpectedVersion = ($ExpectedVersion -split '\+', 2)[0]
+    if ($manifest.version -ne $normalizedExpectedVersion) {
+        throw "release-manifest.json version '$($manifest.version)' does not match package version '$ExpectedVersion'."
+    }
+}
+
 function Get-StaleUpdaterDirs {
     param([string]$PackageRoot)
 
@@ -129,6 +182,14 @@ foreach ($relativePath in $requiredPaths) {
     Assert-PathExists (Join-Path $OutputDir $relativePath) "Package is missing required path: $relativePath"
 }
 
+$packageVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $OutputDir "NetCat.exe")).ProductVersion
+if ([string]::IsNullOrWhiteSpace($packageVersion)) {
+    throw "Failed to read ProductVersion from NetCat.exe"
+}
+
+$manifestPath = Join-Path $OutputDir "release-manifest.json"
+Assert-ManifestMetadata -ManifestJson (Get-Content $manifestPath -Raw) -ExpectedVersion $packageVersion
+
 $staleUpdaterDirs = @(Get-StaleUpdaterDirs -PackageRoot $OutputDir)
 if ($staleUpdaterDirs.Count -gt 0) {
     throw "Package already contains staged updater directories: $($staleUpdaterDirs.Name -join ', ')"
@@ -151,6 +212,10 @@ if (-not [string]::IsNullOrWhiteSpace($ZipPath)) {
             throw "Package zip is missing required entry: $entry"
         }
     }
+
+    Assert-ManifestMetadata `
+        -ManifestJson (Get-ZipEntryContent -ArchivePath $ZipPath -EntryName "NetCat/release-manifest.json") `
+        -ExpectedVersion $packageVersion
 }
 
 if ($VerifySelfUpdate) {

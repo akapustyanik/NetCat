@@ -6,6 +6,7 @@ public class CheckUpdateViewModel : MyReactiveObject
 {
     private const string _geo = "GeoFiles";
     private const string _zapret = "Zapret";
+    private const string _telegramWsProxy = "TelegramWsProxy";
     private static readonly string[] _retryFailureMarkers =
     [
         "failed",
@@ -38,8 +39,10 @@ public class CheckUpdateViewModel : MyReactiveObject
 
     public IObservableCollection<CheckUpdateModel> CheckUpdateModels { get; } = new ObservableCollectionExtended<CheckUpdateModel>();
     public ReactiveCommand<Unit, Unit> CheckUpdateCmd { get; }
+    public ReactiveCommand<CheckUpdateModel, Unit> UpdateModuleCmd { get; }
     public ReactiveCommand<CheckUpdateModel, Unit> RetryUpdateCmd { get; }
     public ReactiveCommand<CheckUpdateModel, Unit> InstallLocalPackageCmd { get; }
+    public ReactiveCommand<CheckUpdateModel, Unit> OpenReleaseCmd { get; }
     public CheckUpdateViewModel(Func<EViewAction, object?, Task<bool>>? updateView)
     {
         _config = AppManager.Instance.Config;
@@ -51,6 +54,11 @@ public class CheckUpdateViewModel : MyReactiveObject
             Logging.SaveLog(_tag, ex);
             _ = UpdateView(_v2rayN, ex.Message);
         });
+        UpdateModuleCmd = ReactiveCommand.CreateFromTask<CheckUpdateModel>(UpdateSingleModuleAsync);
+        UpdateModuleCmd.ThrownExceptions.Subscribe(ex =>
+        {
+            Logging.SaveLog(_tag, ex);
+        });
         RetryUpdateCmd = ReactiveCommand.CreateFromTask<CheckUpdateModel>(RetryUpdateAsync);
         RetryUpdateCmd.ThrownExceptions.Subscribe(ex =>
         {
@@ -61,10 +69,17 @@ public class CheckUpdateViewModel : MyReactiveObject
         {
             Logging.SaveLog(_tag, ex);
         });
+        OpenReleaseCmd = ReactiveCommand.Create<CheckUpdateModel>(OpenReleaseUrl);
+        OpenReleaseCmd.ThrownExceptions.Subscribe(ex =>
+        {
+            Logging.SaveLog(_tag, ex);
+        });
 
         _config.CheckUpdateItem.CheckPreReleaseUpdate = false;
 
         RefreshCheckUpdateItems();
+        _ = PopulateInstalledVersionMetadataAsync();
+        _ = WarmupAvailabilityMetadataAsync();
     }
 
     private void RefreshCheckUpdateItems()
@@ -74,6 +89,7 @@ public class CheckUpdateViewModel : MyReactiveObject
         if (RuntimeInformation.ProcessArchitecture != Architecture.X86)
         {
             CheckUpdateModels.Add(GetCheckUpdateModel(_v2rayN));
+            CheckUpdateModels.Add(GetCheckUpdateModel(_telegramWsProxy));
             //Not Windows and under Win10
             if (!(Utils.IsWindows() && Environment.OSVersion.Version.Major < 10))
             {
@@ -88,6 +104,27 @@ public class CheckUpdateViewModel : MyReactiveObject
 
     private CheckUpdateModel GetCheckUpdateModel(string coreType)
     {
+        if (coreType == _telegramWsProxy)
+        {
+            return new()
+            {
+                IsSelected = false,
+                CoreType = coreType,
+                DisplayName = "Telegram WS Proxy",
+                CanUseLocalPackage = false,
+                Hint = GetModuleHint(coreType),
+                Remarks = "Embedded into NetCat and updated together with the NetCat package.",
+                CurrentVersion = "loading...",
+                LatestVersion = string.Empty,
+                StatusLabel = "Bundled",
+                StatusTone = "success",
+                ShowStatusLabel = true,
+                ShowLatestVersion = false,
+                ActionLabel = "Update",
+                CanRunUpdate = false,
+            };
+        }
+
         if (coreType == _v2rayN && Utils.IsPackagedInstall())
         {
             return new()
@@ -98,6 +135,14 @@ public class CheckUpdateViewModel : MyReactiveObject
                 CanUseLocalPackage = false,
                 Hint = GetModuleHint(coreType),
                 Remarks = "Update is not supported for packaged installs.",
+                CurrentVersion = Utils.GetVersionInfo(),
+                LatestVersion = string.Empty,
+                StatusLabel = "Unavailable",
+                StatusTone = "neutral",
+                ShowStatusLabel = true,
+                ShowLatestVersion = false,
+                ActionLabel = "Update",
+                CanRunUpdate = false,
             };
         }
 
@@ -109,7 +154,32 @@ public class CheckUpdateViewModel : MyReactiveObject
             CanUseLocalPackage = coreType == _v2rayN,
             Hint = GetModuleHint(coreType),
             Remarks = "Ready to check for updates.",
+            CurrentVersion = "loading...",
+            LatestVersion = string.Empty,
+            StatusLabel = string.Empty,
+            StatusTone = "neutral",
+            ShowStatusLabel = false,
+            ShowLatestVersion = coreType != _geo,
+            ActionLabel = "Update",
+            CanRunUpdate = true,
         };
+    }
+
+    private async Task PopulateInstalledVersionMetadataAsync()
+    {
+        var service = new UpdateService(_config, (_, _) => Task.CompletedTask);
+        foreach (var item in CheckUpdateModels)
+        {
+            try
+            {
+                item.CurrentVersion = await service.GetInstalledModuleVersionDisplayAsync(item.CoreType ?? string.Empty);
+            }
+            catch (Exception ex)
+            {
+                Logging.SaveLog(_tag, ex);
+                item.CurrentVersion = "unknown";
+            }
+        }
     }
 
     private async Task SaveSelectedCoreTypes()
@@ -121,6 +191,44 @@ public class CheckUpdateViewModel : MyReactiveObject
     private async Task CheckUpdate()
     {
         await Task.Run(CheckUpdateTask);
+    }
+
+    private async Task WarmupAvailabilityMetadataAsync()
+    {
+        var service = new UpdateService(_config, (_, _) => Task.CompletedTask);
+        foreach (var item in CheckUpdateModels)
+        {
+            if (item.CoreType.IsNullOrEmpty() || !item.CanRunUpdate)
+            {
+                continue;
+            }
+
+            try
+            {
+                UpdateResult? result = item.CoreType switch
+                {
+                    _ when item.CoreType == _v2rayN => await service.CheckGuiUpdateAvailability(false),
+                    _ when item.CoreType == _zapret => await service.CheckZapretUpdateAvailability(),
+                    _ when item.CoreType == _geo => null,
+                    _ => Enum.TryParse<ECoreType>(item.CoreType, out var coreType)
+                        ? await service.CheckCoreUpdateAvailability(coreType, false)
+                        : null
+                };
+
+                if (result != null)
+                {
+                    ApplyUpdateResultMetadata(item.CoreType, result);
+                    if (result.Msg.IsNotEmpty())
+                    {
+                        await UpdateView(item.CoreType, result.Msg);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logging.SaveLog(_tag, ex);
+            }
+        }
     }
 
     private async Task CheckUpdateTask()
@@ -194,6 +302,10 @@ public class CheckUpdateViewModel : MyReactiveObject
 
     private async Task CheckUpdateN(bool preRelease)
     {
+        var availabilityService = new UpdateService(_config, (_, _) => Task.CompletedTask);
+        var availability = await availabilityService.CheckGuiUpdateAvailability(preRelease);
+        ApplyUpdateResultMetadata(_v2rayN, availability);
+
         async Task _updateUI(bool success, string msg)
         {
             await UpdateView(_v2rayN, msg);
@@ -203,7 +315,9 @@ public class CheckUpdateViewModel : MyReactiveObject
                 UpdatedPlusPlus(_v2rayN, msg);
             }
         }
-        await new UpdateService(_config, _updateUI).CheckUpdateGuiN(preRelease);
+        var executionService = new UpdateService(_config, _updateUI);
+        var result = await executionService.CheckUpdateGuiN(preRelease);
+        ApplyUpdateResultMetadata(_v2rayN, result);
     }
 
     private async Task CheckUpdateCore(CheckUpdateModel model, bool preRelease)
@@ -219,7 +333,9 @@ public class CheckUpdateViewModel : MyReactiveObject
             }
         }
         var type = (ECoreType)Enum.Parse(typeof(ECoreType), model.CoreType);
-        await new UpdateService(_config, _updateUI).CheckUpdateCore(type, preRelease);
+        var service = new UpdateService(_config, _updateUI);
+        var result = await service.CheckUpdateCore(type, preRelease);
+        ApplyUpdateResultMetadata(model.CoreType, result);
     }
 
     private async Task RetryUpdateAsync(CheckUpdateModel? item)
@@ -246,6 +362,32 @@ public class CheckUpdateViewModel : MyReactiveObject
         }
     }
 
+    private async Task UpdateSingleModuleAsync(CheckUpdateModel? item)
+    {
+        if (item?.CoreType.IsNullOrEmpty() != false || _isCheckingUpdates || !item.CanRunUpdate)
+        {
+            return;
+        }
+
+        _isCheckingUpdates = true;
+        item.IsRetrying = true;
+        item.CanRetry = false;
+        item.ActionLabel = "Updating...";
+        _lstUpdated.Clear();
+        try
+        {
+            await RunUpdateForItemAsync(item);
+            await UpdateFinished();
+        }
+        finally
+        {
+            item.IsRetrying = false;
+            item.CanRetry = ShouldAllowRetry(item.Remarks);
+            item.ActionLabel = item.CanRetry ? "Retry" : "Update";
+            _isCheckingUpdates = false;
+        }
+    }
+
     private async Task InstallLocalPackageAsync(CheckUpdateModel? item)
     {
         if (item?.CoreType != _v2rayN || _isCheckingUpdates)
@@ -258,7 +400,16 @@ public class CheckUpdateViewModel : MyReactiveObject
         {
             return;
         }
-        var fileName = selectedPath[0];
+        await TryInstallLocalPackageFromPathAsync(selectedPath[0]);
+    }
+
+    public async Task<bool> TryInstallLocalPackageFromPathAsync(string? fileName)
+    {
+        var item = CheckUpdateModels.FirstOrDefault(t => t.CoreType == _v2rayN);
+        if (item == null || fileName.IsNullOrEmpty() || _isCheckingUpdates)
+        {
+            return false;
+        }
 
         _isCheckingUpdates = true;
         item.IsRetrying = true;
@@ -269,16 +420,18 @@ public class CheckUpdateViewModel : MyReactiveObject
 
             var service = new UpdateService(_config, async (_, msg) => await UpdateView(_v2rayN, msg));
             var result = service.PrepareLocalGuiUpdateArchive(fileName);
+            ApplyUpdateResultMetadata(_v2rayN, result);
             if (!result.Success || result.LocalArchivePath.IsNullOrEmpty())
             {
                 await UpdateView(_v2rayN, result.Msg ?? "Failed to prepare local update package.");
                 item.CanRetry = ShouldAllowRetry(result.Msg);
-                return;
+                return false;
             }
 
             UpdatedPlusPlus(_v2rayN, result.LocalArchivePath);
             await UpdateView(_v2rayN, result.Msg ?? "Local update package is ready.");
             await UpgradeN(result.LocalArchivePath);
+            return true;
         }
         finally
         {
@@ -609,7 +762,53 @@ public class CheckUpdateViewModel : MyReactiveObject
         }
         found.Remarks = model.Remarks;
         found.CanRetry = !found.IsRetrying && ShouldAllowRetry(model.Remarks);
+        found.ActionLabel = found.CanRetry ? "Retry" : "Update";
+        found.StatusLabel = GetStatusLabelFromMessage(model.Remarks);
+        found.StatusTone = GetStatusToneFromMessage(model.Remarks);
+        found.ShowStatusLabel = found.StatusLabel.IsNotEmpty();
         await Task.CompletedTask;
+    }
+
+    private void ApplyUpdateResultMetadata(string? coreType, UpdateResult result)
+    {
+        var found = CheckUpdateModels.FirstOrDefault(t => t.CoreType == coreType);
+        if (found == null)
+        {
+            return;
+        }
+
+        var latestVersion = result.Release?.TagName
+            ?? result.Version?.ToString()
+            ?? (!result.LocalArchivePath.IsNullOrEmpty() ? Path.GetFileNameWithoutExtension(result.LocalArchivePath) : null);
+        if (!latestVersion.IsNullOrEmpty())
+        {
+            found.LatestVersion = latestVersion;
+            found.ShowLatestVersion = found.CoreType != _geo;
+        }
+        else if (result.Status == EUpdateAvailabilityStatus.UpToDate && found.CurrentVersion.IsNotEmpty())
+        {
+            found.LatestVersion = found.CurrentVersion;
+            found.ShowLatestVersion = found.CoreType != _geo;
+        }
+
+        found.ReleaseUrl = result.Release?.HtmlUrl;
+        found.CanOpenReleaseUrl = found.ReleaseUrl.IsNotEmpty();
+        found.StatusLabel = result.Status switch
+        {
+            EUpdateAvailabilityStatus.Available => "Available",
+            EUpdateAvailabilityStatus.UpToDate => "Up to date",
+            EUpdateAvailabilityStatus.Failed => "Failed",
+            _ => found.StatusLabel
+        };
+        found.StatusTone = result.Status switch
+        {
+            EUpdateAvailabilityStatus.Available => "warning",
+            EUpdateAvailabilityStatus.UpToDate => "success",
+            EUpdateAvailabilityStatus.Failed => "error",
+            _ => found.StatusTone
+        };
+        found.ShowStatusLabel = found.StatusLabel.IsNotEmpty();
+        found.ActionLabel = found.CanRetry ? "Retry" : "Update";
     }
 
     private static bool ShouldAllowRetry(string? msg)
@@ -628,12 +827,83 @@ public class CheckUpdateViewModel : MyReactiveObject
         return _retryFailureMarkers.Any(marker => normalized.Contains(marker, StringComparison.Ordinal));
     }
 
+    private static string GetStatusLabelFromMessage(string? msg)
+    {
+        var normalized = msg?.Trim().ToLowerInvariant() ?? string.Empty;
+        if (normalized.IsNullOrEmpty() || normalized == "...")
+        {
+            return string.Empty;
+        }
+        if (normalized.Contains("latest", StringComparison.Ordinal) || normalized.Contains("up to date", StringComparison.Ordinal))
+        {
+            return "Up to date";
+        }
+        if (normalized.Contains("available", StringComparison.Ordinal))
+        {
+            return "Available";
+        }
+        if (normalized.Contains("success", StringComparison.Ordinal)
+            || normalized.Contains("updated", StringComparison.Ordinal)
+            || normalized.Contains("ready", StringComparison.Ordinal)
+            || normalized.Contains("успеш", StringComparison.Ordinal)
+            || normalized.Contains("скачан", StringComparison.Ordinal))
+        {
+            return "Ready";
+        }
+        if (ShouldAllowRetry(msg))
+        {
+            return "Failed";
+        }
+        return "Working";
+    }
+
+    private static string GetStatusToneFromMessage(string? msg)
+    {
+        var normalized = msg?.Trim().ToLowerInvariant() ?? string.Empty;
+        if (normalized.IsNullOrEmpty() || normalized == "...")
+        {
+            return "working";
+        }
+        if (normalized.Contains("latest", StringComparison.Ordinal) || normalized.Contains("up to date", StringComparison.Ordinal))
+        {
+            return "success";
+        }
+        if (normalized.Contains("available", StringComparison.Ordinal))
+        {
+            return "warning";
+        }
+        if (normalized.Contains("success", StringComparison.Ordinal)
+            || normalized.Contains("updated", StringComparison.Ordinal)
+            || normalized.Contains("ready", StringComparison.Ordinal)
+            || normalized.Contains("успеш", StringComparison.Ordinal)
+            || normalized.Contains("скачан", StringComparison.Ordinal))
+        {
+            return "success";
+        }
+        if (ShouldAllowRetry(msg))
+        {
+            return "error";
+        }
+        return "working";
+    }
+
+    private static void OpenReleaseUrl(CheckUpdateModel? item)
+    {
+        if (item?.ReleaseUrl.IsNullOrEmpty() != false)
+        {
+            return;
+        }
+
+        ProcUtils.ProcessStart(item.ReleaseUrl);
+    }
+
     private static string GetModuleHint(string coreType)
     {
         return coreType switch
         {
             "GeoFiles" => GetResourceText("UpdateHintGeoFiles", "Geo databases and sing-box rule sets used by routing and DNS."),
             "Zapret" => GetResourceText("UpdateHintZapret", "Zapret bundle with winws, service.bat and bundled DPI bypass presets."),
+            "TelegramWsProxy" => "Embedded Telegram local SOCKS5 to WebSocket bridge. It does not have a separate auto-update path and ships with NetCat releases.",
             "Xray" => GetResourceText("UpdateHintXray", "Xray core used for proxy protocols and connections."),
             "mihomo" => GetResourceText("UpdateHintMihomo", "Mihomo core used for Clash-compatible profiles and rule processing."),
             "sing_box" => GetResourceText("UpdateHintSingBox", "sing-box core used for sing-box profiles, DNS and rule sets."),

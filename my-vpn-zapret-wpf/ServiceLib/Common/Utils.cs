@@ -1332,12 +1332,57 @@ public class Utils
         ]);
     }
 
+    public static (int FileCount, long TotalBytes, string LatestFileName, DateTime? LatestWriteTimeLocal) GetGuiUpdateCacheStats()
+    {
+        try
+        {
+            var updateCachePath = Path.Combine(GetTempPath(), "updates");
+            if (!Directory.Exists(updateCachePath))
+            {
+                return (0, 0, "none", null);
+            }
+
+            var files = Directory.GetFiles(updateCachePath, "*.zip", SearchOption.TopDirectoryOnly)
+                .Select(path =>
+                {
+                    try
+                    {
+                        return new FileInfo(path);
+                    }
+                    catch
+                    {
+                        return null;
+                    }
+                })
+                .Where(info => info != null)
+                .Cast<FileInfo>()
+                .OrderByDescending(info => info.LastWriteTimeUtc)
+                .ToList();
+
+            if (files.Count == 0)
+            {
+                return (0, 0, "none", null);
+            }
+
+            return (
+                files.Count,
+                files.Sum(info => info.Length),
+                files[0].Name,
+                files[0].LastWriteTime.ToLocalTime());
+        }
+        catch
+        {
+            return (0, 0, "none", null);
+        }
+    }
+
     public static int CleanupRuntimeArtifacts(Config? config = null)
     {
         var removedCount = 0;
         removedCount += CleanupStaleUpdaterDirectories();
         removedCount += CleanupExpiredTempArtifacts(DateTime.UtcNow.AddDays(-7));
         removedCount += CleanupExpiredLogArtifacts(DateTime.UtcNow.AddDays(-14));
+        removedCount += PruneCachedGuiUpdateArchives(1);
         removedCount += CleanupCachedGuiUpdateArchives(DateTime.UtcNow.AddDays(-14));
         removedCount += CleanupZapretArtifacts(config);
         return removedCount;
@@ -1440,6 +1485,51 @@ public class Utils
             {
                 var info = new FileInfo(filePath);
                 if (info.LastWriteTimeUtc < thresholdUtc && FileUtils.TryDeleteFile(filePath))
+                {
+                    removedCount++;
+                }
+            }
+        }
+        catch
+        {
+            // ignore cached archive cleanup failures
+        }
+
+        return removedCount;
+    }
+
+    public static int PruneCachedGuiUpdateArchives(int keepLatestCount)
+    {
+        var removedCount = 0;
+        try
+        {
+            var updateCachePath = Path.Combine(GetTempPath(), "updates");
+            if (!Directory.Exists(updateCachePath))
+            {
+                return 0;
+            }
+
+            keepLatestCount = Math.Max(0, keepLatestCount);
+            var files = Directory.GetFiles(updateCachePath, "*.zip", SearchOption.TopDirectoryOnly)
+                .Select(path =>
+                {
+                    try
+                    {
+                        return new FileInfo(path);
+                    }
+                    catch
+                    {
+                        return null;
+                    }
+                })
+                .Where(info => info != null)
+                .Cast<FileInfo>()
+                .OrderByDescending(info => info.LastWriteTimeUtc)
+                .ToList();
+
+            foreach (var file in files.Skip(keepLatestCount))
+            {
+                if (FileUtils.TryDeleteFile(file.FullName))
                 {
                     removedCount++;
                 }

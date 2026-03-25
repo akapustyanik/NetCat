@@ -276,6 +276,20 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         set => SetField(ref _useProxyDomainsPreset, value);
     }
 
+    private bool _telegramUseLocalSocks;
+    public bool TelegramUseLocalSocks
+    {
+        get => _telegramUseLocalSocks;
+        set
+        {
+            if (SetField(ref _telegramUseLocalSocks, value))
+            {
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TelegramTrafficSummary)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(TelegramTrafficModeLabel)));
+            }
+        }
+    }
+
     private bool _vpnEnabled;
     public bool VpnEnabled
     {
@@ -320,6 +334,11 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     public string EncryptionModeSummary => EncryptAllTraffic
         ? "По умолчанию весь трафик идёт через сервер через полный туннель."
         : "Через сервер идёт только системный прокси, остальной трафик идёт напрямую.";
+
+    public string TelegramTrafficSummary => TelegramWsProxyHandler.GetTrafficModeSummary(
+        TelegramUseLocalSocks ? QuickRuleConfig.TelegramTrafficModeLocalSocks : QuickRuleConfig.TelegramTrafficModeVpn);
+
+    public string TelegramTrafficModeLabel => TelegramUseLocalSocks ? "Локальный SOCKS5" : "VPN";
 
     private bool _zapretEnabled;
     public bool ZapretEnabled
@@ -476,6 +495,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         BypassPrivate = _quickRules.BypassPrivate;
         ProxyOnlyMode = _quickRules.ProxyOnlyMode;
         UseProxyDomainsPreset = _quickRules.UseProxyDomainsPreset;
+        TelegramUseLocalSocks = TelegramWsProxyHandler.IsLocalSocksMode(_quickRules.TelegramTrafficMode);
         TunEnabled = _config.TunModeItem.EnableTun;
         LoadInterfaceVariants();
         SelectedInterfaceVariant = InterfaceVariants.FirstOrDefault(t => string.Equals(t.Key, _config.UiItem.MainWindowPreset, StringComparison.OrdinalIgnoreCase))
@@ -493,6 +513,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         }
 
         _ = ApplyQuickRulesAsync(reload: false);
+        _ = EnsureTelegramTrafficModeAsync(openInTelegram: false);
         _ = RefreshZapretAsync();
         Closing += MainWindow_Closing;
         Closed += MainWindow_Closed;
@@ -633,6 +654,9 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         _quickRules.UseProxyDomainsPreset = UseProxyDomainsPreset;
         _quickRules.ProxyOnlyMode = ProxyOnlyMode;
         _quickRules.BypassPrivate = BypassPrivate;
+        _quickRules.TelegramTrafficMode = TelegramUseLocalSocks
+            ? QuickRuleConfig.TelegramTrafficModeLocalSocks
+            : QuickRuleConfig.TelegramTrafficModeVpn;
 
         await QuickRuleHandler.Apply(_config, _quickRules);
 
@@ -646,6 +670,38 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 
             await ViewModel.Reload();
         }
+    }
+
+    private async Task EnsureTelegramTrafficModeAsync(bool openInTelegram)
+    {
+        string statusMessage;
+        if (TelegramUseLocalSocks)
+        {
+            if (!TelegramWsProxyHandler.TryStart(out var error))
+            {
+                statusMessage = error.IsNullOrEmpty()
+                    ? "Не удалось запустить TG WS Proxy."
+                    : $"TG WS Proxy: {error}";
+            }
+            else
+            {
+                if (openInTelegram)
+                {
+                    TelegramWsProxyHandler.OpenInTelegram();
+                }
+
+                var address = TelegramWsProxyHandler.GetConfiguredAddress();
+                statusMessage = $"Telegram переключён на локальный SOCKS5 {address.Host}:{address.Port}.";
+            }
+        }
+        else
+        {
+            TelegramWsProxyHandler.Stop();
+            statusMessage = "Telegram переключён на VPN-маршрутизацию NetCat.";
+        }
+
+        await RefreshSupportSnapshotAsync(false);
+        SetStatus(statusMessage);
     }
 
     private void SetStatus(string message)
@@ -682,6 +738,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         sb.AppendLine($"Temp folder: {Utils.GetTempPath()}");
         sb.AppendLine($"Generated configs: {Utils.GetBinConfigPath()}");
         sb.AppendLine($"Updater: {Utils.GetUpgradeAppPath()}");
+        sb.AppendLine("TG WS Proxy: embedded in NetCat");
         return sb.ToString().TrimEnd();
     }
 
@@ -693,6 +750,8 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         sb.AppendLine($"VPN: {(VpnEnabled ? "enabled" : "disabled")}");
         sb.AppendLine($"TUN: {(TunEnabled ? "enabled" : "disabled")}");
         sb.AppendLine($"Zapret: {(ZapretRunning ? "running" : "stopped")}");
+        sb.AppendLine($"Telegram mode: {TelegramTrafficModeLabel}");
+        sb.AppendLine(TelegramWsProxyHandler.GetRuntimeSummary(_quickRules.TelegramTrafficMode));
         sb.AppendLine($"Updater: {(Utils.UpgradeAppExists(out var updaterPath) ? "ready" : "missing")}");
         sb.AppendLine($"Updater path: {updaterPath}");
         sb.AppendLine($"Xray core: {(await CoreExistsAsync(ECoreType.Xray) ? "ready" : "missing")}");
@@ -713,22 +772,33 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             : ZapretHandler.CountHiddenLaunchBats(resolvedZapretPath);
         var staleUpdaterDirs = Utils.CountStaleUpdaterDirectories();
         var tempStats = Utils.GetDirectoryStats(Utils.GetTempPath(), "*", SearchOption.AllDirectories);
+        var updateCacheStats = Utils.GetGuiUpdateCacheStats();
         var logStats = Utils.GetDirectoryStats(Utils.GetLogPath(), "*", SearchOption.TopDirectoryOnly);
         var updaterLogStats = Utils.GetDirectoryStats(Utils.GetInstallLogPath(), "updater-*.log", SearchOption.TopDirectoryOnly);
         var latestError = Utils.ReadLatestLogError() ?? "none";
+        var trustDiagnostics = Utils.GetInstallTrustDiagnostics();
 
         var sb = new StringBuilder();
         sb.AppendLine(StartupUpdateStatus);
         sb.AppendLine($"Updater: {(updaterReady ? "ready" : "missing")}");
         sb.AppendLine($"Updater path: {updaterPath}");
+        sb.AppendLine($"Telegram mode: {TelegramTrafficModeLabel}");
+        sb.AppendLine(TelegramWsProxyHandler.GetRuntimeSummary(_quickRules.TelegramTrafficMode));
         sb.AppendLine($"Zapret path: {(resolvedZapretPath.IsNullOrEmpty() ? "missing" : resolvedZapretPath)}");
         sb.AppendLine($"Zapret config: {SelectedZapretConfig?.Name ?? "none"}");
         sb.AppendLine($"Zapret hidden launchers: {hiddenLaunchers}");
         sb.AppendLine($"Stale updater dirs: {staleUpdaterDirs}");
         sb.AppendLine($"Temp folder: {tempStats.FileCount} files, {Utils.HumanFy(tempStats.TotalBytes)}");
+        sb.AppendLine($"Update cache: {updateCacheStats.FileCount} archives, {Utils.HumanFy(updateCacheStats.TotalBytes)}");
+        sb.AppendLine($"Latest cached package: {updateCacheStats.LatestFileName}");
+        if (updateCacheStats.LatestWriteTimeLocal.HasValue)
+        {
+            sb.AppendLine($"Latest cached at: {updateCacheStats.LatestWriteTimeLocal:yyyy-MM-dd HH:mm:ss}");
+        }
         sb.AppendLine($"App logs: {logStats.FileCount} files, {Utils.HumanFy(logStats.TotalBytes)}");
         sb.AppendLine($"Updater logs: {updaterLogStats.FileCount} files, {Utils.HumanFy(updaterLogStats.TotalBytes)}");
         sb.AppendLine($"Latest error: {latestError}");
+        sb.AppendLine(trustDiagnostics);
         return Task.FromResult(sb.ToString().TrimEnd());
     }
 
@@ -930,6 +1000,18 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         SetStatus(EncryptAllTraffic
             ? "Режим VPN: полный туннель"
             : "Режим VPN: только системный прокси");
+    }
+
+    private async void OnTelegramTrafficModeChanged(object sender, RoutedEventArgs e)
+    {
+        await ApplyQuickRulesAsync(reload: true);
+        await EnsureTelegramTrafficModeAsync(openInTelegram: TelegramUseLocalSocks);
+    }
+
+    private void OnOpenTelegramProxyInTelegram(object sender, RoutedEventArgs e)
+    {
+        TelegramWsProxyHandler.OpenInTelegram();
+        SetStatus("Открыта настройка SOCKS5 в Telegram.");
     }
 
     private async void OnToggleMainVpn(object sender, RoutedEventArgs e)
@@ -2015,9 +2097,21 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         OpenPath(Utils.GetLogPath());
     }
 
+    private void OnOpenUpdateCacheFolder(object sender, RoutedEventArgs e)
+    {
+        OpenPath(Path.Combine(Utils.GetTempPath(), "updates"));
+    }
+
     private void OnOpenTempFolder(object sender, RoutedEventArgs e)
     {
         OpenPath(Utils.GetTempPath());
+    }
+
+    private async void OnRunHousekeeping(object sender, RoutedEventArgs e)
+    {
+        var removed = await Task.Run(() => Utils.CleanupRuntimeArtifacts(_config));
+        await RefreshSupportSnapshotAsync(true);
+        SetStatus($"Housekeeping completed: removed {removed} item(s)");
     }
 
     private async Task<string> BuildDebugInfoAsync()

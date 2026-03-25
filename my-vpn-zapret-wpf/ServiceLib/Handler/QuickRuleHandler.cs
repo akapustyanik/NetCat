@@ -51,7 +51,7 @@ public static class QuickRuleHandler
                 return new QuickRuleConfig();
             }
 
-            var text = File.ReadAllText(path);
+            var text = FileUtils.NonExclusiveReadAllText(path);
             var cfg = JsonUtils.Deserialize<QuickRuleConfig>(text);
             return cfg ?? new QuickRuleConfig();
         }
@@ -65,12 +65,18 @@ public static class QuickRuleHandler
     {
         var path = Utils.GetConfigPath(FileName);
         var content = JsonUtils.Serialize(config, true, true);
-        await File.WriteAllTextAsync(path, content ?? "{}");
+        await FileUtils.WriteAllTextWithRetryAsync(path, content ?? "{}");
     }
 
     public static async Task Apply(Config config, QuickRuleConfig quick)
     {
         var rules = new List<RulesItem>();
+        var telegramOutboundTag = TelegramWsProxyHandler.IsLocalSocksMode(quick.TelegramTrafficMode)
+            ? Global.DirectTag
+            : Global.ProxyTag;
+        var telegramRemarksSuffix = TelegramWsProxyHandler.IsLocalSocksMode(quick.TelegramTrafficMode)
+            ? "local SOCKS"
+            : "VPN";
         var proxyDomainList = NormalizeList(quick.ProxyDomains);
         if (quick.UseProxyDomainsPreset)
         {
@@ -93,23 +99,23 @@ public static class QuickRuleHandler
         rules.Add(new RulesItem
         {
             Type = "field",
-            OutboundTag = Global.ProxyTag,
+            OutboundTag = telegramOutboundTag,
             Process = NormalizeList(TelegramProcesses),
-            Remarks = "Telegram apps"
+            Remarks = $"Telegram apps ({telegramRemarksSuffix})"
         });
         rules.Add(new RulesItem
         {
             Type = "field",
-            OutboundTag = Global.ProxyTag,
+            OutboundTag = telegramOutboundTag,
             Domain = NormalizeList(TelegramDomains),
-            Remarks = "Telegram domains"
+            Remarks = $"Telegram domains ({telegramRemarksSuffix})"
         });
         rules.Add(new RulesItem
         {
             Type = "field",
-            OutboundTag = Global.ProxyTag,
+            OutboundTag = telegramOutboundTag,
             Ip = ["geoip:telegram"],
-            Remarks = "Telegram IPs"
+            Remarks = $"Telegram IPs ({telegramRemarksSuffix})"
         });
 
         var processList = NormalizeList(quick.DirectProcesses);

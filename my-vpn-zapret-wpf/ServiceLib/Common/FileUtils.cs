@@ -158,6 +158,42 @@ public static class FileUtils
         return true;
     }
 
+    public static async Task WriteAllTextWithRetryAsync(string path, string contents, Encoding? encoding = null, int retryCount = DefaultIoRetryCount, int delayMs = DefaultIoRetryDelayMs)
+    {
+        encoding ??= new UTF8Encoding(false);
+
+        var directory = Path.GetDirectoryName(path);
+        if (!directory.IsNullOrEmpty())
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        Exception? lastException = null;
+        for (var attempt = 0; attempt < retryCount; attempt++)
+        {
+            try
+            {
+                await using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
+                await using var writer = new StreamWriter(stream, encoding);
+                await writer.WriteAsync(contents);
+                await writer.FlushAsync();
+                return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                lastException = ex;
+                if (attempt == retryCount - 1)
+                {
+                    break;
+                }
+
+                await Task.Delay(delayMs);
+            }
+        }
+
+        throw lastException ?? new IOException($"Failed to write file: {path}");
+    }
+
     public static void CopyDirectory(string sourceDir, string destinationDir, bool recursive, bool overwrite, string? ignoredName = null)
     {
         // Get information about the source directory

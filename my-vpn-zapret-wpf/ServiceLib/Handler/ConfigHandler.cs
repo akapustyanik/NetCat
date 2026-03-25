@@ -2084,7 +2084,10 @@ public static class ConfigHandler
             }
         }
 
-        await SQLiteHelper.Instance.UpdateAllAsync(items);
+        foreach (var item in items)
+        {
+            await SQLiteHelper.Instance.UpdateAsync(item);
+        }
 
         return 0;
     }
