@@ -41,6 +41,24 @@ public static class QuickRuleHandler
         "telegramdesktop.exe"
     ];
 
+    private static readonly string[] DiscordDomains =
+    [
+        "geosite:discord",
+        "domain:discord.com",
+        "domain:discord.gg",
+        "domain:discord.media",
+        "domain:discordapp.com",
+        "domain:discordapp.net",
+        "domain:discordcdn.com"
+    ];
+
+    private static readonly string[] DiscordProcesses =
+    [
+        "discord.exe",
+        "discordcanary.exe",
+        "discordptb.exe"
+    ];
+
     public static QuickRuleConfig Load()
     {
         try
@@ -71,6 +89,7 @@ public static class QuickRuleHandler
     public static async Task Apply(Config config, QuickRuleConfig quick)
     {
         var rules = new List<RulesItem>();
+        var useZapretForBlockedServices = config.GuiItem.ZapretEnabled;
         var telegramOutboundTag = TelegramWsProxyHandler.IsLocalSocksMode(quick.TelegramTrafficMode)
             ? Global.DirectTag
             : Global.ProxyTag;
@@ -118,6 +137,33 @@ public static class QuickRuleHandler
             Remarks = $"Telegram IPs ({telegramRemarksSuffix})"
         });
 
+        var youtubeOutboundTag = useZapretForBlockedServices ? Global.DirectTag : Global.ProxyTag;
+        var youtubeRouteMode = useZapretForBlockedServices ? "Direct/Zapret" : "VPN";
+        rules.Add(new RulesItem
+        {
+            Type = "field",
+            OutboundTag = youtubeOutboundTag,
+            Domain = NormalizeList(YoutubeDomains),
+            Remarks = $"YouTube ({youtubeRouteMode})"
+        });
+
+        var discordOutboundTag = useZapretForBlockedServices ? Global.DirectTag : Global.ProxyTag;
+        var discordRouteMode = useZapretForBlockedServices ? "Direct/Zapret" : "VPN";
+        rules.Add(new RulesItem
+        {
+            Type = "field",
+            OutboundTag = discordOutboundTag,
+            Process = NormalizeList(DiscordProcesses),
+            Remarks = $"Discord apps ({discordRouteMode})"
+        });
+        rules.Add(new RulesItem
+        {
+            Type = "field",
+            OutboundTag = discordOutboundTag,
+            Domain = NormalizeList(DiscordDomains),
+            Remarks = $"Discord domains ({discordRouteMode})"
+        });
+
         var processList = NormalizeList(quick.DirectProcesses);
         if (processList.Count > 0)
         {
@@ -131,7 +177,6 @@ public static class QuickRuleHandler
         }
 
         var domainList = NormalizeList(quick.DirectDomains);
-        domainList.InsertRange(0, YoutubeDomains);
         domainList = NormalizeList(domainList);
         if (domainList.Count > 0)
         {

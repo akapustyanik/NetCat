@@ -1915,6 +1915,8 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             {
                 ZapretRunning = false;
                 ZapretEnabled = false;
+                await PersistZapretEnabledAsync(false);
+                await ApplyQuickRulesAsync(reload: true);
                 SetZapretStatus(error);
                 return;
             }
@@ -1922,6 +1924,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             ZapretRunning = true;
             ZapretEnabled = true;
             await PersistZapretEnabledAsync(true);
+            await ApplyQuickRulesAsync(reload: true);
             await RememberLastZapretConfigAsync(configName);
             SetZapretStatus($"Started: {configName}");
         }
@@ -1988,6 +1991,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
                 await PersistZapretEnabledAsync(true);
             }
 
+            await ApplyQuickRulesAsync(reload: true);
             await RememberLastZapretConfigAsync(SelectedZapretConfig.Name);
             SetZapretStatus($"Started: {SelectedZapretConfig.Name}");
             return;
@@ -1999,6 +2003,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         }
 
         ZapretEnabled = false;
+        await ApplyQuickRulesAsync(reload: true);
         SetZapretStatus(error);
     }
 
@@ -2009,6 +2014,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         ZapretRunning = ZapretHandler.IsRunning();
         ZapretEnabled = ZapretRunning;
         await PersistZapretEnabledAsync(ZapretRunning);
+        await ApplyQuickRulesAsync(reload: true);
         SetZapretStatus(ZapretRunning ? "Failed to stop" : "Stopped");
     }
 
