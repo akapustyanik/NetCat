@@ -178,8 +178,7 @@ function Resolve-BundledBinSourceDirectory {
     param([string]$RepoRoot)
 
     $searchRoots = @(
-        (Join-Path $RepoRoot "artifacts"),
-        (Join-Path $RepoRoot "pre-releases")
+        (Join-Path $RepoRoot "artifacts")
     ) | Where-Object { Test-Path $_ }
 
     $candidateRoots = foreach ($searchRoot in $searchRoots) {
@@ -204,7 +203,7 @@ function Ensure-BundledBinLayout {
 
     $binSourceDir = Resolve-BundledBinSourceDirectory -RepoRoot $RepoRoot
     if ([string]::IsNullOrWhiteSpace($binSourceDir)) {
-        throw "Failed to find a complete bundled bin source directory under artifacts/ or pre-releases/."
+        throw "Failed to find a complete bundled bin source directory under artifacts/."
     }
 
     $sourceBinPath = Join-Path $binSourceDir "bin"

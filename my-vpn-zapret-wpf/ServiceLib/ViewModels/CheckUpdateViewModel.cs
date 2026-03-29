@@ -74,8 +74,6 @@ public class CheckUpdateViewModel : MyReactiveObject
             Logging.SaveLog(_tag, ex);
         });
 
-        _config.CheckUpdateItem.CheckPreReleaseUpdate = false;
-
         RefreshCheckUpdateItems();
         _ = PopulateInstalledVersionMetadataAsync();
         _ = WarmupAvailabilityMetadataAsync();
@@ -184,11 +182,11 @@ public class CheckUpdateViewModel : MyReactiveObject
             {
                 UpdateResult? result = item.CoreType switch
                 {
-                    _ when item.CoreType == _v2rayN => await service.CheckGuiUpdateAvailability(false),
+                    _ when item.CoreType == _v2rayN => await service.CheckGuiUpdateAvailability(),
                     _ when item.CoreType == _zapret => await service.CheckZapretUpdateAvailability(),
                     _ when item.CoreType == _geo => null,
                     _ => Enum.TryParse<ECoreType>(item.CoreType, out var coreType)
-                        ? await service.CheckCoreUpdateAvailability(coreType, false)
+                        ? await service.CheckCoreUpdateAvailability(coreType)
                         : null
                 };
 
@@ -277,10 +275,10 @@ public class CheckUpdateViewModel : MyReactiveObject
         await new UpdateService(_config, _updateUI).CheckUpdateZapret();
     }
 
-    private async Task CheckUpdateN(bool preRelease)
+    private async Task CheckUpdateN()
     {
         var availabilityService = new UpdateService(_config, (_, _) => Task.CompletedTask);
-        var availability = await availabilityService.CheckGuiUpdateAvailability(preRelease);
+        var availability = await availabilityService.CheckGuiUpdateAvailability();
         ApplyUpdateResultMetadata(_v2rayN, availability);
 
         async Task _updateUI(bool success, string msg)
@@ -293,11 +291,11 @@ public class CheckUpdateViewModel : MyReactiveObject
             }
         }
         var executionService = new UpdateService(_config, _updateUI);
-        var result = await executionService.CheckUpdateGuiN(preRelease);
+        var result = await executionService.CheckUpdateGuiN();
         ApplyUpdateResultMetadata(_v2rayN, result);
     }
 
-    private async Task CheckUpdateCore(CheckUpdateModel model, bool preRelease)
+    private async Task CheckUpdateCore(CheckUpdateModel model)
     {
         async Task _updateUI(bool success, string msg)
         {
@@ -311,7 +309,7 @@ public class CheckUpdateViewModel : MyReactiveObject
         }
         var type = (ECoreType)Enum.Parse(typeof(ECoreType), model.CoreType);
         var service = new UpdateService(_config, _updateUI);
-        var result = await service.CheckUpdateCore(type, preRelease);
+        var result = await service.CheckUpdateCore(type);
         ApplyUpdateResultMetadata(model.CoreType, result);
     }
 
@@ -437,15 +435,15 @@ public class CheckUpdateViewModel : MyReactiveObject
                 await UpdateView(_v2rayN, "Not Support");
                 return;
             }
-            await CheckUpdateN(false);
+            await CheckUpdateN();
         }
         else if (item.CoreType == ECoreType.Xray.ToString())
         {
-            await CheckUpdateCore(item, false);
+            await CheckUpdateCore(item);
         }
         else
         {
-            await CheckUpdateCore(item, false);
+            await CheckUpdateCore(item);
         }
     }
 

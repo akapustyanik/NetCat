@@ -243,7 +243,6 @@ public class WebDavItem
 [Serializable]
 public class CheckUpdateItem
 {
-    public bool CheckPreReleaseUpdate { get; set; }
     public List<string>? SelectedCoreTypes { get; set; }
 }
 

@@ -38,6 +38,15 @@ public class ProfileItemModel : ReactiveObject
     [Reactive]
     public string TotalDown { get; set; }
 
+    [Reactive]
+    public string CountryCode { get; set; } = string.Empty;
+
+    [Reactive]
+    public string CountryName { get; set; } = string.Empty;
+
+    [Reactive]
+    public string CountryFlagImageUrl { get; set; } = string.Empty;
+
     public string GetSummary()
     {
         var summary = $"[{ConfigType}] {Remarks}";

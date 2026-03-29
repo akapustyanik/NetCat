@@ -19,6 +19,7 @@ using MaterialDesignColors;
 using MaterialDesignColors.ColorManipulation;
 using MaterialDesignThemes.Wpf;
 using Microsoft.Win32;
+using ServiceLib.Common;
 using ServiceLib.Handler;
 using ServiceLib.Handler.SysProxy;
 using ServiceLib.Manager;
@@ -41,6 +42,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 
     private readonly Config _config;
     private readonly PaletteHelper _paletteHelper = new();
+    private readonly ServerCountryLookup _serverCountryLookup = new();
     private QuickRuleConfig _quickRules;
     private readonly DispatcherTimer _connectionPingTimer;
     private bool _closing;
@@ -55,9 +57,12 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     private bool _startupUpdateCheckStarted;
     private bool _suppressConnectionToggleEvents;
     private int _autoRunSecretClickCount;
+    private int _profileCountryRefreshVersion;
     private CancellationTokenSource? _zapretAutoTestCts;
     private Task? _zapretAutoTestTask;
     private RegisteredWaitHandle? _singleInstanceWaitHandle;
+    private RegisteredWaitHandle? _privateHubCommandWaitHandle;
+    private EventWaitHandle? _privateHubCommandSignal;
 
     public ObservableCollection<ProfileItemModel> Profiles { get; } = new();
     public ObservableCollection<string> DirectApps { get; } = new();
@@ -566,6 +571,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         _connectionPingTimer.Tick += ConnectionPingTimer_Tick;
         _connectionPingTimer.Start();
         RegisterSingleInstanceRestore();
+        RegisterPrivateHubCommandListener();
         _ = RefreshProfilesAsync();
         UpdateTrayToolTip();
         _ = UpdateConnectionPingAsync();
@@ -587,6 +593,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         }
 
         await RefreshZapretAsync();
+        await ProcessPendingPrivateHubCommandsAsync();
         await RefreshSupportSnapshotAsync(true);
         if (!_startupUpdateCheckStarted)
         {
@@ -662,8 +669,38 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         SelectedProfile = Profiles.FirstOrDefault(t => t.IndexId == preferredIndexId)
             ?? Profiles.FirstOrDefault(t => t.IsActive)
             ?? Profiles.FirstOrDefault();
+        _ = RefreshProfileCountryInfoAsync(Profiles.ToList());
         await UpdateConnectionPingAsync();
         await RefreshSupportSnapshotAsync(false);
+    }
+
+    private async Task RefreshProfileCountryInfoAsync(IReadOnlyCollection<ProfileItemModel> profiles)
+    {
+        var refreshVersion = Interlocked.Increment(ref _profileCountryRefreshVersion);
+        var profilesByAddress = profiles
+            .Where(profile => !string.IsNullOrWhiteSpace(profile.Address))
+            .GroupBy(profile => profile.Address, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        foreach (var profileGroup in profilesByAddress)
+        {
+            var countryInfo = await _serverCountryLookup.ResolveAsync(profileGroup.Key);
+            if (refreshVersion != _profileCountryRefreshVersion)
+            {
+                return;
+            }
+
+            var countryCode = countryInfo?.CountryCode ?? string.Empty;
+            var countryName = countryInfo?.CountryName ?? string.Empty;
+            var flagImageUrl = countryInfo?.FlagImageUrl ?? string.Empty;
+
+            foreach (var profile in profileGroup)
+            {
+                profile.CountryCode = countryCode;
+                profile.CountryName = countryName;
+                profile.CountryFlagImageUrl = flagImageUrl;
+            }
+        }
     }
 
     private async Task ApplyQuickRulesAsync(bool reload)
@@ -953,6 +990,8 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     private void MainWindow_Closed(object? sender, EventArgs e)
     {
         _singleInstanceWaitHandle?.Unregister(null);
+        _privateHubCommandWaitHandle?.Unregister(null);
+        _privateHubCommandSignal?.Dispose();
         _connectionPingTimer.Stop();
         TrayIcon?.Dispose();
     }
@@ -1131,7 +1170,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         try
         {
             var updateService = new UpdateService(_config, (_, _) => Task.CompletedTask);
-            var result = await updateService.CheckGuiUpdateAvailability(_config.CheckUpdateItem.CheckPreReleaseUpdate);
+            var result = await updateService.CheckGuiUpdateAvailability();
             StartupUpdateStatus = result.Status switch
             {
                 EUpdateAvailabilityStatus.Available => $"Update check: available ({result.Release?.TagName ?? result.Version?.ToString() ?? "latest"})",
@@ -3618,6 +3657,57 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             null,
             Timeout.Infinite,
             false);
+    }
+
+    private void RegisterPrivateHubCommandListener()
+    {
+        try
+        {
+            _privateHubCommandSignal = new EventWaitHandle(false, EventResetMode.AutoReset, PrivateHubExternalCommandBridge.GetSignalName());
+            _privateHubCommandWaitHandle = ThreadPool.RegisterWaitForSingleObject(
+                _privateHubCommandSignal,
+                (_, _) => Dispatcher.BeginInvoke(new Action(() => _ = ProcessPendingPrivateHubCommandsAsync())),
+                null,
+                Timeout.Infinite,
+                false);
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog("RegisterPrivateHubCommandListener", ex);
+        }
+    }
+
+    private async Task ProcessPendingPrivateHubCommandsAsync()
+    {
+        var commands = PrivateHubExternalCommandBridge.TakePendingCommands();
+        if (commands.Count == 0 || ViewModel == null)
+        {
+            return;
+        }
+
+        foreach (var command in commands)
+        {
+            try
+            {
+                switch (command.Command)
+                {
+                    case PrivateHubExternalCommandNames.RefreshSubscriptions:
+                        SetStatus(command.UseProxy
+                            ? "PrivateHub requested subscription update via proxy"
+                            : "PrivateHub requested subscription update");
+                        await ViewModel.UpdateSubscriptionProcess("", command.UseProxy);
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logging.SaveLog($"PrivateHub command failed: {command.Command}", ex);
+                SetStatus($"PrivateHub command failed: {ex.Message}");
+            }
+        }
+
+        await RefreshProfilesAsync();
+        await RefreshSupportSnapshotAsync(false);
     }
 
     private bool ShouldHideWindowOnStartup()

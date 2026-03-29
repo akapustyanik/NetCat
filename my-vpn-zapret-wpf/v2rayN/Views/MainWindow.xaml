@@ -256,8 +256,30 @@
                                                             <ColumnDefinition Width="*" />
                                                             <ColumnDefinition Width="Auto" />
                                                         </Grid.ColumnDefinitions>
-                                                        <StackPanel>
-                                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                            <StackPanel>
+                                                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                                <Border Margin="0,0,8,0"
+                                                                        Width="24"
+                                                                        Height="18"
+                                                                        CornerRadius="4"
+                                                                        BorderBrush="{DynamicResource NetCatWindowChromeBrush}"
+                                                                        BorderThickness="1">
+                                                                    <Border.Style>
+                                                                        <Style TargetType="Border">
+                                                                            <Setter Property="Visibility" Value="Visible" />
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding CountryFlagImageUrl}" Value="">
+                                                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </Border.Style>
+                                                                    <Image Width="24"
+                                                                           Height="18"
+                                                                           Stretch="Fill"
+                                                                           SnapsToDevicePixels="True"
+                                                                           Source="{Binding CountryFlagImageUrl}" />
+                                                                </Border>
                                                                 <TextBlock FontWeight="SemiBold" Text="{Binding Remarks}" />
                                                                 <Border
                                                                     x:Name="ProfileActiveBadge"
@@ -270,17 +292,42 @@
                                                                 </Border>
                                                             </StackPanel>
                                                             <TextBlock Margin="0,4,0,0" FontSize="12" Opacity="0.7" Text="{Binding Address}" TextWrapping="Wrap" />
+                                                            </StackPanel>
+                                                        <StackPanel Grid.Column="1"
+                                                                    Margin="12,0,0,0"
+                                                                    HorizontalAlignment="Right">
+                                                            <Border
+                                                                x:Name="ProfileCountryBadge"
+                                                                Padding="8,4"
+                                                                Background="{DynamicResource NetCatAccentSoftBrush}"
+                                                                BorderBrush="{DynamicResource NetCatWindowChromeBrush}"
+                                                                BorderThickness="1"
+                                                                CornerRadius="10">
+                                                                <Border.Style>
+                                                                    <Style TargetType="Border">
+                                                                        <Setter Property="Visibility" Value="Visible" />
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding CountryName}" Value="">
+                                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </Border.Style>
+                                                                <TextBlock FontSize="11"
+                                                                           FontWeight="SemiBold"
+                                                                           Foreground="{DynamicResource NetCatStrongTextBrush}"
+                                                                           Text="{Binding CountryName}" />
+                                                            </Border>
+                                                            <TextBlock
+                                                                x:Name="ProfileSelectedMarker"
+                                                                Margin="0,8,0,0"
+                                                                HorizontalAlignment="Right"
+                                                                FontSize="12"
+                                                                FontWeight="SemiBold"
+                                                                Opacity="0.8"
+                                                                Text="Selected"
+                                                                Visibility="Collapsed" />
                                                         </StackPanel>
-                                                        <TextBlock
-                                                            x:Name="ProfileSelectedMarker"
-                                                            Grid.Column="1"
-                                                            Margin="12,0,0,0"
-                                                            VerticalAlignment="Center"
-                                                            FontSize="12"
-                                                            FontWeight="SemiBold"
-                                                            Opacity="0.8"
-                                                            Text="Selected"
-                                                            Visibility="Collapsed" />
                                                     </Grid>
                                                 </Border>
                                                 <DataTemplate.Triggers>
@@ -832,6 +879,7 @@
                             ItemsSource="{Binding Profiles}"
                             SelectedItem="{Binding SelectedProfile}"
                             MouseDoubleClick="OnProfilesMouseDoubleClick"
+                            PreviewMouseWheel="OnNestedScrollViewerPreviewMouseWheel"
                             ScrollViewer.VerticalScrollBarVisibility="Auto"
                             ScrollViewer.CanContentScroll="False"
                             common:SmoothScrollBehavior.IsEnabled="True"
@@ -872,6 +920,28 @@
                                             </Grid.ColumnDefinitions>
                                             <StackPanel>
                                                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                    <Border Margin="0,0,8,0"
+                                                            Width="24"
+                                                            Height="18"
+                                                            CornerRadius="4"
+                                                            BorderBrush="{DynamicResource NetCatWindowChromeBrush}"
+                                                            BorderThickness="1">
+                                                        <Border.Style>
+                                                            <Style TargetType="Border">
+                                                                <Setter Property="Visibility" Value="Visible" />
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding CountryFlagImageUrl}" Value="">
+                                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Border.Style>
+                                                        <Image Width="24"
+                                                               Height="18"
+                                                               Stretch="Fill"
+                                                               SnapsToDevicePixels="True"
+                                                               Source="{Binding CountryFlagImageUrl}" />
+                                                    </Border>
                                                     <TextBlock FontWeight="SemiBold" Text="{Binding Remarks}" />
                                                     <Border
                                                         x:Name="ActiveBadge"
@@ -885,16 +955,41 @@
                                                 </StackPanel>
                                                 <TextBlock Margin="0,4,0,0" FontSize="12" Opacity="0.7" Text="{Binding Address}" />
                                             </StackPanel>
-                                            <TextBlock
-                                                x:Name="SelectedMarker"
-                                                Grid.Column="1"
-                                                Margin="12,0,0,0"
-                                                VerticalAlignment="Center"
-                                                FontSize="12"
-                                                FontWeight="SemiBold"
-                                                Opacity="0.8"
-                                                Text="Selected"
-                                                Visibility="Collapsed" />
+                                            <StackPanel Grid.Column="1"
+                                                        Margin="12,0,0,0"
+                                                        HorizontalAlignment="Right">
+                                                <Border
+                                                    x:Name="CountryBadge"
+                                                    Padding="8,4"
+                                                    Background="{DynamicResource NetCatAccentSoftBrush}"
+                                                    BorderBrush="{DynamicResource NetCatWindowChromeBrush}"
+                                                    BorderThickness="1"
+                                                    CornerRadius="10">
+                                                    <Border.Style>
+                                                        <Style TargetType="Border">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding CountryName}" Value="">
+                                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Border.Style>
+                                                    <TextBlock FontSize="11"
+                                                               FontWeight="SemiBold"
+                                                               Foreground="{DynamicResource NetCatStrongTextBrush}"
+                                                               Text="{Binding CountryName}" />
+                                                </Border>
+                                                <TextBlock
+                                                    x:Name="SelectedMarker"
+                                                    Margin="0,8,0,0"
+                                                    HorizontalAlignment="Right"
+                                                    FontSize="12"
+                                                    FontWeight="SemiBold"
+                                                    Opacity="0.8"
+                                                    Text="Selected"
+                                                    Visibility="Collapsed" />
+                                            </StackPanel>
                                         </Grid>
                                     </Border>
                                     <DataTemplate.Triggers>

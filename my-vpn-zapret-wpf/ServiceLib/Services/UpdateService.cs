@@ -27,12 +27,12 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
     private readonly int _timeout = 30;
     private static readonly string _tag = "UpdateService";
 
-    public async Task<UpdateResult> CheckGuiUpdateAvailability(bool preRelease)
+    public async Task<UpdateResult> CheckGuiUpdateAvailability()
     {
         try
         {
             var downloadHandle = new DownloadService();
-            return await CheckUpdateAsync(downloadHandle, ECoreType.v2rayN, preRelease);
+            return await CheckUpdateAsync(downloadHandle, ECoreType.v2rayN);
         }
         catch (Exception ex)
         {
@@ -45,12 +45,12 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
         }
     }
 
-    public async Task<UpdateResult> CheckCoreUpdateAvailability(ECoreType type, bool preRelease)
+    public async Task<UpdateResult> CheckCoreUpdateAvailability(ECoreType type)
     {
         try
         {
             var downloadHandle = new DownloadService();
-            return await CheckUpdateAsync(downloadHandle, type, preRelease);
+            return await CheckUpdateAsync(downloadHandle, type);
         }
         catch (Exception ex)
         {
@@ -68,7 +68,7 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
         try
         {
             var downloadHandle = new DownloadService();
-            var release = await GetGitHubRelease(downloadHandle, _zapretReleaseApiUrl, false);
+            var release = await GetGitHubRelease(downloadHandle, _zapretReleaseApiUrl);
             if (release == null)
             {
                 return new UpdateResult(false, "Failed to resolve Zapret release information.")
@@ -268,7 +268,7 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
         }
     }
 
-    public async Task<UpdateResult> CheckUpdateGuiN(bool preRelease)
+    public async Task<UpdateResult> CheckUpdateGuiN()
     {
         var url = string.Empty;
         var fileName = string.Empty;
@@ -293,7 +293,7 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
         };
 
         await UpdateFunc(false, string.Format(ResUI.MsgStartUpdating, ECoreType.v2rayN));
-        var result = await CheckUpdateAsync(downloadHandle, ECoreType.v2rayN, preRelease);
+        var result = await CheckUpdateAsync(downloadHandle, ECoreType.v2rayN);
         if (result.Success)
         {
             await UpdateFunc(false, string.Format(ResUI.MsgParsingSuccessfully, ECoreType.v2rayN));
@@ -320,7 +320,7 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
         return result;
     }
 
-    public async Task<UpdateResult> CheckUpdateCore(ECoreType type, bool preRelease)
+    public async Task<UpdateResult> CheckUpdateCore(ECoreType type)
     {
         var url = string.Empty;
         var fileName = string.Empty;
@@ -354,7 +354,7 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
         };
 
         await UpdateFunc(false, string.Format(ResUI.MsgStartUpdating, type));
-        var result = await CheckUpdateAsync(downloadHandle, type, preRelease);
+        var result = await CheckUpdateAsync(downloadHandle, type);
         if (result.Success)
         {
             await UpdateFunc(false, string.Format(ResUI.MsgParsingSuccessfully, type));
@@ -384,7 +384,7 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
             await UpdateFunc(false, string.Format(ResUI.MsgStartUpdating, _zapretModuleName));
 
             var downloadHandle = new DownloadService();
-            var release = await GetGitHubRelease(downloadHandle, _zapretReleaseApiUrl, false);
+            var release = await GetGitHubRelease(downloadHandle, _zapretReleaseApiUrl);
             if (release == null)
             {
                 await UpdateFunc(false, "Failed to resolve Zapret release information.");
@@ -495,11 +495,11 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
 
     #region CheckUpdate private
 
-    private async Task<UpdateResult> CheckUpdateAsync(DownloadService downloadHandle, ECoreType type, bool preRelease)
+    private async Task<UpdateResult> CheckUpdateAsync(DownloadService downloadHandle, ECoreType type)
     {
         try
         {
-            var result = await GetRemoteVersion(downloadHandle, type, preRelease);
+            var result = await GetRemoteVersion(downloadHandle, type);
             if (!result.Success || result.Version is null)
             {
                 return result;
@@ -518,14 +518,14 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
         }
     }
 
-    private async Task<UpdateResult> GetRemoteVersion(DownloadService downloadHandle, ECoreType type, bool preRelease)
+    private async Task<UpdateResult> GetRemoteVersion(DownloadService downloadHandle, ECoreType type)
     {
         var coreInfo = CoreInfoManager.Instance.GetCoreInfo(type);
         var tagName = string.Empty;
         GitHubRelease? gitHubRelease = null;
         if (type == ECoreType.v2rayN)
         {
-            gitHubRelease = await GetGitHubRelease(downloadHandle, coreInfo, preRelease);
+            gitHubRelease = await GetGitHubRelease(downloadHandle, coreInfo);
             if (gitHubRelease == null)
             {
                 return new UpdateResult(false, "Failed to fetch NetCat release metadata.")
@@ -543,39 +543,18 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
             };
         }
 
-        if (preRelease)
+        var url = Path.Combine(coreInfo.Url, "latest");
+        var lastUrl = await downloadHandle.UrlRedirectAsync(url, true);
+        if (lastUrl == null)
         {
-            var url = coreInfo?.ReleaseApiUrl;
-            var result = await downloadHandle.TryDownloadString(url, true, Global.AppName);
-            if (result.IsNullOrEmpty())
+            return new UpdateResult(false, "Failed to resolve latest release redirect.")
             {
-                return new UpdateResult(false, "Failed to fetch release list.")
-                {
-                    Status = EUpdateAvailabilityStatus.Failed,
-                    FailureStage = EUpdateFailureStage.ReleaseLookup
-                };
-            }
-
-            var gitHubReleases = JsonUtils.Deserialize<List<GitHubRelease>>(result);
-            var selectedRelease = preRelease ? gitHubReleases?.First() : gitHubReleases?.First(r => r.Prerelease == false);
-            tagName = selectedRelease?.TagName;
-            //var body = gitHubRelease?.Body;
+                Status = EUpdateAvailabilityStatus.Failed,
+                FailureStage = EUpdateFailureStage.ReleaseLookup
+            };
         }
-        else
-        {
-            var url = Path.Combine(coreInfo.Url, "latest");
-            var lastUrl = await downloadHandle.UrlRedirectAsync(url, true);
-            if (lastUrl == null)
-            {
-                return new UpdateResult(false, "Failed to resolve latest release redirect.")
-                {
-                    Status = EUpdateAvailabilityStatus.Failed,
-                    FailureStage = EUpdateFailureStage.ReleaseLookup
-                };
-            }
 
-            tagName = lastUrl?.Split("/tag/").LastOrDefault();
-        }
+        tagName = lastUrl.Split("/tag/").LastOrDefault();
         return new UpdateResult(true, new SemanticVersion(tagName))
         {
             Status = EUpdateAvailabilityStatus.Available
@@ -722,7 +701,7 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
         }
     }
 
-    private async Task<GitHubRelease?> GetGitHubRelease(DownloadService downloadHandle, CoreInfo? coreInfo, bool preRelease)
+    private async Task<GitHubRelease?> GetGitHubRelease(DownloadService downloadHandle, CoreInfo? coreInfo)
     {
         var releaseApiUrl = coreInfo?.ReleaseApiUrl;
         if (releaseApiUrl.IsNullOrEmpty())
@@ -730,25 +709,11 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
             return null;
         }
 
-        return await GetGitHubRelease(downloadHandle, releaseApiUrl, preRelease);
+        return await GetGitHubRelease(downloadHandle, releaseApiUrl);
     }
 
-    private async Task<GitHubRelease?> GetGitHubRelease(DownloadService downloadHandle, string releaseApiUrl, bool preRelease)
+    private async Task<GitHubRelease?> GetGitHubRelease(DownloadService downloadHandle, string releaseApiUrl)
     {
-        if (preRelease)
-        {
-            var result = await downloadHandle.TryDownloadString(releaseApiUrl, true, Global.AppName);
-            if (result.IsNullOrEmpty())
-            {
-                return null;
-            }
-
-            var gitHubReleases = JsonUtils.Deserialize<List<GitHubRelease>>(result);
-            return gitHubReleases?
-                .OrderByDescending(r => r.PublishedAt)
-                .FirstOrDefault();
-        }
-
         var latestReleaseUrl = $"{releaseApiUrl}/latest";
         var latestResult = await downloadHandle.TryDownloadString(latestReleaseUrl, true, Global.AppName);
         if (latestResult.IsNullOrEmpty())
