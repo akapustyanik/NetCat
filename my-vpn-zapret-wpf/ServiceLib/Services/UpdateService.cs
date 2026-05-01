@@ -447,8 +447,7 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
             preservePath = BackupZapretUserFiles(targetPath);
 
             Directory.CreateDirectory(targetPath);
-            DeleteDirectoryContents(targetPath);
-            FileUtils.CopyDirectory(extractedZapretPath, targetPath, true, true);
+            CopyZapretBundle(extractedZapretPath, targetPath);
             RestoreZapretUserFiles(preservePath, targetPath);
 
             var successTemplate = GetResourceText("MsgUpdateZapretSuccessfully", "Updated Zapret successfully ({0}).");
@@ -1580,6 +1579,31 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
         }
 
         FileUtils.CopyDirectory(backupPath, targetPath, true, true);
+    }
+
+    private static void CopyZapretBundle(string sourcePath, string targetPath)
+    {
+        Directory.CreateDirectory(targetPath);
+
+        foreach (var sourceFilePath in Directory.GetFiles(sourcePath, "*", SearchOption.AllDirectories))
+        {
+            var relativePath = Path.GetRelativePath(sourcePath, sourceFilePath);
+            var targetFilePath = Path.Combine(targetPath, relativePath);
+            var targetDirectory = Path.GetDirectoryName(targetFilePath);
+            if (targetDirectory.IsNotEmpty())
+            {
+                Directory.CreateDirectory(targetDirectory);
+            }
+
+            try
+            {
+                File.Copy(sourceFilePath, targetFilePath, true);
+            }
+            catch (Exception ex) when ((ex is IOException || ex is UnauthorizedAccessException) && File.Exists(targetFilePath))
+            {
+                Logging.SaveLog(_tag, ex);
+            }
+        }
     }
 
     private static bool ShouldPreserveZapretFile(string relativePath)
