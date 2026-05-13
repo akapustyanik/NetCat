@@ -5,8 +5,11 @@ public partial class CoreConfigSingboxService(CoreConfigContext context)
     private static readonly string _tag = "CoreConfigSingboxService";
     private readonly Config _config = context.AppConfig;
     private readonly ProfileItem _node = context.Node;
+    private readonly List<AutoFailoverWarmInbound> _autoFailoverWarmInbounds = [];
 
     private SingboxConfig _coreConfig = new();
+
+    private sealed record AutoFailoverWarmInbound(string Tag, int Port, string OutboundTag);
 
     #region public gen function
 
@@ -50,6 +53,8 @@ public partial class CoreConfigSingboxService(CoreConfigContext context)
             GenOutbounds();
 
             GenRouting();
+
+            GenAutoFailoverWarmStandbyRoutes();
 
             GenDns();
 

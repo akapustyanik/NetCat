@@ -149,6 +149,48 @@
                         materialDesign:HintAssist.Hint="{x:Static resx:ResUI.TbPolicyGroupType}"
                         Style="{StaticResource DefComboBox}" />
                 </Grid>
+
+                <Grid
+                    x:Name="gridAutoFailover"
+                    Grid.Row="4"
+                    Grid.Column="0"
+                    Grid.ColumnSpan="3">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="240" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock
+                        Grid.Column="0"
+                        Margin="{StaticResource Margin4}"
+                        VerticalAlignment="Center"
+                        Style="{StaticResource ToolbarTextBlock}"
+                        Text="Автосмена протокола" />
+                    <StackPanel
+                        Grid.Column="1"
+                        Margin="{StaticResource Margin4}"
+                        Orientation="Horizontal"
+                        VerticalAlignment="Center">
+                        <CheckBox
+                            x:Name="chkAutoProtocolFailover"
+                            Margin="0,0,16,0"
+                            VerticalAlignment="Center"
+                            Content="Fallback при потере соединения" />
+                        <Slider
+                            x:Name="sldFailoverStandbyCount"
+                            Width="180"
+                            Minimum="1"
+                            Maximum="8"
+                            TickFrequency="1"
+                            IsSnapToTickEnabled="True"
+                            IsEnabled="{Binding ElementName=chkAutoProtocolFailover, Path=IsChecked}" />
+                        <TextBlock
+                            Margin="10,0,0,0"
+                            VerticalAlignment="Center"
+                            Style="{StaticResource ToolbarTextBlock}"
+                            Text="{Binding ElementName=sldFailoverStandbyCount, Path=Value, StringFormat=Резервных: {0:F0}}" />
+                    </StackPanel>
+                </Grid>
             </Grid>
         </Grid>
 

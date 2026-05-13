@@ -21,6 +21,12 @@ public class AddGroupServerViewModel : MyReactiveObject
     public string? PolicyGroupType { get; set; }
 
     [Reactive]
+    public bool AutoProtocolFailover { get; set; }
+
+    [Reactive]
+    public double FailoverStandbyCount { get; set; } = 1;
+
+    [Reactive]
     public SubItem? SelectedSubItem { get; set; }
 
     [Reactive]
@@ -85,6 +91,8 @@ public class AddGroupServerViewModel : MyReactiveObject
     public async Task Init()
     {
         var protocolExtra = SelectedSource.GetProtocolExtra();
+        AutoProtocolFailover = protocolExtra?.MultipleLoad == EMultipleLoad.Fallback;
+        FailoverStandbyCount = Math.Clamp(protocolExtra?.FailoverStandbyCount ?? 1, 1, 8);
         PolicyGroupType = (protocolExtra?.MultipleLoad ?? EMultipleLoad.LeastPing) switch
         {
             EMultipleLoad.LeastPing => ResUI.TbLeastPing,
@@ -219,6 +227,7 @@ public class AddGroupServerViewModel : MyReactiveObject
             },
             SubChildItems = SelectedSubItem?.Id,
             Filter = Filter,
+            FailoverStandbyCount = Math.Clamp((int)Math.Round(FailoverStandbyCount), 1, 8),
         };
     }
 
@@ -246,6 +255,17 @@ public class AddGroupServerViewModel : MyReactiveObject
             SelectedSource.ConfigType is not (EConfigType.ProxyChain or EConfigType.PolicyGroup))
         {
             return;
+        }
+
+        if (AutoProtocolFailover)
+        {
+            PolicyGroupType = ResUI.TbFallback;
+            var requiredProtocolCount = Math.Clamp((int)Math.Round(FailoverStandbyCount), 1, 8) + 1;
+            if (ChildItemsObs.Count > 0 && ChildItemsObs.Count < requiredProtocolCount)
+            {
+                NoticeManager.Instance.Enqueue($"Для автосмены нужно минимум {requiredProtocolCount} протокола.");
+                return;
+            }
         }
 
         var protocolExtra = GetUpdatedProtocolExtra();

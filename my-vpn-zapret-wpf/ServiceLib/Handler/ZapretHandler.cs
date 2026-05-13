@@ -98,6 +98,7 @@ public static class ZapretHandler
 
         try
         {
+            SanitizeBrowserRedirects(zapretPath);
             var patchedBatPath = CreateHiddenLaunchBat(batPath);
             var startInfo = new ProcessStartInfo("cmd.exe", $"/C call \"{patchedBatPath}\"")
             {
@@ -124,8 +125,85 @@ public static class ZapretHandler
 
         var content = File.ReadAllText(batPath);
         content = content.Replace("start \"zapret: %~n0\" /min", "start \"\" /b", StringComparison.OrdinalIgnoreCase);
+        content = StripBrowserRedirectCommands(content);
         File.WriteAllText(tempPath, content);
         return tempPath;
+    }
+
+    public static int SanitizeBrowserRedirects(string zapretPath)
+    {
+        if (zapretPath.IsNullOrEmpty() || !Directory.Exists(zapretPath))
+        {
+            return 0;
+        }
+
+        var changed = 0;
+        foreach (var filePath in Directory.GetFiles(zapretPath, "*.*", SearchOption.AllDirectories)
+                     .Where(path => path.EndsWith(".bat", StringComparison.OrdinalIgnoreCase)
+                                    || path.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase)))
+        {
+            try
+            {
+                var content = File.ReadAllText(filePath);
+                var sanitized = StripBrowserRedirectCommands(content);
+                if (!string.Equals(content, sanitized, StringComparison.Ordinal))
+                {
+                    File.WriteAllText(filePath, sanitized);
+                    changed++;
+                }
+            }
+            catch
+            {
+                // ignore third-party script files that cannot be edited
+            }
+        }
+
+        return changed;
+    }
+
+    private static string StripBrowserRedirectCommands(string content)
+    {
+        var lines = content.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (IsBrowserRedirectLine(lines[i]))
+            {
+                lines[i] = $"rem NetCat blocked browser redirect: {lines[i]}";
+            }
+        }
+
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private static bool IsBrowserRedirectLine(string line)
+    {
+        var trimmed = line.Trim();
+        if (trimmed.Length == 0 || trimmed.StartsWith("rem ", StringComparison.OrdinalIgnoreCase)
+                                || trimmed.StartsWith("::", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var lower = trimmed.ToLowerInvariant();
+        var containsGithubTarget = lower.Contains("github.com")
+                                   || lower.Contains("github.io")
+                                   || lower.Contains("%github_download_url%")
+                                   || lower.Contains("!github_download_url!")
+                                   || lower.Contains("%github_release_url%")
+                                   || lower.Contains("!github_release_url!");
+        if (!containsGithubTarget)
+        {
+            return false;
+        }
+
+        return lower.StartsWith("start ")
+               || lower.Contains(" start ")
+               || lower.StartsWith("explorer ")
+               || lower.Contains(" explorer ")
+               || lower.Contains("start-process")
+               || lower.Contains("rundll32")
+               || lower.Contains("cmd /c start")
+               || lower.Contains("powershell");
     }
 
     public static void Stop()

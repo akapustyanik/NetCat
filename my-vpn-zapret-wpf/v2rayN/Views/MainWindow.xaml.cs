@@ -39,10 +39,15 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     private const string DefaultInterfacePresetKey = "NightShift";
     private const string SecretAssetName = "secret.dat";
     private static readonly byte[] SecretKey = Encoding.UTF8.GetBytes("NetCat::secret::2026");
+    private static readonly HttpClient FlagImageHttpClient = new()
+    {
+        Timeout = TimeSpan.FromSeconds(8)
+    };
 
     private readonly Config _config;
     private readonly PaletteHelper _paletteHelper = new();
     private readonly ServerCountryLookup _serverCountryLookup = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<Task<string>>> _countryFlagCache = new(StringComparer.OrdinalIgnoreCase);
     private QuickRuleConfig _quickRules;
     private readonly DispatcherTimer _connectionPingTimer;
     private bool _closing;
@@ -56,6 +61,9 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     private bool _startupZapretRestorePending = true;
     private bool _startupUpdateCheckStarted;
     private bool _suppressConnectionToggleEvents;
+    private bool _suppressAutoFailoverEvents;
+    private bool _isLoadingAutoFailoverSelection;
+    private SpeedtestService? _profileSpeedtestService;
     private int _autoRunSecretClickCount;
     private int _profileCountryRefreshVersion;
     private CancellationTokenSource? _zapretAutoTestCts;
@@ -281,6 +289,30 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         get => _useProxyDomainsPreset;
         set => SetField(ref _useProxyDomainsPreset, value);
     }
+
+    private bool _autoProtocolFailoverEnabled;
+    public bool AutoProtocolFailoverEnabled
+    {
+        get => _autoProtocolFailoverEnabled;
+        set
+        {
+            if (SetField(ref _autoProtocolFailoverEnabled, value))
+            {
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AutoFailoverCandidateVisibility)));
+            }
+        }
+    }
+
+    private double _autoProtocolFailoverStandbyCount = 1;
+    public double AutoProtocolFailoverStandbyCount
+    {
+        get => _autoProtocolFailoverStandbyCount;
+        set => SetField(ref _autoProtocolFailoverStandbyCount, Math.Clamp(Math.Round(value), 1, 8));
+    }
+
+    public Visibility AutoFailoverCandidateVisibility => AutoProtocolFailoverEnabled
+        ? Visibility.Visible
+        : Visibility.Collapsed;
 
     private bool _telegramUseLocalSocks;
     public bool TelegramUseLocalSocks
@@ -545,6 +577,8 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         BypassPrivate = _quickRules.BypassPrivate;
         ProxyOnlyMode = _quickRules.ProxyOnlyMode;
         UseProxyDomainsPreset = _quickRules.UseProxyDomainsPreset;
+        AutoProtocolFailoverEnabled = _config.UiItem.AutoProtocolFailoverEnabled;
+        AutoProtocolFailoverStandbyCount = Math.Clamp(_config.UiItem.AutoProtocolFailoverStandbyCount <= 0 ? 1 : _config.UiItem.AutoProtocolFailoverStandbyCount, 1, 8);
         TelegramUseLocalSocks = TelegramWsProxyHandler.IsLocalSocksMode(_quickRules.TelegramTrafficMode);
         TunEnabled = _config.TunModeItem.EnableTun;
         LoadCustomAppearance();
@@ -653,25 +687,103 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 
     private async Task RefreshProfilesAsync()
     {
-        var items = await AppManager.Instance.ProfileModels("", "") ?? new List<ProfileItemModel>();
-        var preferredIndexId = SelectedProfile?.IndexId ?? _config.IndexId;
-        foreach (var item in items)
+        await ClearAutoFailoverRuntimeGroupAsync();
+
+        _isLoadingAutoFailoverSelection = true;
+        List<ProfileItemModel> snapshot;
+        try
         {
-            item.IsActive = item.IndexId == _config.IndexId;
+            var items = await AppManager.Instance.ProfileModels("", "") ?? new List<ProfileItemModel>();
+            var profileExs = await ProfileExManager.Instance.GetProfileExs();
+            var autoFailoverGroupId = _config.UiItem.AutoProtocolFailoverGroupId;
+            if (!autoFailoverGroupId.IsNullOrEmpty())
+            {
+                items = items
+                    .Where(item => !string.Equals(item.IndexId, autoFailoverGroupId, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+            }
+
+            var preferredIndexId = SelectedProfile?.IndexId ?? _config.IndexId;
+            var autoFailoverIds = GetAutoFailoverProfileIds();
+            foreach (var item in items)
+            {
+                item.IsActive = item.IndexId == _config.IndexId
+                                || (AutoProtocolFailoverEnabled
+                                    && string.Equals(_config.IndexId, autoFailoverGroupId, StringComparison.OrdinalIgnoreCase)
+                                    && string.Equals(item.IndexId, _config.UiItem.AutoProtocolFailoverPrimaryId, StringComparison.OrdinalIgnoreCase));
+                item.IsAutoFailoverCandidate = autoFailoverIds.Contains(item.IndexId);
+                var profileEx = profileExs.FirstOrDefault(profileExItem => profileExItem.IndexId == item.IndexId);
+                item.Delay = profileEx?.Delay ?? 0;
+                item.DelayVal = profileEx?.Delay > 0
+                    ? $"{profileEx.Delay} ms"
+                    : profileEx?.Message.IsNotEmpty() == true ? profileEx.Message : "Not tested";
+            }
+
+            Profiles.Clear();
+            foreach (var item in items.OrderBy(t => t.Sort))
+            {
+                Profiles.Add(item);
+            }
+
+            SelectedProfile = Profiles.FirstOrDefault(t => t.IndexId == preferredIndexId)
+                ?? Profiles.FirstOrDefault(t => t.IsActive)
+                ?? Profiles.FirstOrDefault();
+            snapshot = Profiles.ToList();
+        }
+        finally
+        {
+            _isLoadingAutoFailoverSelection = false;
         }
 
-        Profiles.Clear();
-        foreach (var item in items.OrderBy(t => t.Sort))
-        {
-            Profiles.Add(item);
-        }
-
-        SelectedProfile = Profiles.FirstOrDefault(t => t.IndexId == preferredIndexId)
-            ?? Profiles.FirstOrDefault(t => t.IsActive)
-            ?? Profiles.FirstOrDefault();
-        _ = RefreshProfileCountryInfoAsync(Profiles.ToList());
+        _ = RefreshProfileCountryInfoAsync(snapshot);
         await UpdateConnectionPingAsync();
         await RefreshSupportSnapshotAsync(false);
+    }
+
+    private async Task ClearAutoFailoverRuntimeGroupAsync(bool force = false)
+    {
+        if (AutoProtocolFailoverEnabled && !force)
+        {
+            return;
+        }
+
+        var groupId = _config.UiItem.AutoProtocolFailoverGroupId;
+        if (groupId.IsNullOrEmpty())
+        {
+            return;
+        }
+
+        var runtimeGroup = await AppManager.Instance.GetProfileItem(groupId);
+        if (runtimeGroup == null)
+        {
+            _config.UiItem.AutoProtocolFailoverGroupId = null;
+            await ConfigHandler.SaveConfig(_config);
+            return;
+        }
+
+        if (string.Equals(_config.IndexId, groupId, StringComparison.OrdinalIgnoreCase))
+        {
+            var fallbackId = _config.UiItem.AutoProtocolFailoverPrimaryId;
+            var fallback = fallbackId.IsNullOrEmpty()
+                ? null
+                : await AppManager.Instance.GetProfileItem(fallbackId);
+            if (fallback == null || fallback.ConfigType.IsComplexType())
+            {
+                fallback = (await AppManager.Instance.ProfileItems("") ?? [])
+                    .FirstOrDefault(item => !string.Equals(item.IndexId, groupId, StringComparison.OrdinalIgnoreCase)
+                                            && item.IsValid()
+                                            && !item.ConfigType.IsComplexType());
+            }
+
+            if (fallback != null)
+            {
+                await ConfigHandler.SetDefaultServerIndex(_config, fallback.IndexId);
+            }
+        }
+
+        await ConfigHandler.RemoveServers(_config, [runtimeGroup]);
+        _config.UiItem.AutoProtocolFailoverGroupId = null;
+        await ConfigHandler.SaveConfig(_config);
     }
 
     private async Task RefreshProfileCountryInfoAsync(IReadOnlyCollection<ProfileItemModel> profiles)
@@ -693,14 +805,128 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             var countryCode = countryInfo?.CountryCode ?? string.Empty;
             var countryName = countryInfo?.CountryName ?? string.Empty;
             var flagImageUrl = countryInfo?.FlagImageUrl ?? string.Empty;
+            var flagText = BuildCountryFlagText(countryCode);
 
             foreach (var profile in profileGroup)
             {
-                profile.CountryCode = countryCode;
-                profile.CountryName = countryName;
-                profile.CountryFlagImageUrl = flagImageUrl;
+                var effectiveCountryCode = countryCode;
+                var effectiveCountryName = countryName;
+                var effectiveFlagImageUrl = flagImageUrl;
+                var effectiveFlagText = flagText;
+                if (effectiveCountryCode.IsNullOrEmpty())
+                {
+                    var inferredCountry = TryInferCountryFromProfileName(profile.Remarks);
+                    effectiveCountryCode = inferredCountry.CountryCode;
+                    effectiveCountryName = inferredCountry.CountryName;
+                    effectiveFlagImageUrl = inferredCountry.CountryCode.IsNullOrEmpty()
+                        ? string.Empty
+                        : $"https://flagcdn.com/24x18/{inferredCountry.CountryCode.ToLowerInvariant()}.png";
+                    effectiveFlagText = BuildCountryFlagText(inferredCountry.CountryCode);
+                }
+
+                profile.CountryCode = effectiveCountryCode;
+                profile.CountryName = effectiveCountryName;
+                profile.CountryFlagImageUrl = await GetCountryFlagImagePathAsync(effectiveCountryCode, effectiveFlagImageUrl);
+                profile.CountryFlagText = effectiveFlagText;
             }
         }
+    }
+
+    private Task<string> GetCountryFlagImagePathAsync(string countryCode, string remoteFlagUrl)
+    {
+        if (countryCode.Length != 2 || !countryCode.All(char.IsLetter))
+        {
+            return Task.FromResult(string.Empty);
+        }
+
+        var normalizedCode = countryCode.ToLowerInvariant();
+        var lazy = _countryFlagCache.GetOrAdd(
+            normalizedCode,
+            key => new Lazy<Task<string>>(() => DownloadCountryFlagImageAsync(key, remoteFlagUrl)));
+        return lazy.Value;
+    }
+
+    private static async Task<string> DownloadCountryFlagImageAsync(string countryCode, string remoteFlagUrl)
+    {
+        var cacheDir = Path.Combine(Utils.GetConfigPath(), "flagCache");
+        Directory.CreateDirectory(cacheDir);
+        var cachePath = Path.Combine(cacheDir, $"{countryCode}.png");
+        if (File.Exists(cachePath) && new FileInfo(cachePath).Length > 0)
+        {
+            return cachePath;
+        }
+
+        var url = remoteFlagUrl.IsNotEmpty()
+            ? remoteFlagUrl
+            : $"https://flagcdn.com/24x18/{countryCode}.png";
+        try
+        {
+            var bytes = await FlagImageHttpClient.GetByteArrayAsync(url);
+            if (bytes.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            var tempPath = $"{cachePath}.tmp";
+            await File.WriteAllBytesAsync(tempPath, bytes);
+            File.Move(tempPath, cachePath, true);
+            Logging.SaveLog($"FlagCache downloaded | country={countryCode.ToUpperInvariant()} | path={cachePath}");
+            return cachePath;
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog($"FlagCache failed | country={countryCode.ToUpperInvariant()} | url={url} | error={ex.GetType().Name}: {ex.Message}");
+            return string.Empty;
+        }
+    }
+
+    private static (string CountryCode, string CountryName) TryInferCountryFromProfileName(string? remarks)
+    {
+        if (remarks.IsNullOrEmpty())
+        {
+            return (string.Empty, string.Empty);
+        }
+
+        var firstToken = remarks.Trim().Split(' ', '-', '_', '[', ']', '(', ')').FirstOrDefault();
+        if (firstToken is null || firstToken.Length != 2 || !firstToken.All(char.IsLetter))
+        {
+            return (string.Empty, string.Empty);
+        }
+
+        var countryCode = firstToken.ToUpperInvariant() == "UK" ? "GB" : firstToken.ToUpperInvariant();
+        var countryName = countryCode switch
+        {
+            "DE" => "Germany",
+            "US" => "United States",
+            "NL" => "Netherlands",
+            "FR" => "France",
+            "GB" => "United Kingdom",
+            "UK" => "United Kingdom",
+            "RU" => "Russia",
+            "FI" => "Finland",
+            "SE" => "Sweden",
+            "PL" => "Poland",
+            "TR" => "Turkey",
+            "JP" => "Japan",
+            "KR" => "South Korea",
+            "SG" => "Singapore",
+            "HK" => "Hong Kong",
+            "CA" => "Canada",
+            "AU" => "Australia",
+            _ => string.Empty
+        };
+
+        return countryName.IsNullOrEmpty() ? (string.Empty, string.Empty) : (countryCode, countryName);
+    }
+
+    private static string BuildCountryFlagText(string countryCode)
+    {
+        if (countryCode.Length != 2 || !countryCode.All(char.IsLetter))
+        {
+            return string.Empty;
+        }
+
+        return countryCode.ToUpperInvariant();
     }
 
     private async Task ApplyQuickRulesAsync(bool reload)
@@ -1110,6 +1336,8 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     {
         if (enabled)
         {
+            await ClearAutoFailoverRuntimeGroupAsync();
+
             if (EncryptAllTraffic)
             {
                 if (VpnEnabled)
@@ -1385,13 +1613,25 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         {
             if (link.StartsWith("http", StringComparison.OrdinalIgnoreCase))
             {
+                var beforeCount = (await AppManager.Instance.ProfileItems(""))?.Count ?? 0;
                 var subscriptionExists = (await AppManager.Instance.SubItems())
                     .Any(t => string.Equals(t.Url, link, StringComparison.OrdinalIgnoreCase));
                 var ret = await ConfigHandler.AddSubItem(_config, link);
                 if (ret == 0)
                 {
                     await SubscriptionHandler.UpdateProcess(_config, "", false, (_, _) => Task.CompletedTask);
-                    SetStatus(subscriptionExists ? "Subscription updated" : "Subscription added and updated");
+                    var afterCount = (await AppManager.Instance.ProfileItems(""))?.Count ?? 0;
+                    if (afterCount <= beforeCount)
+                    {
+                        var imported = await TryImportSubscriptionContentDirectlyAsync(link);
+                        SetStatus(imported > 0
+                            ? $"Subscription imported directly: {imported} config(s)"
+                            : "Subscription did not return importable configs");
+                    }
+                    else
+                    {
+                        SetStatus(subscriptionExists ? "Subscription updated" : "Subscription added and updated");
+                    }
                 }
                 else
                 {
@@ -1414,6 +1654,19 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         }
 
         await RefreshProfilesAsync();
+    }
+
+    private async Task<int> TryImportSubscriptionContentDirectlyAsync(string link)
+    {
+        var downloader = new DownloadService();
+        var content = await downloader.TryDownloadString(link, false, Global.AppName)
+                      ?? await downloader.TryDownloadString(link, true, Global.AppName);
+        if (content.IsNullOrEmpty())
+        {
+            return 0;
+        }
+
+        return await ConfigHandler.AddBatchServers(_config, content, _config.SubIndexId, false);
     }
 
     private void OnCreateConfigClick(object sender, RoutedEventArgs e)
@@ -1479,6 +1732,15 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         }
 
         await ConfigHandler.SetDefaultServerIndex(_config, SelectedProfile.IndexId);
+        if (AutoProtocolFailoverEnabled && SelectedProfile.IsAutoFailoverCandidate)
+        {
+            _config.UiItem.AutoProtocolFailoverPrimaryId = SelectedProfile.IndexId;
+            SaveAutoFailoverProfileIdsFromUi();
+            await ConfigHandler.SaveConfig(_config);
+            await ApplyAutoFailoverAsync(showStatusWhenIncomplete: true);
+            return;
+        }
+
         await ViewModel.Reload();
         await RefreshProfilesAsync();
         await UpdateConnectionPingAsync();
@@ -1625,6 +1887,408 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         await ConfigHandler.CopyServer(_config, new List<ProfileItem> { item });
         await RefreshProfilesAsync();
         SetStatus("Configuration duplicated");
+    }
+
+    private async void OnAutoFailoverEnabledChanged(object sender, RoutedEventArgs e)
+    {
+        if (_suppressAutoFailoverEvents)
+        {
+            return;
+        }
+
+        _config.UiItem.AutoProtocolFailoverEnabled = AutoProtocolFailoverEnabled;
+        AutoProtocolFailoverStandbyCount = 1;
+        _config.UiItem.AutoProtocolFailoverStandbyCount = 1;
+
+        if (AutoProtocolFailoverEnabled && !GetAutoFailoverProfileIds().Any())
+        {
+            var first = SelectedProfile ?? Profiles.FirstOrDefault(profile => profile.IsActive) ?? Profiles.FirstOrDefault();
+            if (first != null && !first.ConfigType.IsComplexType())
+            {
+                first.IsAutoFailoverCandidate = true;
+                _config.UiItem.AutoProtocolFailoverPrimaryId = first.IndexId;
+            }
+        }
+
+        SaveAutoFailoverProfileIdsFromUi();
+        await ConfigHandler.SaveConfig(_config);
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AutoFailoverCandidateVisibility)));
+
+        if (!AutoProtocolFailoverEnabled)
+        {
+            await ClearAutoFailoverRuntimeGroupAsync(force: true);
+            await ViewModel.Reload();
+            await RefreshProfilesAsync();
+            SetStatus("Автосмена протокола выключена.");
+            return;
+        }
+
+        await ApplyAutoFailoverAsync(showStatusWhenIncomplete: true);
+    }
+
+    private async void OnAutoFailoverCandidateChanged(object sender, RoutedEventArgs e)
+    {
+        if (_suppressAutoFailoverEvents
+            || _isLoadingAutoFailoverSelection
+            || sender is not FrameworkElement { DataContext: ProfileItemModel profile })
+        {
+            return;
+        }
+
+        if (profile.IsAutoFailoverCandidate && _config.UiItem.AutoProtocolFailoverPrimaryId.IsNullOrEmpty())
+        {
+            _config.UiItem.AutoProtocolFailoverPrimaryId = profile.IndexId;
+        }
+        else if (!profile.IsAutoFailoverCandidate
+                 && string.Equals(_config.UiItem.AutoProtocolFailoverPrimaryId, profile.IndexId, StringComparison.OrdinalIgnoreCase))
+        {
+            _config.UiItem.AutoProtocolFailoverPrimaryId = Profiles.FirstOrDefault(item => item.IsAutoFailoverCandidate)?.IndexId;
+        }
+
+        SaveAutoFailoverProfileIdsFromUi();
+        await ConfigHandler.SaveConfig(_config);
+
+        if (AutoProtocolFailoverEnabled)
+        {
+            var eligibleCandidates = GetAutoFailoverCandidateModels();
+            if (eligibleCandidates.Count < 2)
+            {
+                var fallback = eligibleCandidates.FirstOrDefault()
+                               ?? Profiles.FirstOrDefault(item => item.IsActive
+                                                                  && item.ConfigType != EConfigType.Custom
+                                                                  && !item.ConfigType.IsComplexType()
+                                                                  && !item.Address.IsNullOrEmpty()
+                                                                  && item.Port > 0)
+                               ?? Profiles.FirstOrDefault(item => item.ConfigType != EConfigType.Custom
+                                                                  && !item.ConfigType.IsComplexType()
+                                                                  && !item.Address.IsNullOrEmpty()
+                                                                  && item.Port > 0);
+                await SuspendAutoFailoverRuntimeAndUseProfileAsync(
+                    fallback,
+                    "Автосмена ожидает второй профиль. VPN оставлен на обычном профиле.");
+                return;
+            }
+
+            await ApplyAutoFailoverAsync(showStatusWhenIncomplete: true);
+            return;
+        }
+
+        SetStatus("Profile updated");
+    }
+
+    private List<ProfileItemModel> GetAutoFailoverCandidateModels()
+    {
+        var candidateIds = GetAutoFailoverProfileIds();
+        return Profiles
+            .Where(profile => candidateIds.Contains(profile.IndexId)
+                              && profile.ConfigType != EConfigType.Custom
+                              && !profile.ConfigType.IsComplexType()
+                              && !profile.Address.IsNullOrEmpty()
+                              && profile.Port > 0)
+            .ToList();
+    }
+
+    private async Task SuspendAutoFailoverRuntimeAndUseProfileAsync(ProfileItemModel? fallback, string status)
+    {
+        _config.UiItem.AutoProtocolFailoverPrimaryId = fallback?.IndexId;
+
+        if (fallback != null)
+        {
+            await ConfigHandler.SetDefaultServerIndex(_config, fallback.IndexId);
+        }
+
+        await ClearAutoFailoverRuntimeGroupAsync(force: true);
+        await ConfigHandler.SaveConfig(_config);
+        await ViewModel.Reload();
+        await RefreshProfilesAsync();
+        SetStatus(status);
+    }
+
+    private async Task DisableAutoFailoverAndUseProfileAsync(ProfileItemModel? fallback, string status)
+    {
+        _config.UiItem.AutoProtocolFailoverEnabled = false;
+
+        _suppressAutoFailoverEvents = true;
+        try
+        {
+            AutoProtocolFailoverEnabled = false;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AutoFailoverCandidateVisibility)));
+        }
+        finally
+        {
+            _suppressAutoFailoverEvents = false;
+        }
+
+        await SuspendAutoFailoverRuntimeAndUseProfileAsync(fallback, status);
+    }
+
+    private async Task ApplyAutoFailoverAsync(bool showStatusWhenIncomplete)
+    {
+        const int standbyCount = 1;
+        const int requiredCount = standbyCount + 1;
+        var candidateModels = GetAutoFailoverCandidateModels();
+
+        if (!AutoProtocolFailoverEnabled)
+        {
+            await ClearAutoFailoverRuntimeGroupAsync(force: true);
+            return;
+        }
+
+        if (candidateModels.Count < requiredCount)
+        {
+            var fallback = candidateModels.FirstOrDefault()
+                           ?? Profiles.FirstOrDefault(item => item.IsActive
+                                                              && item.ConfigType != EConfigType.Custom
+                                                              && !item.ConfigType.IsComplexType()
+                                                              && !item.Address.IsNullOrEmpty()
+                                                              && item.Port > 0);
+            await SuspendAutoFailoverRuntimeAndUseProfileAsync(
+                fallback,
+                $"Автосмена ожидает минимум {requiredCount} профиля.");
+            if (showStatusWhenIncomplete)
+            {
+                SetStatus($"Автосмена включена: выбери минимум {requiredCount} профиля.");
+            }
+
+            return;
+        }
+
+        var allItems = await AppManager.Instance.ProfileItems("") ?? [];
+        var itemById = allItems
+            .Where(item => !item.IndexId.IsNullOrEmpty())
+            .GroupBy(item => item.IndexId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        var primaryId = ResolveAutoFailoverPrimaryId(candidateModels);
+        var selected = candidateModels
+            .OrderByDescending(profile => string.Equals(profile.IndexId, primaryId, StringComparison.OrdinalIgnoreCase))
+            .ThenBy(profile => profile.Sort)
+            .Select(profile => itemById.TryGetValue(profile.IndexId, out var item) ? item : null)
+            .Where(item => item != null
+                           && item.IsValid()
+                           && item.ConfigType != EConfigType.Custom
+                           && !item.ConfigType.IsComplexType())
+            .Cast<ProfileItem>()
+            .ToList();
+
+        if (selected.Count < requiredCount)
+        {
+            if (showStatusWhenIncomplete)
+            {
+                SetStatus($"Автосмена: нужно минимум {requiredCount} рабочих профиля, найдено {selected.Count}.");
+            }
+
+            return;
+        }
+
+        var indexId = _config.UiItem.AutoProtocolFailoverGroupId;
+        if (indexId.IsNullOrEmpty())
+        {
+            indexId = Utils.GetGuid(false);
+            _config.UiItem.AutoProtocolFailoverGroupId = indexId;
+        }
+
+        var primary = selected.First();
+        var profile = new ProfileItem
+        {
+            IndexId = indexId,
+            CoreType = ECoreType.sing_box,
+            ConfigType = EConfigType.PolicyGroup,
+            Remarks = $"Auto protocol failover - {primary.Remarks}",
+            IsSub = false
+        };
+        if (_config.SubIndexId.IsNotEmpty())
+        {
+            profile.Subid = _config.SubIndexId;
+        }
+
+        profile.SetProtocolExtra(new ProtocolExtraItem
+        {
+            MultipleLoad = EMultipleLoad.Fallback,
+            FailoverStandbyCount = standbyCount,
+            GroupType = profile.ConfigType.ToString(),
+            ChildItems = Utils.List2String(selected.Select(item => item.IndexId).ToList())
+        });
+
+        if (await ConfigHandler.AddServerCommon(_config, profile, true) != 0)
+        {
+            SetStatus("Не удалось применить автосмену протокола.");
+            return;
+        }
+
+        _config.UiItem.AutoProtocolFailoverPrimaryId = primary.IndexId;
+        _config.UiItem.AutoProtocolFailoverStandbyCount = standbyCount;
+        await ConfigHandler.SetDefaultServerIndex(_config, indexId);
+        await ConfigHandler.SaveConfig(_config);
+        await ViewModel.Reload();
+        await RefreshProfilesAsync();
+        SelectedProfile = Profiles.FirstOrDefault(item => item.IndexId == primary.IndexId) ?? SelectedProfile;
+        Logging.SaveLog($"AutoProtocolFailover active | group={indexId} | primary={primary.Remarks} | candidates={selected.Count} | standby={standbyCount}");
+        SetStatus($"Автосмена активна: основной {primary.Remarks}, резервов 1, профилей {selected.Count}.");
+    }
+
+    private HashSet<string> GetAutoFailoverProfileIds()
+    {
+        return (Utils.String2List(_config.UiItem.AutoProtocolFailoverProfileIds) ?? [])
+            .Where(id => !id.IsNullOrEmpty())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private void SaveAutoFailoverProfileIdsFromUi()
+    {
+        var ids = Profiles
+            .Where(profile => profile.IsAutoFailoverCandidate
+                              && profile.ConfigType != EConfigType.Custom
+                              && !profile.ConfigType.IsComplexType()
+                              && !profile.Address.IsNullOrEmpty()
+                              && profile.Port > 0)
+            .Select(profile => profile.IndexId)
+            .Where(id => !id.IsNullOrEmpty())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        _config.UiItem.AutoProtocolFailoverProfileIds = Utils.List2String(ids);
+        AutoProtocolFailoverStandbyCount = 1;
+        _config.UiItem.AutoProtocolFailoverStandbyCount = 1;
+    }
+
+    private string ResolveAutoFailoverPrimaryId(List<ProfileItemModel> candidates)
+    {
+        var selectedRegular = SelectedProfile is { } selected
+                              && candidates.Any(profile => string.Equals(profile.IndexId, selected.IndexId, StringComparison.OrdinalIgnoreCase))
+            ? selected.IndexId
+            : null;
+        if (!selectedRegular.IsNullOrEmpty())
+        {
+            _config.UiItem.AutoProtocolFailoverPrimaryId = selectedRegular;
+            return selectedRegular;
+        }
+
+        var savedPrimaryId = _config.UiItem.AutoProtocolFailoverPrimaryId;
+        if (!savedPrimaryId.IsNullOrEmpty()
+            && candidates.Any(profile => string.Equals(profile.IndexId, savedPrimaryId, StringComparison.OrdinalIgnoreCase)))
+        {
+            return savedPrimaryId;
+        }
+
+        var activeCandidate = candidates.FirstOrDefault(profile => profile.IsActive);
+        if (activeCandidate != null)
+        {
+            _config.UiItem.AutoProtocolFailoverPrimaryId = activeCandidate.IndexId;
+            return activeCandidate.IndexId;
+        }
+
+        var firstCandidateId = candidates.First().IndexId;
+        _config.UiItem.AutoProtocolFailoverPrimaryId = firstCandidateId;
+        return firstCandidateId;
+    }
+
+    private async void OnAutoTestProfiles(object sender, RoutedEventArgs e)
+    {
+        var candidates = Profiles
+            .Where(profile => profile.ConfigType != EConfigType.Custom
+                              && !profile.ConfigType.IsComplexType()
+                              && !profile.Address.IsNullOrEmpty()
+                              && profile.Port > 0)
+            .ToList();
+        if (candidates.Count == 0)
+        {
+            SetStatus("Autotest: No connection");
+            return;
+        }
+
+        foreach (var profile in candidates)
+        {
+            profile.Delay = 0;
+            profile.DelayVal = "Testing...";
+        }
+
+        var items = await GetProfileItemsForModelsAsync(candidates);
+        if (items.Count == 0)
+        {
+            SetStatus("Autotest: No connection");
+            return;
+        }
+
+        GetProfileSpeedtestService().RunLoop(ESpeedActionType.Realping, items);
+        SetStatus($"Autotest: testing {items.Count} configs");
+    }
+
+    private SpeedtestService GetProfileSpeedtestService()
+    {
+        return _profileSpeedtestService ??= new SpeedtestService(_config, async result =>
+        {
+            await Dispatcher.InvokeAsync(() => ApplyProfileSpeedTestResult(result));
+        });
+    }
+
+    private async Task<List<ProfileItem>> GetProfileItemsForModelsAsync(IEnumerable<ProfileItemModel> models)
+    {
+        var ids = models
+            .Where(model => model.ConfigType != EConfigType.Custom
+                            && !model.ConfigType.IsComplexType()
+                            && !model.Address.IsNullOrEmpty()
+                            && model.Port > 0)
+            .Select(model => model.IndexId)
+            .Where(id => !id.IsNullOrEmpty())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (ids.Count == 0)
+        {
+            return [];
+        }
+
+        return await AppManager.Instance.GetProfileItemsOrderedByIndexIds(ids);
+    }
+
+    private void ApplyProfileSpeedTestResult(SpeedTestResult result)
+    {
+        if (result.IndexId.IsNullOrEmpty())
+        {
+            var message = result.Delay.NullIfEmpty() ?? result.Speed.NullIfEmpty();
+            if (!message.IsNullOrEmpty())
+            {
+                SetStatus(message);
+            }
+            return;
+        }
+
+        var profile = Profiles.FirstOrDefault(item => string.Equals(item.IndexId, result.IndexId, StringComparison.OrdinalIgnoreCase));
+        if (profile == null)
+        {
+            return;
+        }
+
+        if (result.Delay != null)
+        {
+            var label = NormalizeDelayLabel(result.Delay);
+            profile.DelayVal = label;
+            profile.Delay = label.EndsWith(" ms", StringComparison.OrdinalIgnoreCase)
+                            && int.TryParse(label[..^3], out var delay)
+                ? delay
+                : label.Equals("No connection", StringComparison.OrdinalIgnoreCase) ? -1 : 0;
+        }
+
+        if (result.Speed.IsNotEmpty())
+        {
+            profile.SpeedVal = result.Speed ?? string.Empty;
+        }
+    }
+
+    private static string NormalizeDelayLabel(string? delay)
+    {
+        if (delay.IsNullOrEmpty())
+        {
+            return "No connection";
+        }
+
+        var value = delay.Trim();
+        if (value.Equals(ResUI.Speedtesting, StringComparison.OrdinalIgnoreCase))
+        {
+            return "Testing...";
+        }
+
+        return int.TryParse(value, out var ms) && ms > 0
+            ? $"{ms} ms"
+            : value;
     }
 
     private async void OnAddApp(object sender, RoutedEventArgs e)
@@ -2150,11 +2814,26 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     private async void OnPingServer(object sender, RoutedEventArgs e)
     {
         var profile = SelectedProfile ?? Profiles.FirstOrDefault(t => t.IsActive);
-        var label = await GetProfilePingLabelAsync(profile);
-        ServerPing = label;
-        ConnectionPing = label.StartsWith("Connection ping:", StringComparison.OrdinalIgnoreCase)
-            ? label
-            : $"Connection ping: {label}";
+        if (profile == null)
+        {
+            SetStatus("Ping: No connection");
+            return;
+        }
+
+        profile.Delay = 0;
+        profile.DelayVal = "Testing...";
+
+        var items = await GetProfileItemsForModelsAsync([profile]);
+        if (items.Count == 0)
+        {
+            profile.Delay = -1;
+            profile.DelayVal = "No connection";
+            SetStatus("Ping: No connection");
+            return;
+        }
+
+        GetProfileSpeedtestService().RunLoop(ESpeedActionType.Realping, items);
+        SetStatus($"Ping: testing {profile.Remarks}");
     }
 
     private async void OnRefreshDebug(object sender, RoutedEventArgs e)
@@ -3553,29 +4232,18 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     private async Task<string> GetProfilePingLabelAsync(ProfileItemModel? profile, bool includePrefix = false)
     {
         var prefix = includePrefix ? "Connection ping: " : string.Empty;
+        if (!VpnEnabled && !TunEnabled)
+        {
+            return $"{prefix}No connection";
+        }
+
         var proxyPing = await MeasureProxyPingAsync();
         if (proxyPing.HasValue)
         {
             return $"{prefix}{proxyPing.Value} ms via proxy";
         }
 
-        if (profile == null)
-        {
-            return $"{prefix}no active profile";
-        }
-
-        if (profile.Address.IsNullOrEmpty() || profile.Port <= 0)
-        {
-            return $"{prefix}n/a";
-        }
-
-        var pingMs = await MeasureTcpPingAsync(profile.Address, profile.Port);
-        if (pingMs.HasValue && pingMs.Value >= 0)
-        {
-            return $"{prefix}{profile.Address}:{profile.Port} {pingMs.Value} ms";
-        }
-
-        return $"{prefix}{profile.Address}:{profile.Port} unavailable";
+        return $"{prefix}No connection";
     }
 
     private async Task<int?> MeasureProxyPingAsync()

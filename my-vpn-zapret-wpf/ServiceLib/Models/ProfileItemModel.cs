@@ -47,6 +47,12 @@ public class ProfileItemModel : ReactiveObject
     [Reactive]
     public string CountryFlagImageUrl { get; set; } = string.Empty;
 
+    [Reactive]
+    public string CountryFlagText { get; set; } = string.Empty;
+
+    [Reactive]
+    public bool IsAutoFailoverCandidate { get; set; }
+
     public string GetSummary()
     {
         var summary = $"[{ConfigType}] {Remarks}";

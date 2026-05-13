@@ -449,6 +449,7 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
             Directory.CreateDirectory(targetPath);
             CopyZapretBundle(extractedZapretPath, targetPath);
             RestoreZapretUserFiles(preservePath, targetPath);
+            ZapretHandler.SanitizeBrowserRedirects(targetPath);
 
             var successTemplate = GetResourceText("MsgUpdateZapretSuccessfully", "Updated Zapret successfully ({0}).");
             var successVersion = latestVersion ?? release.TagName ?? asset.Name ?? "latest";

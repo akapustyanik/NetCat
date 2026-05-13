@@ -513,19 +513,33 @@ public partial class CoreConfigSingboxService
 
     private List<Outbound4Sbox> BuildSelectorOutbounds(List<string> proxyTags, string baseTagName = Global.ProxyTag)
     {
-        var multipleLoad = _node.GetProtocolExtra().MultipleLoad ?? EMultipleLoad.LeastPing;
+        var protocolExtra = _node.GetProtocolExtra();
+        var multipleLoad = protocolExtra.MultipleLoad ?? EMultipleLoad.LeastPing;
+        var isFallback = multipleLoad == EMultipleLoad.Fallback;
+        var healthCheckInterval = "30s";
+        string? idleTimeout = null;
+        int? tolerance = null;
+        var healthCheckUrl = _config.SpeedTestItem.SpeedPingTestUrl.NullIfEmpty() ?? Global.SpeedPingTestUrls.First();
+        if (isFallback)
+        {
+            healthCheckInterval = "1s";
+            healthCheckUrl = "http://cp.cloudflare.com/generate_204";
+            tolerance = 100;
+            Logging.SaveLog($"AutoProtocolFailover sing-box urltest | outbounds={proxyTags.Count} | interval={healthCheckInterval} | tolerance={tolerance} | interrupt=true | url={healthCheckUrl}");
+            RegisterAutoFailoverWarmStandby(proxyTags);
+        }
+
         var outUrltest = new Outbound4Sbox
         {
             type = "urltest",
             tag = $"{baseTagName}-auto",
             outbounds = proxyTags,
-            interrupt_exist_connections = false,
+            interrupt_exist_connections = isFallback,
+            url = healthCheckUrl,
+            interval = healthCheckInterval,
+            idle_timeout = idleTimeout,
+            tolerance = tolerance,
         };
-
-        if (multipleLoad == EMultipleLoad.Fallback)
-        {
-            outUrltest.tolerance = 5000;
-        }
 
         // Add selector outbound (manual selection)
         var outSelector = new Outbound4Sbox
@@ -533,11 +547,54 @@ public partial class CoreConfigSingboxService
             type = "selector",
             tag = baseTagName,
             outbounds = JsonUtils.DeepCopy(proxyTags),
-            interrupt_exist_connections = false,
+            interrupt_exist_connections = isFallback,
         };
         outSelector.outbounds.Insert(0, outUrltest.tag);
 
         return [outSelector, outUrltest];
+    }
+
+    private void RegisterAutoFailoverWarmStandby(List<string> proxyTags)
+    {
+        _autoFailoverWarmInbounds.Clear();
+        if (proxyTags.Count < 2)
+        {
+            return;
+        }
+
+        var basePort = AppManager.Instance.GetLocalPort(EInboundProtocol.speedtest) + 100;
+        for (var i = 0; i < proxyTags.Count; i++)
+        {
+            var port = Utils.GetFreePort(basePort + i);
+            var inboundTag = $"auto-failover-warm-{i + 1}";
+            _coreConfig.inbounds.Add(new Inbound4Sbox
+            {
+                type = EInboundProtocol.mixed.ToString(),
+                tag = inboundTag,
+                listen = Global.Loopback,
+                listen_port = port
+            });
+            _autoFailoverWarmInbounds.Add(new AutoFailoverWarmInbound(inboundTag, port, proxyTags[i]));
+        }
+
+        Logging.SaveLog($"AutoProtocolFailover warm standby inbounds | count={_autoFailoverWarmInbounds.Count} | ports={string.Join(",", _autoFailoverWarmInbounds.Select(item => item.Port))}");
+    }
+
+    private void GenAutoFailoverWarmStandbyRoutes()
+    {
+        if (_autoFailoverWarmInbounds.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var item in _autoFailoverWarmInbounds.AsEnumerable().Reverse())
+        {
+            _coreConfig.route.rules.Insert(0, new Rule4Sbox
+            {
+                inbound = [item.Tag],
+                outbound = item.OutboundTag
+            });
+        }
     }
 
     private List<BaseServer4Sbox> BuildOutboundsList(string baseTagName = Global.ProxyTag)

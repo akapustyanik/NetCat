@@ -15,6 +15,11 @@ public sealed class ServerCountryLookup
         BaseAddress = new Uri("https://api.ipapi.is/"),
         Timeout = TimeSpan.FromSeconds(8)
     };
+    private static readonly HttpClient FallbackHttpClient = new()
+    {
+        BaseAddress = new Uri("https://ipwho.is/"),
+        Timeout = TimeSpan.FromSeconds(8)
+    };
 
     private readonly ConcurrentDictionary<string, Lazy<Task<ServerCountryInfo?>>> _cache = new(StringComparer.OrdinalIgnoreCase);
 
@@ -49,14 +54,47 @@ public sealed class ServerCountryLookup
 
     private static async Task<ServerCountryInfo?> ResolveCoreAsync(string hostOrAddress)
     {
+        var knownHostCountry = TryResolveKnownHostCountry(hostOrAddress);
+        if (knownHostCountry != null)
+        {
+            return knownHostCountry;
+        }
+
         var ipAddress = await ResolveIpAddressAsync(hostOrAddress);
-        if (string.IsNullOrWhiteSpace(ipAddress))
+        if (ipAddress is null || IsPrivateOrSpecialUse(ipAddress))
         {
             return null;
         }
 
-        using var response = await HttpClient.GetAsync($"?q={Uri.EscapeDataString(ipAddress)}");
-        response.EnsureSuccessStatusCode();
+        try
+        {
+            var primaryResult = await ResolveViaPrimaryApiAsync(ipAddress);
+            if (primaryResult != null)
+            {
+                return primaryResult;
+            }
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            return await ResolveViaFallbackApiAsync(ipAddress);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static async Task<ServerCountryInfo?> ResolveViaPrimaryApiAsync(IPAddress ipAddress)
+    {
+        using var response = await HttpClient.GetAsync($"?q={Uri.EscapeDataString(ipAddress.ToString())}");
+        if (!response.IsSuccessStatusCode)
+        {
+            return null;
+        }
 
         await using var stream = await response.Content.ReadAsStreamAsync();
         using var document = await JsonDocument.ParseAsync(stream);
@@ -87,11 +125,39 @@ public sealed class ServerCountryLookup
         return new ServerCountryInfo(countryCode, countryName, BuildFlagImageUrl(countryCode));
     }
 
-    private static async Task<string?> ResolveIpAddressAsync(string hostOrAddress)
+    private static async Task<ServerCountryInfo?> ResolveViaFallbackApiAsync(IPAddress ipAddress)
+    {
+        using var response = await FallbackHttpClient.GetAsync(Uri.EscapeDataString(ipAddress.ToString()));
+        if (!response.IsSuccessStatusCode)
+        {
+            return null;
+        }
+
+        await using var stream = await response.Content.ReadAsStreamAsync();
+        using var document = await JsonDocument.ParseAsync(stream);
+        var root = document.RootElement;
+
+        if (root.TryGetProperty("success", out var successElement)
+            && successElement.ValueKind == JsonValueKind.False)
+        {
+            return null;
+        }
+
+        var countryCode = ReadString(root, "country_code")?.Trim().ToUpperInvariant();
+        var countryName = ReadString(root, "country")?.Trim();
+        if (string.IsNullOrWhiteSpace(countryCode) || string.IsNullOrWhiteSpace(countryName))
+        {
+            return null;
+        }
+
+        return new ServerCountryInfo(countryCode, countryName, BuildFlagImageUrl(countryCode));
+    }
+
+    private static async Task<IPAddress?> ResolveIpAddressAsync(string hostOrAddress)
     {
         if (IPAddress.TryParse(hostOrAddress, out var ipAddress))
         {
-            return ipAddress.ToString();
+            return ipAddress;
         }
 
         try
@@ -100,7 +166,7 @@ public sealed class ServerCountryLookup
             var resolved = hostEntry.FirstOrDefault(item => item.AddressFamily == AddressFamily.InterNetwork)
                 ?? hostEntry.FirstOrDefault(item => item.AddressFamily == AddressFamily.InterNetworkV6)
                 ?? hostEntry.FirstOrDefault();
-            return resolved?.ToString();
+            return resolved;
         }
         catch
         {
@@ -154,5 +220,46 @@ public sealed class ServerCountryLookup
         }
 
         return $"https://flagcdn.com/24x18/{countryCode.ToLowerInvariant()}.png";
+    }
+
+    private static ServerCountryInfo? TryResolveKnownHostCountry(string hostOrAddress)
+    {
+        var host = hostOrAddress.Trim().TrimEnd('.').ToLowerInvariant();
+        return host switch
+        {
+            "private.catbox.co" => new ServerCountryInfo("DE", "Germany", BuildFlagImageUrl("DE")),
+            _ => null
+        };
+    }
+
+    private static bool IsPrivateOrSpecialUse(IPAddress address)
+    {
+        if (IPAddress.IsLoopback(address))
+        {
+            return true;
+        }
+
+        if (address.AddressFamily == AddressFamily.InterNetwork)
+        {
+            var bytes = address.GetAddressBytes();
+            return bytes[0] == 10
+                   || (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31)
+                   || (bytes[0] == 192 && bytes[1] == 168)
+                   || (bytes[0] == 169 && bytes[1] == 254)
+                   || bytes[0] == 127
+                   || bytes[0] >= 224;
+        }
+
+        if (address.AddressFamily == AddressFamily.InterNetworkV6)
+        {
+            var bytes = address.GetAddressBytes();
+            return address.IsIPv6LinkLocal
+                   || address.IsIPv6SiteLocal
+                   || bytes[0] == 0xfc
+                   || bytes[0] == 0xfd
+                   || bytes.All(static value => value == 0);
+        }
+
+        return true;
     }
 }

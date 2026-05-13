@@ -107,6 +107,7 @@ public class Inbound4Sbox
     public int? mtu { get; set; }
     public bool? auto_route { get; set; }
     public bool? strict_route { get; set; }
+    public List<string>? route_exclude_address { get; set; }
     public bool? endpoint_independent_nat { get; set; }
     public string? stack { get; set; }
     public List<User4Sbox> users { get; set; }
@@ -146,6 +147,9 @@ public class Outbound4Sbox : BaseServer4Sbox
     public List<string>? outbounds { get; set; }
     public bool? interrupt_exist_connections { get; set; }
     public int? tolerance { get; set; }
+    public string? url { get; set; }
+    public string? interval { get; set; }
+    public string? idle_timeout { get; set; }
 }
 
 public class Endpoints4Sbox : BaseServer4Sbox

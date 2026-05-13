@@ -35,4 +35,5 @@ public record ProtocolExtraItem
     public string? SubChildItems { get; init; }
     public string? Filter { get; init; }
     public EMultipleLoad? MultipleLoad { get; init; }
+    public int? FailoverStandbyCount { get; init; }
 }

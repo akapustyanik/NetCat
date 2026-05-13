@@ -49,6 +49,7 @@ public partial class AddGroupServerWindow
             case EConfigType.ProxyChain:
                 Title = ResUI.TbConfigTypeProxyChain;
                 gridPolicyGroup.Visibility = Visibility.Collapsed;
+                gridAutoFailover.Visibility = Visibility.Collapsed;
                 btnSubscriptionsPage.Visibility = Visibility.Collapsed;
                 subscriptionsPage.Visibility = Visibility.Collapsed;
                 SetActivePage(GroupEditorPage.Children);
@@ -60,6 +61,8 @@ public partial class AddGroupServerWindow
             this.Bind(ViewModel, vm => vm.SelectedSource.Remarks, v => v.txtRemarks.Text).DisposeWith(disposables);
             this.Bind(ViewModel, vm => vm.CoreType, v => v.cmbCoreType.Text).DisposeWith(disposables);
             this.Bind(ViewModel, vm => vm.PolicyGroupType, v => v.cmbPolicyGroupType.Text).DisposeWith(disposables);
+            this.Bind(ViewModel, vm => vm.AutoProtocolFailover, v => v.chkAutoProtocolFailover.IsChecked).DisposeWith(disposables);
+            this.Bind(ViewModel, vm => vm.FailoverStandbyCount, v => v.sldFailoverStandbyCount.Value).DisposeWith(disposables);
             this.OneWayBind(ViewModel, vm => vm.SubItems, v => v.cmbSubChildItems.ItemsSource).DisposeWith(disposables);
             this.Bind(ViewModel, vm => vm.SelectedSubItem, v => v.cmbSubChildItems.SelectedItem).DisposeWith(disposables);
             this.Bind(ViewModel, vm => vm.Filter, v => v.cmbFilter.Text).DisposeWith(disposables);

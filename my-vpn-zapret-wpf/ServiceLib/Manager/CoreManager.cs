@@ -11,6 +11,7 @@ public class CoreManager
     private WindowsJobService? _processJob;
     private ProcessService? _processService;
     private ProcessService? _processPreService;
+    private readonly AutoProtocolWarmStandbyService _autoProtocolWarmStandbyService = new();
     private bool _linuxSudo = false;
     private Func<bool, string, Task>? _updateFunc;
     private const string _tag = "CoreHandler";
@@ -63,18 +64,22 @@ public class CoreManager
     {
         if (mainContext == null)
         {
+            Logging.SaveLog("VpnDiagnostics LoadCore skipped | mainContext=null");
             await UpdateFunc(false, ResUI.CheckServerSettings);
             return;
         }
 
         var node = mainContext.Node;
         var fileName = Utils.GetBinConfigPath(Global.CoreConfigFileName);
+        Logging.SaveLog(BuildLoadCoreDiagnostics("begin", mainContext, fileName));
         var result = await CoreConfigHandler.GenerateClientConfig(mainContext, fileName);
         if (result.Success != true)
         {
+            Logging.SaveLog($"VpnDiagnostics GenerateClientConfig failed | msg={result.Msg}");
             await UpdateFunc(true, result.Msg);
             return;
         }
+        Logging.SaveLog(BuildGeneratedConfigDiagnostics(fileName));
 
         await UpdateFunc(false, $"{node.GetSummary()}");
         await UpdateFunc(false, $"{Utils.GetRuntimeInfo()}");
@@ -92,7 +97,13 @@ public class CoreManager
         await CoreStartPreService(preContext);
         if (_processService != null)
         {
+            _autoProtocolWarmStandbyService.StartFromSingboxConfig(fileName);
+            await ProbeLocalProxyAsync();
             await UpdateFunc(true, $"{node.GetSummary()}");
+        }
+        else
+        {
+            Logging.SaveLog("VpnDiagnostics CoreStart finished | process=null");
         }
     }
 
@@ -141,6 +152,8 @@ public class CoreManager
     {
         try
         {
+            _autoProtocolWarmStandbyService.Stop();
+
             if (_linuxSudo)
             {
                 await CoreAdminManager.Instance.KillProcessAsLinuxSudo();
@@ -174,6 +187,7 @@ public class CoreManager
         var node = context.Node;
         var coreType = AppManager.Instance.RunningCoreType = AppManager.Instance.GetCoreType(node, node.ConfigType);
         var coreInfo = CoreInfoManager.Instance.GetCoreInfo(coreType);
+        Logging.SaveLog($"VpnDiagnostics CoreStart | coreType={coreType} | node={SafeNodeSummary(node)} | configType={node.ConfigType} | network={node.GetNetwork()} | address={MaskHost(node.Address)} | port={node.Port}");
 
         var displayLog = node.ConfigType != EConfigType.Custom || node.DisplayLog;
         var proc = await RunProcess(coreInfo, Global.CoreConfigFileName, displayLog, true);
@@ -252,9 +266,12 @@ public class CoreManager
             environmentVars[kv.Key] = string.Format(kv.Value, coreInfo.AbsolutePath ? Utils.GetBinConfigPath(configPath).AppendQuotes() : configPath);
         }
 
+        var arguments = string.Format(coreInfo.Arguments, coreInfo.AbsolutePath ? Utils.GetBinConfigPath(configPath).AppendQuotes() : configPath);
+        Logging.SaveLog($"VpnDiagnostics RunProcess | exe={fileName} | exists={File.Exists(fileName)} | args={arguments} | cwd={Utils.GetBinConfigPath()} | displayLog={displayLog} | envKeys={string.Join(",", environmentVars.Keys)}");
+
         var procService = new ProcessService(
             fileName: fileName,
-            arguments: string.Format(coreInfo.Arguments, coreInfo.AbsolutePath ? Utils.GetBinConfigPath(configPath).AppendQuotes() : configPath),
+            arguments: arguments,
             workingDirectory: Utils.GetBinConfigPath(),
             displayLog: displayLog,
             redirectInput: false,
@@ -263,16 +280,117 @@ public class CoreManager
         );
 
         await procService.StartAsync();
+        Logging.SaveLog($"VpnDiagnostics RunProcess started | pid={procService.Id} | hasExited={procService.HasExited}");
 
         await Task.Delay(100);
 
         if (procService is null or { HasExited: true })
         {
+            Logging.SaveLog("VpnDiagnostics RunProcess failed | process exited during startup");
             throw new Exception(ResUI.FailedToRunCore);
         }
         AddProcessJob(procService.Handle);
 
         return procService;
+    }
+
+    private async Task ProbeLocalProxyAsync()
+    {
+        var localPort = _config.Inbound?.FirstOrDefault()?.LocalPort ?? 0;
+        if (localPort <= 0)
+        {
+            Logging.SaveLog("VpnDiagnostics ProbeLocalProxy skipped | localPort=0");
+            return;
+        }
+
+        var proxyUri = new Uri($"http://127.0.0.1:{localPort}");
+        using var handler = new HttpClientHandler
+        {
+            Proxy = new WebProxy(proxyUri),
+            UseProxy = true
+        };
+        using var client = new HttpClient(handler)
+        {
+            Timeout = TimeSpan.FromSeconds(8)
+        };
+
+        var targets = new[]
+        {
+            "http://cp.cloudflare.com/generate_204",
+            "https://www.google.com/generate_204"
+        };
+
+        foreach (var target in targets)
+        {
+            var started = DateTime.UtcNow;
+            try
+            {
+                using var response = await client.GetAsync(target);
+                var elapsedMs = (int)(DateTime.UtcNow - started).TotalMilliseconds;
+                Logging.SaveLog($"VpnDiagnostics ProbeLocalProxy | proxy={proxyUri} | target={target} | status={(int)response.StatusCode} | elapsedMs={elapsedMs}");
+            }
+            catch (Exception ex)
+            {
+                var elapsedMs = (int)(DateTime.UtcNow - started).TotalMilliseconds;
+                Logging.SaveLog($"VpnDiagnostics ProbeLocalProxy failed | proxy={proxyUri} | target={target} | elapsedMs={elapsedMs} | error={ex.GetType().Name}: {ex.Message}");
+            }
+        }
+    }
+
+    private string BuildLoadCoreDiagnostics(string stage, CoreConfigContext context, string configPath)
+    {
+        var node = context.Node;
+        return $"VpnDiagnostics LoadCore {stage} | index={_config.IndexId} | coreType={context.RunCoreType} | tun={_config.TunModeItem.EnableTun} | localPort={_config.Inbound?.FirstOrDefault()?.LocalPort} | configPath={configPath} | node={SafeNodeSummary(node)} | configType={node.ConfigType} | network={node.GetNetwork()} | address={MaskHost(node.Address)} | port={node.Port}";
+    }
+
+    private static string BuildGeneratedConfigDiagnostics(string configPath)
+    {
+        try
+        {
+            var fileInfo = new FileInfo(configPath);
+            if (!fileInfo.Exists)
+            {
+                return $"VpnDiagnostics GeneratedConfig | path={configPath} | exists=False";
+            }
+
+            using var stream = fileInfo.OpenRead();
+            using var sha256 = SHA256.Create();
+            var hash = Convert.ToHexString(sha256.ComputeHash(stream)).ToLowerInvariant();
+            return $"VpnDiagnostics GeneratedConfig | path={configPath} | exists=True | size={fileInfo.Length} | sha256={hash}";
+        }
+        catch (Exception ex)
+        {
+            return $"VpnDiagnostics GeneratedConfig failed | path={configPath} | error={ex.GetType().Name}: {ex.Message}";
+        }
+    }
+
+    private static string SafeNodeSummary(ProfileItem node)
+    {
+        return (node.Remarks ?? node.GetSummary() ?? string.Empty)
+            .Replace("\r", " ")
+            .Replace("\n", " ");
+    }
+
+    private static string MaskHost(string? host)
+    {
+        if (host.IsNullOrEmpty())
+        {
+            return string.Empty;
+        }
+
+        var value = host.Trim();
+        if (IPAddress.TryParse(value, out _))
+        {
+            return value;
+        }
+
+        var parts = value.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length <= 2)
+        {
+            return value;
+        }
+
+        return $"{parts[0]}***.{string.Join('.', parts.Skip(parts.Length - 2))}";
     }
 
     private void AddProcessJob(nint processHandle)
