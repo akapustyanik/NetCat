@@ -37,16 +37,6 @@ public partial class CoreConfigSingboxService
                 }
             }
             _coreConfig.dns.final = useDirectDns ? Global.SingboxDirectDNSTag : Global.SingboxRemoteDNSTag;
-            var simpleDnsItem = context.SimpleDnsItem;
-            if ((!useDirectDns) && simpleDnsItem.FakeIP == true && simpleDnsItem.GlobalFakeIp == false)
-            {
-                _coreConfig.dns.rules.Add(new()
-                {
-                    server = Global.SingboxFakeDNSTag,
-                    query_type = new List<int> { 1, 28 }, // A and AAAA
-                    rewrite_ttl = 1,
-                });
-            }
         }
         catch (Exception ex)
         {
@@ -59,7 +49,7 @@ public partial class CoreConfigSingboxService
         var simpleDnsItem = context.SimpleDnsItem;
         var finalDns = GenBootstrapDns();
 
-        var directDns = ParseDnsAddress(simpleDnsItem.DirectDNS ?? Global.DomainDirectDNSAddress.First());
+        var directDns = ParseDnsAddress(ResolveDirectDnsAddress(simpleDnsItem.DirectDNS));
         directDns.tag = Global.SingboxDirectDNSTag;
         directDns.domain_resolver = Global.SingboxLocalDNSTag;
 
@@ -180,6 +170,11 @@ public partial class CoreConfigSingboxService
             });
         }
 
+        if (context.IsTunEnabled)
+        {
+            _coreConfig.dns.rules.Add(BuildTunLocalBypassDnsRule());
+        }
+
         _coreConfig.dns.rules.AddRange(new[]
         {
             new Rule4Sbox
@@ -270,36 +265,8 @@ public partial class CoreConfigSingboxService
             });
         }
 
-        if (simpleDnsItem.FakeIP == true && simpleDnsItem.GlobalFakeIp == true)
-        {
-            var fakeipFilterRule = JsonUtils.Deserialize<Rule4Sbox>(EmbedUtils.GetEmbedText(Global.SingboxFakeIPFilterFileName));
-            fakeipFilterRule.invert = true;
-            var rule4Fake = new Rule4Sbox
-            {
-                server = Global.SingboxFakeDNSTag,
-                type = "logical",
-                mode = "and",
-                rewrite_ttl = 1,
-                rules =
-                [
-                    new()
-                    {
-                        query_type = [1, 28], // A and AAAA
-                    },
-                    fakeipFilterRule
-                ]
-            };
-
-            _coreConfig.dns.rules.Add(rule4Fake);
-        }
-
         var routing = context.RoutingItem;
-        if (routing == null)
-        {
-            return;
-        }
-
-        var rules = JsonUtils.Deserialize<List<RulesItem>>(routing.RuleSet) ?? [];
+        var rules = routing == null ? [] : JsonUtils.Deserialize<List<RulesItem>>(routing.RuleSet) ?? [];
         var expectedIPCidr = new List<string>();
         var expectedIPsRegions = new List<string>();
         var regionNames = new HashSet<string>();
@@ -392,6 +359,39 @@ public partial class CoreConfigSingboxService
             }
 
             _coreConfig.dns.rules.Add(rule);
+        }
+
+        if (simpleDnsItem.FakeIP == true && simpleDnsItem.GlobalFakeIp == false)
+        {
+            _coreConfig.dns.rules.Add(new()
+            {
+                server = Global.SingboxFakeDNSTag,
+                query_type = new List<int> { 1, 28 }, // A and AAAA
+                rewrite_ttl = 1,
+            });
+        }
+
+        if (simpleDnsItem.FakeIP == true && simpleDnsItem.GlobalFakeIp == true)
+        {
+            var fakeipFilterRule = JsonUtils.Deserialize<Rule4Sbox>(EmbedUtils.GetEmbedText(Global.SingboxFakeIPFilterFileName));
+            fakeipFilterRule.invert = true;
+            var rule4Fake = new Rule4Sbox
+            {
+                server = Global.SingboxFakeDNSTag,
+                type = "logical",
+                mode = "and",
+                rewrite_ttl = 1,
+                rules =
+                [
+                    new()
+                    {
+                        query_type = [1, 28], // A and AAAA
+                    },
+                    fakeipFilterRule
+                ]
+            };
+
+            _coreConfig.dns.rules.Add(rule4Fake);
         }
     }
 
@@ -516,6 +516,142 @@ public partial class CoreConfigSingboxService
     private bool ShouldUseSystemLocalDns()
     {
         return context.IsTunEnabled && _node.GetNetwork() == nameof(ETransport.grpc);
+    }
+
+    private string ResolveDirectDnsAddress(string? configuredDirectDns)
+    {
+        var fallback = configuredDirectDns.NullIfEmpty() ?? Global.DomainDirectDNSAddress.First();
+        if (!context.IsTunEnabled)
+        {
+            return fallback;
+        }
+
+        if (configuredDirectDns.IsNotEmpty() && !ShouldPreferSystemDnsForTunDirectDns(configuredDirectDns))
+        {
+            return configuredDirectDns;
+        }
+
+        var systemDns = GetPreferredSystemDnsAddress();
+        if (systemDns.IsNotEmpty())
+        {
+            Logging.SaveLog($"SingboxDirectDNS using system DNS for TUN direct domains | configured={configuredDirectDns ?? "(empty)"} | selected={systemDns}");
+            return systemDns;
+        }
+
+        return fallback;
+    }
+
+    private static bool ShouldPreferSystemDnsForTunDirectDns(string configuredDirectDns)
+    {
+        if (Global.DomainDirectDNSAddress.Contains(configuredDirectDns, StringComparer.OrdinalIgnoreCase)
+            || Global.DomainRemoteDNSAddress.Contains(configuredDirectDns, StringComparer.OrdinalIgnoreCase)
+            || Global.DomainPureIPDNSAddress.Contains(configuredDirectDns, StringComparer.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var dnsItems = configuredDirectDns
+            .Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(item => item.Trim())
+            .Where(item => item.IsNotEmpty())
+            .ToList();
+
+        if (dnsItems.Count == 0)
+        {
+            return true;
+        }
+
+        var parsedIpCount = 0;
+        foreach (var item in dnsItems)
+        {
+            var candidate = item;
+            if (Uri.TryCreate(item, UriKind.Absolute, out var uri))
+            {
+                candidate = uri.Host;
+            }
+
+            if (!IPAddress.TryParse(candidate, out var ipAddress))
+            {
+                return false;
+            }
+
+            parsedIpCount++;
+            if (IPAddress.IsLoopback(ipAddress) || Utils.IsPrivateNetwork(candidate))
+            {
+                return false;
+            }
+        }
+
+        return parsedIpCount > 0;
+    }
+
+    private static string? GetPreferredSystemDnsAddress()
+    {
+        try
+        {
+            var candidates = new List<(int Score, string Address, string InterfaceName)>();
+            foreach (var networkInterface in NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (networkInterface.OperationalStatus != OperationalStatus.Up)
+                {
+                    continue;
+                }
+
+                var name = $"{networkInterface.Name} {networkInterface.Description}";
+                if (name.Contains("singbox", StringComparison.OrdinalIgnoreCase)
+                    || name.Contains("wintun", StringComparison.OrdinalIgnoreCase)
+                    || name.Contains("wireguard", StringComparison.OrdinalIgnoreCase)
+                    || name.Contains("tailscale", StringComparison.OrdinalIgnoreCase)
+                    || name.Contains("radmin", StringComparison.OrdinalIgnoreCase)
+                    || name.Contains("outline", StringComparison.OrdinalIgnoreCase)
+                    || name.Contains("tap", StringComparison.OrdinalIgnoreCase)
+                    || name.Contains("vpn", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var ipProperties = networkInterface.GetIPProperties();
+                foreach (var dnsAddress in ipProperties.DnsAddresses)
+                {
+                    if (dnsAddress.AddressFamily != AddressFamily.InterNetwork
+                        || IPAddress.IsLoopback(dnsAddress))
+                    {
+                        continue;
+                    }
+
+                    var address = dnsAddress.ToString();
+                    if (address.StartsWith("172.18.", StringComparison.Ordinal)
+                        || address.StartsWith("198.18.", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    var score = networkInterface.NetworkInterfaceType is NetworkInterfaceType.Wireless80211 or NetworkInterfaceType.Ethernet ? 0 : 10;
+                    if (!Utils.IsPrivateNetwork(address))
+                    {
+                        score += 5;
+                    }
+
+                    candidates.Add((score, address, networkInterface.Name));
+                }
+            }
+
+            var selected = candidates
+                .OrderBy(item => item.Score)
+                .ThenBy(item => item.InterfaceName, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+            if (selected.Address.IsNotEmpty())
+            {
+                Logging.SaveLog($"SingboxDirectDNS selected system DNS | address={selected.Address} | interface={selected.InterfaceName}");
+                return selected.Address;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog(_tag, ex);
+        }
+
+        return null;
     }
 
     private void NormalizeProxyRemoteDns(Server4Sbox remoteDns)
