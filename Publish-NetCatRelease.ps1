@@ -6,6 +6,7 @@ param(
     [string]$SourcePublishDir = "",
     [bool]$RunSmokeTest = $true,
     [bool]$VerifySelfUpdateSmoke = $false,
+    [bool]$SelfContained = $true,
     [bool]$SignBinaries = $true,
     [bool]$RequireCodeSigning = $false,
     [string]$CodeSigningPfxPath = $env:NETCAT_CODESIGN_PFX,
@@ -481,7 +482,8 @@ try {
         if (Test-Path $publishSourceDir) {
             Remove-Item $publishSourceDir -Recurse -Force
         }
-        dotnet publish $projectPath -c $Configuration -r $Runtime --self-contained false
+        $selfContainedArg = $SelfContained.ToString().ToLowerInvariant()
+        dotnet publish $projectPath -c $Configuration -r $Runtime --self-contained $selfContainedArg
         if ($LASTEXITCODE -ne 0) {
             throw "dotnet publish failed with exit code $LASTEXITCODE"
         }

@@ -57,6 +57,10 @@ public partial class ProfilesView
             this.BindCommand(ViewModel, vm => vm.ShareServerCmd, v => v.menuShareServer).DisposeWith(disposables);
             this.BindCommand(ViewModel, vm => vm.GenGroupAllServerCmd, v => v.menuGenGroupAllServer).DisposeWith(disposables);
             this.BindCommand(ViewModel, vm => vm.GenGroupRegionServerCmd, v => v.menuGenGroupRegionServer).DisposeWith(disposables);
+            this.BindCommand(ViewModel, vm => vm.GenAutoFailoverGroupCmd, v => v.menuGenAutoFailoverGroup).DisposeWith(disposables);
+            this.BindCommand(ViewModel, vm => vm.GenAutoFailoverGroupCmd, v => v.btnGenAutoFailoverGroupInline).DisposeWith(disposables);
+            this.Bind(ViewModel, vm => vm.AutoFailoverStandbyCount, v => v.sldAutoFailoverStandbyCount.Value).DisposeWith(disposables);
+            this.Bind(ViewModel, vm => vm.AutoFailoverStandbyCount, v => v.sldAutoFailoverStandbyCountInline.Value).DisposeWith(disposables);
 
             //servers move
             this.OneWayBind(ViewModel, vm => vm.SubItems, v => v.cmbMoveToGroup.ItemsSource).DisposeWith(disposables);
@@ -69,6 +73,7 @@ public partial class ProfilesView
 
             //servers ping
             this.BindCommand(ViewModel, vm => vm.MixedTestServerCmd, v => v.menuMixedTestServer).DisposeWith(disposables);
+            this.BindCommand(ViewModel, vm => vm.MixedTestServerCmd, v => v.btnAutoTestAllProfilesInline).DisposeWith(disposables);
             this.BindCommand(ViewModel, vm => vm.TcpingServerCmd, v => v.menuTcpingServer).DisposeWith(disposables);
             this.BindCommand(ViewModel, vm => vm.RealPingServerCmd, v => v.menuRealPingServer).DisposeWith(disposables);
             this.BindCommand(ViewModel, vm => vm.SpeedServerCmd, v => v.menuSpeedServer).DisposeWith(disposables);

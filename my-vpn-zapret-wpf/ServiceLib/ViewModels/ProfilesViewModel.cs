@@ -46,6 +46,10 @@ public class ProfilesViewModel : MyReactiveObject
     public ReactiveCommand<Unit, Unit> ShareServerCmd { get; }
     public ReactiveCommand<Unit, Unit> GenGroupAllServerCmd { get; }
     public ReactiveCommand<Unit, Unit> GenGroupRegionServerCmd { get; }
+    public ReactiveCommand<Unit, Unit> GenAutoFailoverGroupCmd { get; }
+
+    [Reactive]
+    public double AutoFailoverStandbyCount { get; set; } = 1;
 
     //servers move
     public ReactiveCommand<Unit, Unit> MoveTopCmd { get; }
@@ -137,6 +141,10 @@ public class ProfilesViewModel : MyReactiveObject
         GenGroupRegionServerCmd = ReactiveCommand.CreateFromTask(async () =>
         {
             await GenGroupRegionServer();
+        }, canEditRemove);
+        GenAutoFailoverGroupCmd = ReactiveCommand.CreateFromTask(async () =>
+        {
+            await GenAutoFailoverGroup();
         }, canEditRemove);
 
         //servers move
@@ -284,7 +292,7 @@ public class ProfilesViewModel : MyReactiveObject
             return;
         }
 
-        if (result.Delay.IsNotEmpty())
+        if (result.Delay != null)
         {
             item.Delay = result.Delay.ToInt();
             item.DelayVal = result.Delay ?? string.Empty;
@@ -459,6 +467,54 @@ public class ProfilesViewModel : MyReactiveObject
         }
 
         return lstSelected;
+    }
+
+    private async Task GenAutoFailoverGroup()
+    {
+        var selected = await GetProfileItems(true);
+        selected = selected?
+            .Where(p => p != null && p.IsValid() && p.ConfigType != EConfigType.Custom && !p.ConfigType.IsComplexType())
+            .ToList();
+
+        var standbyCount = Math.Clamp((int)Math.Round(AutoFailoverStandbyCount), 1, 8);
+        var requiredCount = standbyCount + 1;
+        if (selected == null || selected.Count < requiredCount)
+        {
+            NoticeManager.Instance.Enqueue($"Выберите минимум {requiredCount} профиля для автосмены протокола.");
+            return;
+        }
+
+        var indexId = Utils.GetGuid(false);
+        var profile = new ProfileItem
+        {
+            IndexId = indexId,
+            CoreType = ECoreType.sing_box,
+            ConfigType = EConfigType.PolicyGroup,
+            Remarks = $"Auto failover - {DateTime.Now:yyyy-MM-dd HH:mm}",
+            IsSub = false
+        };
+        if (_config.SubIndexId.IsNotEmpty())
+        {
+            profile.Subid = _config.SubIndexId;
+        }
+
+        profile.SetProtocolExtra(new ProtocolExtraItem
+        {
+            MultipleLoad = EMultipleLoad.Fallback,
+            FailoverStandbyCount = standbyCount,
+            GroupType = profile.ConfigType.ToString(),
+            ChildItems = Utils.List2String(selected.Select(p => p.IndexId).ToList()),
+        });
+
+        if (await ConfigHandler.AddServerCommon(_config, profile, true) == 0)
+        {
+            _pendingSelectIndexId = indexId;
+            NoticeManager.Instance.Enqueue("Группа автосмены протокола создана.");
+            await RefreshServers();
+            return;
+        }
+
+        NoticeManager.Instance.Enqueue(ResUI.OperationFailed);
     }
 
     public async Task EditServerAsync()

@@ -268,17 +268,49 @@
                                                                         <Style TargetType="Border">
                                                                             <Setter Property="Visibility" Value="Visible" />
                                                                             <Style.Triggers>
-                                                                                <DataTrigger Binding="{Binding CountryFlagImageUrl}" Value="">
+                                                                                <DataTrigger Binding="{Binding CountryFlagText}" Value="">
                                                                                     <Setter Property="Visibility" Value="Collapsed" />
                                                                                 </DataTrigger>
                                                                             </Style.Triggers>
                                                                         </Style>
                                                                     </Border.Style>
-                                                                    <Image Width="24"
-                                                                           Height="18"
-                                                                           Stretch="Fill"
-                                                                           SnapsToDevicePixels="True"
-                                                                           Source="{Binding CountryFlagImageUrl}" />
+                                                                    <Grid>
+                                                                        <Image
+                                                                            Width="24"
+                                                                            Height="18"
+                                                                            SnapsToDevicePixels="True"
+                                                                            Source="{Binding CountryFlagImageUrl}"
+                                                                            Stretch="Fill">
+                                                                            <Image.Style>
+                                                                                <Style TargetType="Image">
+                                                                                    <Setter Property="Visibility" Value="Visible" />
+                                                                                    <Style.Triggers>
+                                                                                        <DataTrigger Binding="{Binding CountryFlagImageUrl}" Value="">
+                                                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                                                        </DataTrigger>
+                                                                                    </Style.Triggers>
+                                                                                </Style>
+                                                                            </Image.Style>
+                                                                        </Image>
+                                                                        <TextBlock
+                                                                            HorizontalAlignment="Center"
+                                                                            VerticalAlignment="Center"
+                                                                            FontSize="11"
+                                                                            FontWeight="SemiBold"
+                                                                            Foreground="{DynamicResource NetCatStrongTextBrush}"
+                                                                            Text="{Binding CountryFlagText}">
+                                                                            <TextBlock.Style>
+                                                                                <Style TargetType="TextBlock">
+                                                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                                                    <Style.Triggers>
+                                                                                        <DataTrigger Binding="{Binding CountryFlagImageUrl}" Value="">
+                                                                                            <Setter Property="Visibility" Value="Visible" />
+                                                                                        </DataTrigger>
+                                                                                    </Style.Triggers>
+                                                                                </Style>
+                                                                            </TextBlock.Style>
+                                                                        </TextBlock>
+                                                                    </Grid>
                                                                 </Border>
                                                                 <TextBlock FontWeight="SemiBold" Text="{Binding Remarks}" />
                                                                 <Border
@@ -292,6 +324,36 @@
                                                                 </Border>
                                                             </StackPanel>
                                                             <TextBlock Margin="0,4,0,0" FontSize="12" Opacity="0.7" Text="{Binding Address}" TextWrapping="Wrap" />
+                                                            <TextBlock
+                                                                Margin="0,4,0,0"
+                                                                FontSize="12"
+                                                                FontWeight="SemiBold"
+                                                                Foreground="{DynamicResource NetCatStrongTextBrush}"
+                                                                Text="{Binding DelayVal, StringFormat=Ping: {0}}"
+                                                                TextWrapping="Wrap" />
+                                                            <Border
+                                                                Margin="0,8,0,0"
+                                                                Padding="8,6"
+                                                                Background="{DynamicResource NetCatAccentSoftBrush}"
+                                                                BorderBrush="{DynamicResource NetCatWindowChromeBrush}"
+                                                                BorderThickness="1"
+                                                                CornerRadius="10"
+                                                                Visibility="{Binding DataContext.AutoFailoverCandidateVisibility, RelativeSource={RelativeSource AncestorType=Window}}">
+                                                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                                    <TextBlock
+                                                                        Margin="0,0,8,0"
+                                                                        VerticalAlignment="Center"
+                                                                        FontSize="12"
+                                                                        FontWeight="SemiBold"
+                                                                        Foreground="{DynamicResource NetCatStrongTextBrush}"
+                                                                        Text="Автосмена" />
+                                                                    <ToggleButton
+                                                                        IsChecked="{Binding IsAutoFailoverCandidate, Mode=TwoWay}"
+                                                                        Style="{StaticResource MaterialDesignSwitchToggleButton}"
+                                                                        Checked="OnAutoFailoverCandidateChanged"
+                                                                        Unchecked="OnAutoFailoverCandidateChanged" />
+                                                                </StackPanel>
+                                                            </Border>
                                                             </StackPanel>
                                                         <StackPanel Grid.Column="1"
                                                                     Margin="12,0,0,0"
@@ -355,10 +417,34 @@
                                 <StackPanel Margin="12">
                                     <Button Content="Сделать активным" Style="{StaticResource DefButton}" Click="OnSetActive" />
                                     <Button Margin="0,8,0,0" Content="Пинг" Style="{StaticResource SubtleButton}" Click="OnPingServer" />
+                                    <Button Margin="0,8,0,0" Content="Автотест всех конфигов" Style="{StaticResource SubtleButton}" Click="OnAutoTestProfiles" />
                                     <Button Margin="0,8,0,0" Content="Изменить" Style="{StaticResource SubtleButton}" Click="OnEditProfile" />
                                     <Button Margin="0,8,0,0" Content="Дублировать" Style="{StaticResource SubtleButton}" Click="OnDuplicateProfile" />
                                     <Button Margin="0,8,0,0" Content="Удалить" Style="{StaticResource SubtleButton}" Click="OnDeleteProfile" />
-                                    <TextBlock Margin="0,12,0,0" FontSize="12" Opacity="0.7" Text="{Binding ServerPing}" TextWrapping="Wrap" />
+                                    <Border
+                                        Margin="0,16,0,0"
+                                        Padding="10"
+                                        Background="{DynamicResource NetCatSurfaceAltBrush}"
+                                        BorderBrush="{DynamicResource NetCatWindowChromeBrush}"
+                                        BorderThickness="1"
+                                        CornerRadius="12">
+                                        <StackPanel>
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                <TextBlock
+                                                    Margin="0,0,8,0"
+                                                    VerticalAlignment="Center"
+                                                    FontSize="12"
+                                                    FontWeight="Normal"
+                                                    Foreground="{DynamicResource NetCatStrongTextBrush}"
+                                                    Text="Автосмена протокола" />
+                                                <ToggleButton
+                                                    IsChecked="{Binding AutoProtocolFailoverEnabled, Mode=TwoWay}"
+                                                    Style="{StaticResource MaterialDesignSwitchToggleButton}"
+                                                    Checked="OnAutoFailoverEnabledChanged"
+                                                    Unchecked="OnAutoFailoverEnabledChanged" />
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Border>
                                 </StackPanel>
                             </ScrollViewer>
                         </GroupBox>

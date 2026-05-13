@@ -16,7 +16,8 @@ param(
     [switch]$SkipSigning,
     [switch]$AllowUnsigned,
     [switch]$SkipSmoke,
-    [switch]$SkipSelfUpdateSmoke
+    [switch]$SkipSelfUpdateSmoke,
+    [switch]$FrameworkDependent
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,10 +31,12 @@ $runSmokeTest = -not $SkipSmoke
 $verifySelfUpdateSmoke = -not $Fast -and -not $SkipSelfUpdateSmoke
 $signBinaries = -not $SkipSigning
 $requireCodeSigning = $signBinaries -and -not $AllowUnsigned
+$selfContained = -not $FrameworkDependent
 
 Write-Host "Local NetCat release"
 Write-Host "  Configuration: $Configuration"
 Write-Host "  Runtime: $Runtime"
+Write-Host "  Self-contained: $selfContained"
 Write-Host "  Smoke test: $runSmokeTest"
 Write-Host "  Self-update smoke: $verifySelfUpdateSmoke"
 Write-Host "  Sign binaries: $signBinaries"
@@ -47,6 +50,7 @@ Write-Host "  Require code signing: $requireCodeSigning"
     -SourcePublishDir $SourcePublishDir `
     -RunSmokeTest:$runSmokeTest `
     -VerifySelfUpdateSmoke:$verifySelfUpdateSmoke `
+    -SelfContained:$selfContained `
     -SignBinaries:$signBinaries `
     -RequireCodeSigning:$requireCodeSigning `
     -CodeSigningPfxPath $CodeSigningPfxPath `

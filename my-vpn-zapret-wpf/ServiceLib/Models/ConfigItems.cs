@@ -110,6 +110,11 @@ public class UIItem
     public bool MinimizeToTray { get; set; }
     public bool MacOSShowInDock { get; set; }
     public bool PreferFullTrafficVpn { get; set; } = true;
+    public bool AutoProtocolFailoverEnabled { get; set; }
+    public int AutoProtocolFailoverStandbyCount { get; set; } = 1;
+    public string? AutoProtocolFailoverProfileIds { get; set; }
+    public string? AutoProtocolFailoverPrimaryId { get; set; }
+    public string? AutoProtocolFailoverGroupId { get; set; }
     public List<ColumnItem> MainColumnItem { get; set; }
     public List<WindowSizeItem> WindowSizeItem { get; set; }
 }
@@ -154,6 +159,7 @@ public class TunModeItem
     public string Stack { get; set; }
     public int Mtu { get; set; }
     public bool EnableIPv6Address { get; set; }
+    public string? LocalBypassDomains { get; set; }
 }
 
 [Serializable]

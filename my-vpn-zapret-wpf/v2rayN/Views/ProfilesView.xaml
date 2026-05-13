@@ -21,6 +21,65 @@
     </UserControl.Resources>
     <Grid>
         <DockPanel>
+            <Border
+                Margin="{StaticResource Margin4}"
+                Padding="10,8"
+                Background="#192132"
+                BorderBrush="#3B82F6"
+                BorderThickness="1"
+                CornerRadius="4"
+                DockPanel.Dock="Top">
+                <DockPanel LastChildFill="False">
+                    <TextBlock
+                        Margin="0,0,14,0"
+                        VerticalAlignment="Center"
+                        FontWeight="SemiBold"
+                        Foreground="#E5E7EB"
+                        Text="Автосмена протокола" />
+                    <TextBlock
+                        Margin="0,0,8,0"
+                        VerticalAlignment="Center"
+                        Foreground="#CBD5E1"
+                        Text="Резервных:" />
+                    <Slider
+                        x:Name="sldAutoFailoverStandbyCountInline"
+                        Width="120"
+                        Margin="0,0,8,0"
+                        VerticalAlignment="Center"
+                        Minimum="1"
+                        Maximum="8"
+                        TickFrequency="1"
+                        IsSnapToTickEnabled="True"
+                        ToolTip="Количество резервных протоколов в группе автосмены" />
+                    <TextBlock
+                        Width="28"
+                        Margin="0,0,12,0"
+                        VerticalAlignment="Center"
+                        Foreground="#E5E7EB"
+                        Text="{Binding ElementName=sldAutoFailoverStandbyCountInline, Path=Value, StringFormat={}{0:F0}}" />
+                    <Button
+                        x:Name="btnGenAutoFailoverGroupInline"
+                        Height="30"
+                        Margin="0,0,8,0"
+                        Padding="12,0"
+                        ToolTip="Выберите несколько профилей и создайте fallback-группу с автосменой">
+                        <StackPanel Orientation="Horizontal">
+                            <materialDesign:PackIcon VerticalAlignment="Center" Kind="SwapHorizontal" />
+                            <TextBlock Margin="6,0,0,0" VerticalAlignment="Center" Text="Создать автосмену" />
+                        </StackPanel>
+                    </Button>
+                    <Button
+                        x:Name="btnAutoTestAllProfilesInline"
+                        Height="30"
+                        Padding="12,0"
+                        ToolTip="{x:Static resx:ResUI.menuMixedTestServer}">
+                        <StackPanel Orientation="Horizontal">
+                            <materialDesign:PackIcon VerticalAlignment="Center" Kind="Speedometer" />
+                            <TextBlock Margin="6,0,0,0" VerticalAlignment="Center" Text="Автотест всех конфигов" />
+                        </StackPanel>
+                    </Button>
+                </DockPanel>
+            </Border>
             <WrapPanel Margin="{StaticResource Margin4}" DockPanel.Dock="Top">
                 <ListBox
                     x:Name="lstGroup"
@@ -213,6 +272,41 @@
                             Height="{StaticResource MenuItemHeight}"
                             Header="{x:Static resx:ResUI.menuSelectAll}"
                             InputGestureText="Ctrl+A" />
+                        <Separator />
+                        <MenuItem Header="Actions">
+                            <MenuItem Height="Auto">
+                                <MenuItem.Header>
+                                    <StackPanel MinWidth="280" Margin="6" Orientation="Vertical">
+                                        <CheckBox
+                                            Content="Автосмена протокола"
+                                            IsChecked="True"
+                                            IsEnabled="False" />
+                                        <StackPanel Margin="0,8,0,0" Orientation="Horizontal">
+                                            <TextBlock
+                                                Width="92"
+                                                VerticalAlignment="Center"
+                                                Text="Резервных:" />
+                                            <Slider
+                                                x:Name="sldAutoFailoverStandbyCount"
+                                                Width="120"
+                                                Minimum="1"
+                                                Maximum="8"
+                                                TickFrequency="1"
+                                                IsSnapToTickEnabled="True" />
+                                            <TextBlock
+                                                Width="28"
+                                                Margin="8,0,0,0"
+                                                VerticalAlignment="Center"
+                                                Text="{Binding ElementName=sldAutoFailoverStandbyCount, Path=Value, StringFormat={}{0:F0}}" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </MenuItem.Header>
+                            </MenuItem>
+                            <MenuItem
+                                x:Name="menuGenAutoFailoverGroup"
+                                Height="{StaticResource MenuItemHeight}"
+                                Header="Создать группу автосмены" />
+                        </MenuItem>
                         <Separator />
                         <MenuItem
                             x:Name="menuShareServer"
