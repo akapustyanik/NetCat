@@ -9,6 +9,7 @@ internal class UpgradeApp
     private static readonly HashSet<string> _preservedTopLevelDirectories = new(StringComparer.OrdinalIgnoreCase)
     {
         "PrivateHub",
+        "bin",
         "binConfigs",
         "guiBackups",
         "guiConfigs",
@@ -16,6 +17,7 @@ internal class UpgradeApp
         "guiLogs",
         "guiTemps",
         "userdata",
+        "zapret",
     };
 
     private static readonly HashSet<string> _preservedFiles = new(StringComparer.OrdinalIgnoreCase)

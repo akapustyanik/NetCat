@@ -219,6 +219,14 @@ function Invoke-SelfUpdateSmoke {
     try {
         $updaterPath = Join-Path $workDir "updater\AmazTool.exe"
         Assert-PathExists $updaterPath "Smoke test updater is missing: $updaterPath"
+        $componentPreserveMarkers = @{
+            (Join-Path $workDir "bin\geoip.dat") = "netcat-smoke-preserve-geoip"
+            (Join-Path $workDir "zapret\service.bat") = "netcat-smoke-preserve-zapret"
+        }
+        foreach ($marker in $componentPreserveMarkers.GetEnumerator()) {
+            Assert-PathExists $marker.Key "Self-update smoke test preserve target is missing: $($marker.Key)"
+            Set-Content -Path $marker.Key -Value $marker.Value -Encoding ascii -NoNewline
+        }
 
         & $updaterPath upgrade $workDir $archiveCopyPath | Out-Null
         Start-Sleep -Seconds 8
@@ -229,6 +237,12 @@ function Invoke-SelfUpdateSmoke {
         $backupPath = "$appPath.tmp"
         if (Test-Path $backupPath) {
             throw "Self-update smoke test left rollback file behind: $backupPath"
+        }
+        foreach ($marker in $componentPreserveMarkers.GetEnumerator()) {
+            $actual = Get-Content -Path $marker.Key -Raw -ErrorAction SilentlyContinue
+            if ($actual -ne $marker.Value) {
+                throw "Self-update smoke test overwrote preserved component path: $($marker.Key)"
+            }
         }
 
         $staleUpdaterDirs = @(Get-StaleUpdaterDirs -PackageRoot $workDir)
