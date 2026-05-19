@@ -96,14 +96,14 @@ public static class QuickRuleHandler
         var telegramRemarksSuffix = TelegramWsProxyHandler.IsLocalSocksMode(quick.TelegramTrafficMode)
             ? "local SOCKS"
             : "VPN";
-        var proxyDomainList = NormalizeList(quick.ProxyDomains);
+        var proxyDomainList = NormalizeDomainList(quick.ProxyDomains);
         if (quick.UseProxyDomainsPreset)
         {
             proxyDomainList.AddRange(LoadProxyDomainsPreset());
-            proxyDomainList = NormalizeList(proxyDomainList);
+            proxyDomainList = NormalizeDomainList(proxyDomainList);
         }
 
-        var blockDomainList = NormalizeList(quick.BlockDomains);
+        var blockDomainList = NormalizeDomainList(quick.BlockDomains);
         if (blockDomainList.Count > 0)
         {
             rules.Add(new RulesItem
@@ -176,8 +176,7 @@ public static class QuickRuleHandler
             });
         }
 
-        var domainList = NormalizeList(quick.DirectDomains);
-        domainList = NormalizeList(domainList);
+        var domainList = NormalizeDomainList(quick.DirectDomains);
         if (domainList.Count > 0)
         {
             rules.Add(new RulesItem
@@ -324,7 +323,11 @@ public static class QuickRuleHandler
             return trimmed;
         }
 
-        if (trimmed.Contains(':'))
+        if (TryExtractHttpUrlHost(trimmed, out var host))
+        {
+            trimmed = host;
+        }
+        else if (trimmed.Contains(':'))
         {
             return trimmed;
         }
@@ -336,5 +339,39 @@ public static class QuickRuleHandler
         }
 
         return $"domain:{value}";
+    }
+
+    private static List<string> NormalizeDomainList(IEnumerable<string> list)
+    {
+        return list
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Select(NormalizeDomainRule)
+            .Where(t => !t.IsNullOrEmpty())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static bool TryExtractHttpUrlHost(string input, out string host)
+    {
+        host = string.Empty;
+        var value = input.Trim();
+        if (Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            && (string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            && uri.Host.IsNotEmpty())
+        {
+            host = uri.IdnHost.IsNotEmpty() ? uri.IdnHost : uri.Host;
+            return true;
+        }
+
+        if (value.StartsWith("//", StringComparison.Ordinal)
+            && Uri.TryCreate($"https:{value}", UriKind.Absolute, out uri)
+            && uri.Host.IsNotEmpty())
+        {
+            host = uri.IdnHost.IsNotEmpty() ? uri.IdnHost : uri.Host;
+            return true;
+        }
+
+        return false;
     }
 }
