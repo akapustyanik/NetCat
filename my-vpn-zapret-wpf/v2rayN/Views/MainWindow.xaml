@@ -337,8 +337,21 @@
                                                                 Background="{DynamicResource NetCatAccentSoftBrush}"
                                                                 BorderBrush="{DynamicResource NetCatWindowChromeBrush}"
                                                                 BorderThickness="1"
-                                                                CornerRadius="10"
-                                                                Visibility="{Binding DataContext.AutoFailoverCandidateVisibility, RelativeSource={RelativeSource AncestorType=Window}}">
+                                                                CornerRadius="10">
+                                                                <Border.Style>
+                                                                    <Style TargetType="Border">
+                                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                                        <Style.Triggers>
+                                                                            <MultiDataTrigger>
+                                                                                <MultiDataTrigger.Conditions>
+                                                                                    <Condition Binding="{Binding DataContext.AutoFailoverCandidateVisibility, RelativeSource={RelativeSource AncestorType=Window}}" Value="Visible" />
+                                                                                    <Condition Binding="{Binding IsAutoFailoverEligible}" Value="True" />
+                                                                                </MultiDataTrigger.Conditions>
+                                                                                <Setter Property="Visibility" Value="Visible" />
+                                                                            </MultiDataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </Border.Style>
                                                                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                                                                     <TextBlock
                                                                         Margin="0,0,8,0"

@@ -145,6 +145,7 @@ public class Outbound4Sbox : BaseServer4Sbox
     public string? plugin { get; set; }
     public string? plugin_opts { get; set; }
     public List<string>? outbounds { get; set; }
+    public string? @default { get; set; }
     public bool? interrupt_exist_connections { get; set; }
     public int? tolerance { get; set; }
     public string? url { get; set; }
