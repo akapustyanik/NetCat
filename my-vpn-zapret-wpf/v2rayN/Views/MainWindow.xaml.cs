@@ -695,6 +695,11 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         try
         {
             var items = await AppManager.Instance.ProfileModels("", "") ?? new List<ProfileItemModel>();
+            var rawItems = await AppManager.Instance.ProfileItems("") ?? new List<ProfileItem>();
+            var rawItemById = rawItems
+                .Where(item => !item.IndexId.IsNullOrEmpty())
+                .GroupBy(item => item.IndexId, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
             var profileExs = await ProfileExManager.Instance.GetProfileExs();
             var autoFailoverGroupId = _config.UiItem.AutoProtocolFailoverGroupId;
             if (!autoFailoverGroupId.IsNullOrEmpty())
@@ -706,18 +711,41 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 
             var preferredIndexId = SelectedProfile?.IndexId ?? _config.IndexId;
             var autoFailoverIds = GetAutoFailoverProfileIds();
+            var prunedAutoFailoverSelection = false;
             foreach (var item in items)
             {
+                item.IsAutoFailoverEligible = rawItemById.TryGetValue(item.IndexId, out var rawItem)
+                                              && IsAutoFailoverCompatibleWithSingbox(rawItem, out _);
                 item.IsActive = item.IndexId == _config.IndexId
                                 || (AutoProtocolFailoverEnabled
                                     && string.Equals(_config.IndexId, autoFailoverGroupId, StringComparison.OrdinalIgnoreCase)
                                     && string.Equals(item.IndexId, _config.UiItem.AutoProtocolFailoverPrimaryId, StringComparison.OrdinalIgnoreCase));
-                item.IsAutoFailoverCandidate = autoFailoverIds.Contains(item.IndexId);
+                item.IsAutoFailoverCandidate = item.IsAutoFailoverEligible && autoFailoverIds.Contains(item.IndexId);
+                if (!item.IsAutoFailoverEligible && autoFailoverIds.Contains(item.IndexId))
+                {
+                    prunedAutoFailoverSelection = true;
+                }
                 var profileEx = profileExs.FirstOrDefault(profileExItem => profileExItem.IndexId == item.IndexId);
                 item.Delay = profileEx?.Delay ?? 0;
                 item.DelayVal = profileEx?.Delay > 0
                     ? $"{profileEx.Delay} ms"
                     : profileEx?.Message.IsNotEmpty() == true ? profileEx.Message : "Not tested";
+            }
+            if (prunedAutoFailoverSelection)
+            {
+                var ids = items
+                    .Where(item => item.IsAutoFailoverCandidate)
+                    .Select(item => item.IndexId)
+                    .Where(id => !id.IsNullOrEmpty())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                _config.UiItem.AutoProtocolFailoverProfileIds = Utils.List2String(ids);
+                if (!_config.UiItem.AutoProtocolFailoverPrimaryId.IsNullOrEmpty()
+                    && !ids.Contains(_config.UiItem.AutoProtocolFailoverPrimaryId, StringComparer.OrdinalIgnoreCase))
+                {
+                    _config.UiItem.AutoProtocolFailoverPrimaryId = ids.FirstOrDefault();
+                }
+                await ConfigHandler.SaveConfig(_config);
             }
 
             Profiles.Clear();
@@ -1903,7 +1931,10 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 
         if (AutoProtocolFailoverEnabled && !GetAutoFailoverProfileIds().Any())
         {
-            var first = SelectedProfile ?? Profiles.FirstOrDefault(profile => profile.IsActive) ?? Profiles.FirstOrDefault();
+            var first = SelectedProfile is { IsAutoFailoverEligible: true }
+                ? SelectedProfile
+                : Profiles.FirstOrDefault(profile => profile.IsActive && profile.IsAutoFailoverEligible)
+                  ?? Profiles.FirstOrDefault(profile => profile.IsAutoFailoverEligible);
             if (first != null && !first.ConfigType.IsComplexType())
             {
                 first.IsAutoFailoverCandidate = true;
@@ -1933,6 +1964,11 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             || _isLoadingAutoFailoverSelection
             || sender is not FrameworkElement { DataContext: ProfileItemModel profile })
         {
+            return;
+        }
+        if (!profile.IsAutoFailoverEligible)
+        {
+            profile.IsAutoFailoverCandidate = false;
             return;
         }
 
@@ -1982,6 +2018,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         var candidateIds = GetAutoFailoverProfileIds();
         return Profiles
             .Where(profile => candidateIds.Contains(profile.IndexId)
+                              && profile.IsAutoFailoverEligible
                               && profile.ConfigType != EConfigType.Custom
                               && !profile.ConfigType.IsComplexType()
                               && !profile.Address.IsNullOrEmpty()
@@ -2154,6 +2191,12 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             return false;
         }
 
+        if (AppManager.Instance.GetCoreType(item, item.ConfigType) != ECoreType.sing_box)
+        {
+            reason = "requires Xray under current mode";
+            return false;
+        }
+
         var result = NodeValidator.Validate(item, ECoreType.sing_box);
         if (!result.Success)
         {
@@ -2176,6 +2219,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     {
         var ids = Profiles
             .Where(profile => profile.IsAutoFailoverCandidate
+                              && profile.IsAutoFailoverEligible
                               && profile.ConfigType != EConfigType.Custom
                               && !profile.ConfigType.IsComplexType()
                               && !profile.Address.IsNullOrEmpty()

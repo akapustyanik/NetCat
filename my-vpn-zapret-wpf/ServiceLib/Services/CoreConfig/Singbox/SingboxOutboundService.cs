@@ -549,6 +549,7 @@ public partial class CoreConfigSingboxService
             type = "selector",
             tag = baseTagName,
             outbounds = JsonUtils.DeepCopy(proxyTags),
+            @default = isFallback ? outUrltest.tag : null,
             interrupt_exist_connections = isFallback,
         };
         outSelector.outbounds.Insert(0, outUrltest.tag);

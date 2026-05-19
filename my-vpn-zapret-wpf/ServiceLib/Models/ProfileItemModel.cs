@@ -53,6 +53,9 @@ public class ProfileItemModel : ReactiveObject
     [Reactive]
     public bool IsAutoFailoverCandidate { get; set; }
 
+    [Reactive]
+    public bool IsAutoFailoverEligible { get; set; }
+
     public string GetSummary()
     {
         var summary = $"[{ConfigType}] {Remarks}";
