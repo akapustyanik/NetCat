@@ -653,7 +653,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             }
         }
 
-        foreach (var domain in _quickRules.DirectDomains.Distinct(StringComparer.OrdinalIgnoreCase))
+        foreach (var domain in _quickRules.DirectDomains.Select(NormalizeDomainRule).Distinct(StringComparer.OrdinalIgnoreCase))
         {
             if (!string.IsNullOrWhiteSpace(domain))
             {
@@ -661,7 +661,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             }
         }
 
-        foreach (var domain in _quickRules.BlockDomains.Distinct(StringComparer.OrdinalIgnoreCase))
+        foreach (var domain in _quickRules.BlockDomains.Select(NormalizeDomainRule).Distinct(StringComparer.OrdinalIgnoreCase))
         {
             if (!string.IsNullOrWhiteSpace(domain))
             {
@@ -677,7 +677,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             }
         }
 
-        foreach (var domain in _quickRules.ProxyDomains.Distinct(StringComparer.OrdinalIgnoreCase))
+        foreach (var domain in _quickRules.ProxyDomains.Select(NormalizeDomainRule).Distinct(StringComparer.OrdinalIgnoreCase))
         {
             if (!string.IsNullOrWhiteSpace(domain))
             {
@@ -967,7 +967,8 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             .ToList();
         _quickRules.DirectDomains = DirectDomains
             .Where(t => !string.IsNullOrWhiteSpace(t))
-            .Select(t => t.Trim())
+            .Select(NormalizeDomainRule)
+            .Where(t => !string.IsNullOrWhiteSpace(t))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         _quickRules.ProxyProcesses = ProxyApps
@@ -977,12 +978,14 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             .ToList();
         _quickRules.BlockDomains = BlockDomains
             .Where(t => !string.IsNullOrWhiteSpace(t))
-            .Select(t => t.Trim())
+            .Select(NormalizeDomainRule)
+            .Where(t => !string.IsNullOrWhiteSpace(t))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         _quickRules.ProxyDomains = ProxyDomains
             .Where(t => !string.IsNullOrWhiteSpace(t))
-            .Select(t => t.Trim())
+            .Select(NormalizeDomainRule)
+            .Where(t => !string.IsNullOrWhiteSpace(t))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         _quickRules.UseProxyDomainsPreset = UseProxyDomainsPreset;
@@ -3549,7 +3552,11 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             return trimmed;
         }
 
-        if (trimmed.Contains(':'))
+        if (TryExtractHttpUrlHost(trimmed, out var host))
+        {
+            trimmed = host;
+        }
+        else if (trimmed.Contains(':'))
         {
             return trimmed;
         }
@@ -3561,6 +3568,30 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         }
 
         return $"domain:{value}";
+    }
+
+    private static bool TryExtractHttpUrlHost(string input, out string host)
+    {
+        host = string.Empty;
+        var value = input.Trim();
+        if (Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            && (string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            && uri.Host.IsNotEmpty())
+        {
+            host = uri.IdnHost.IsNotEmpty() ? uri.IdnHost : uri.Host;
+            return true;
+        }
+
+        if (value.StartsWith("//", StringComparison.Ordinal)
+            && Uri.TryCreate($"https:{value}", UriKind.Absolute, out uri)
+            && uri.Host.IsNotEmpty())
+        {
+            host = uri.IdnHost.IsNotEmpty() ? uri.IdnHost : uri.Host;
+            return true;
+        }
+
+        return false;
     }
 
     private static T? FindVisualParent<T>(DependencyObject? child) where T : DependencyObject
