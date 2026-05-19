@@ -21,6 +21,7 @@ using MaterialDesignThemes.Wpf;
 using Microsoft.Win32;
 using ServiceLib.Common;
 using ServiceLib.Handler;
+using ServiceLib.Handler.Builder;
 using ServiceLib.Handler.SysProxy;
 using ServiceLib.Manager;
 using ServiceLib.Models;
@@ -2059,7 +2060,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             .GroupBy(item => item.IndexId, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
         var primaryId = ResolveAutoFailoverPrimaryId(candidateModels);
-        var selected = candidateModels
+        var orderedItems = candidateModels
             .OrderByDescending(profile => string.Equals(profile.IndexId, primaryId, StringComparison.OrdinalIgnoreCase))
             .ThenBy(profile => profile.Sort)
             .Select(profile => itemById.TryGetValue(profile.IndexId, out var item) ? item : null)
@@ -2069,6 +2070,19 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
                            && !item.ConfigType.IsComplexType())
             .Cast<ProfileItem>()
             .ToList();
+        var selected = new List<ProfileItem>();
+        var skipped = new List<string>();
+        foreach (var item in orderedItems)
+        {
+            if (IsAutoFailoverCompatibleWithSingbox(item, out var reason))
+            {
+                selected.Add(item);
+            }
+            else
+            {
+                skipped.Add($"{item.Remarks}: {reason}");
+            }
+        }
 
         if (selected.Count < requiredCount)
         {
@@ -2123,7 +2137,32 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         await RefreshProfilesAsync();
         SelectedProfile = Profiles.FirstOrDefault(item => item.IndexId == primary.IndexId) ?? SelectedProfile;
         Logging.SaveLog($"AutoProtocolFailover active | group={indexId} | primary={primary.Remarks} | candidates={selected.Count} | standby={standbyCount}");
-        SetStatus($"Автосмена активна: основной {primary.Remarks}, резервов 1, профилей {selected.Count}.");
+        if (skipped.Count > 0)
+        {
+            Logging.SaveLog($"AutoProtocolFailover skipped incompatible profiles | {string.Join(" | ", skipped)}");
+        }
+        SetStatus(skipped.Count > 0
+            ? $"Автосмена активна: основной {primary.Remarks}, резервов 1, профилей {selected.Count}; пропущено несовместимых {skipped.Count}."
+            : $"Автосмена активна: основной {primary.Remarks}, резервов 1, профилей {selected.Count}.");
+    }
+
+    private static bool IsAutoFailoverCompatibleWithSingbox(ProfileItem item, out string reason)
+    {
+        if (!item.IsValid())
+        {
+            reason = "invalid profile";
+            return false;
+        }
+
+        var result = NodeValidator.Validate(item, ECoreType.sing_box);
+        if (!result.Success)
+        {
+            reason = string.Join("; ", result.Errors);
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
     }
 
     private HashSet<string> GetAutoFailoverProfileIds()
@@ -4260,9 +4299,23 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         {
             var port = AppManager.Instance.GetLocalPort(EInboundProtocol.socks);
             var webProxy = new WebProxy($"socks5://{Global.Loopback}:{port}");
-            var url = _config.SpeedTestItem.SpeedPingTestUrl;
-            var delay = await ConnectionHandler.GetRealPingTime(url, webProxy, 10);
-            return delay > 0 ? delay : null;
+            using var client = new HttpClient(new SocketsHttpHandler
+            {
+                Proxy = webProxy,
+                UseProxy = true,
+                ConnectTimeout = TimeSpan.FromSeconds(2),
+                UseCookies = false,
+                AutomaticDecompression = DecompressionMethods.None
+            })
+            {
+                Timeout = TimeSpan.FromSeconds(3)
+            };
+
+            var url = _config.SpeedTestItem.SpeedPingTestUrl.NullIfEmpty() ?? "http://cp.cloudflare.com/generate_204";
+            var timer = Stopwatch.StartNew();
+            using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+            timer.Stop();
+            return response.IsSuccessStatusCode ? Math.Max(1, (int)timer.ElapsedMilliseconds) : null;
         }
         catch
         {
