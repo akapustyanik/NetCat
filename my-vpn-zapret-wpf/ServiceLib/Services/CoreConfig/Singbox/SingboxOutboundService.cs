@@ -524,9 +524,11 @@ public partial class CoreConfigSingboxService
         {
             healthCheckInterval = "1s";
             healthCheckUrl = "http://cp.cloudflare.com/generate_204";
-            tolerance = 100;
+            tolerance = 10;
             Logging.SaveLog($"AutoProtocolFailover sing-box urltest | outbounds={proxyTags.Count} | interval={healthCheckInterval} | tolerance={tolerance} | interrupt=true | url={healthCheckUrl}");
-            RegisterAutoFailoverWarmStandby(proxyTags);
+            var configuredStandbyCount = protocolExtra.FailoverStandbyCount.GetValueOrDefault(1);
+            var standbyCount = Math.Clamp(configuredStandbyCount <= 0 ? 1 : configuredStandbyCount, 1, Math.Max(1, proxyTags.Count - 1));
+            RegisterAutoFailoverWarmStandby(proxyTags.Take(standbyCount + 1).ToList());
         }
 
         var outUrltest = new Outbound4Sbox

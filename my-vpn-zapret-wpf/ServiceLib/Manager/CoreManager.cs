@@ -98,7 +98,7 @@ public class CoreManager
         if (_processService != null)
         {
             _autoProtocolWarmStandbyService.StartFromSingboxConfig(fileName);
-            await ProbeLocalProxyAsync();
+            _ = ProbeLocalProxySafeAsync();
             await UpdateFunc(true, $"{node.GetSummary()}");
         }
         else
@@ -311,7 +311,7 @@ public class CoreManager
         };
         using var client = new HttpClient(handler)
         {
-            Timeout = TimeSpan.FromSeconds(8)
+            Timeout = TimeSpan.FromSeconds(3)
         };
 
         var targets = new[]
@@ -320,7 +320,7 @@ public class CoreManager
             "https://www.google.com/generate_204"
         };
 
-        foreach (var target in targets)
+        await Task.WhenAll(targets.Select(async target =>
         {
             var started = DateTime.UtcNow;
             try
@@ -334,6 +334,18 @@ public class CoreManager
                 var elapsedMs = (int)(DateTime.UtcNow - started).TotalMilliseconds;
                 Logging.SaveLog($"VpnDiagnostics ProbeLocalProxy failed | proxy={proxyUri} | target={target} | elapsedMs={elapsedMs} | error={ex.GetType().Name}: {ex.Message}");
             }
+        }));
+    }
+
+    private async Task ProbeLocalProxySafeAsync()
+    {
+        try
+        {
+            await ProbeLocalProxyAsync();
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog(nameof(ProbeLocalProxyAsync), ex);
         }
     }
 
