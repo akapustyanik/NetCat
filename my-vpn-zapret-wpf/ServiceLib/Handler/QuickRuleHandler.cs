@@ -86,7 +86,7 @@ public static class QuickRuleHandler
         await FileUtils.WriteAllTextWithRetryAsync(path, content ?? "{}");
     }
 
-    public static async Task Apply(Config config, QuickRuleConfig quick)
+    public static async Task Apply(Config config, QuickRuleConfig quick, bool save = true)
     {
         var rules = new List<RulesItem>();
         var useZapretForBlockedServices = config.GuiItem.ZapretEnabled;
@@ -258,7 +258,10 @@ public static class QuickRuleHandler
         await ConfigHandler.SetDefaultRouting(config, routingItem);
 
         quick.RoutingId = routingItem.Id;
-        await Save(quick);
+        if (save)
+        {
+            await Save(quick);
+        }
     }
 
     private static List<string> NormalizeList(IEnumerable<string> list)
@@ -320,7 +323,7 @@ public static class QuickRuleHandler
         var trimmed = input.Trim();
         if (trimmed.IsNullOrEmpty())
         {
-            return trimmed;
+            return string.Empty;
         }
 
         if (TryExtractHttpUrlHost(trimmed, out var host))
@@ -335,7 +338,7 @@ public static class QuickRuleHandler
         var value = trimmed.TrimStart('*').TrimStart('.');
         if (value.IsNullOrEmpty())
         {
-            return trimmed;
+            return string.Empty;
         }
 
         return $"domain:{value}";

@@ -98,16 +98,16 @@ public class ProfilesViewModel : MyReactiveObject
         this.WhenAnyValue(
             x => x.SelectedSub,
             y => y != null && !y.Remarks.IsNullOrEmpty() && _config.SubIndexId != y.Id)
-                .Subscribe(async c => await SubSelectedChangedAsync(c));
+                .Subscribe(async c => { try { await SubSelectedChangedAsync(c); } catch (Exception ex) { Logging.SaveLog("Subscribe", ex); } });
         this.WhenAnyValue(
              x => x.SelectedMoveToGroup,
              y => y != null && !y.Remarks.IsNullOrEmpty())
-                 .Subscribe(async c => await MoveToGroup(c));
+                 .Subscribe(async c => { try { await MoveToGroup(c); } catch (Exception ex) { Logging.SaveLog("Subscribe", ex); } });
 
         this.WhenAnyValue(
           x => x.ServerFilter,
           y => y != null && _serverFilter != y)
-              .Subscribe(async c => await ServerFilterChanged(c));
+              .Subscribe(async c => { try { await ServerFilterChanged(c); } catch (Exception ex) { Logging.SaveLog("Subscribe", ex); } });
 
         //servers delete
         EditServerCmd = ReactiveCommand.CreateFromTask(async () =>
@@ -237,22 +237,22 @@ public class ProfilesViewModel : MyReactiveObject
         AppEvents.ProfilesRefreshRequested
             .AsObservable()
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(async _ => await RefreshServersBiz());
+            .Subscribe(async _ => { try { await RefreshServersBiz(); } catch (Exception ex) { Logging.SaveLog("Subscribe", ex); } });
 
         AppEvents.SubscriptionsRefreshRequested
             .AsObservable()
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(async _ => await RefreshSubscriptions());
+            .Subscribe(async _ => { try { await RefreshSubscriptions(); } catch (Exception ex) { Logging.SaveLog("Subscribe", ex); } });
 
         AppEvents.DispatcherStatisticsRequested
             .AsObservable()
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(async result => await UpdateStatistics(result));
+            .Subscribe(async result => { try { await UpdateStatistics(result); } catch (Exception ex) { Logging.SaveLog("Subscribe", ex); } });
 
         AppEvents.SetDefaultServerRequested
             .AsObservable()
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(async indexId => await SetDefaultServer(indexId));
+            .Subscribe(async indexId => { try { await SetDefaultServer(indexId); } catch (Exception ex) { Logging.SaveLog("Subscribe", ex); } });
 
         #endregion AppEvents
 
@@ -933,3 +933,4 @@ public class ProfilesViewModel : MyReactiveObject
 
     #endregion Subscription
 }
+

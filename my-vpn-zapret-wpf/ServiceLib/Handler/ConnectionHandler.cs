@@ -45,7 +45,7 @@ public static class ConnectionHandler
         try
         {
             var port = AppManager.Instance.GetLocalPort(EInboundProtocol.socks);
-            var webProxy = new WebProxy($"socks5://{Global.Loopback}:{port}");
+            var webProxy = new WebProxy($"{Global.Socks5Protocol}{Global.Loopback}:{port}");
             var url = AppManager.Instance.Config.SpeedTestItem.SpeedPingTestUrl;
 
             for (var i = 0; i < 2; i++)

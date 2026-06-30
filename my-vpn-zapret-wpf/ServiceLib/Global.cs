@@ -72,7 +72,7 @@ public class Global
     public const string RoutingRuleComma = "<COMMA>";
     public const string GrpcGunMode = "gun";
     public const string GrpcMultiMode = "multi";
-    public const int MaxPort = 65536;
+    public const int MaxPort = 65535;
     public const int MinFontSize = 8;
     public const int MinFontSizeCount = 13;
     public const string RebootAs = "rebootas";
@@ -150,8 +150,8 @@ public class Global
 
     public static readonly List<string> SpeedPingTestUrls =
     [
-        @"https://www.google.com/generate_204",
-        @"https://www.gstatic.com/generate_204",
+        @"http://cp.cloudflare.com/generate_204",
+        @"http://www.gstatic.com/generate_204",
         @"https://www.apple.com/library/test/success.html",
         @"http://www.msftconnecttest.com/connecttest.txt"
     ];

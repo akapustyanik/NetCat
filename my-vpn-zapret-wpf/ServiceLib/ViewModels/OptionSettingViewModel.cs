@@ -98,18 +98,7 @@ public class OptionSettingViewModel : MyReactiveObject
 
     #endregion Tun mode
 
-    #region CoreType
 
-    [Reactive] public string CoreType1 { get; set; }
-    [Reactive] public string CoreType2 { get; set; }
-    [Reactive] public string CoreType3 { get; set; }
-    [Reactive] public string CoreType4 { get; set; }
-    [Reactive] public string CoreType5 { get; set; }
-    [Reactive] public string CoreType6 { get; set; }
-    [Reactive] public string CoreType7 { get; set; }
-    [Reactive] public string CoreType9 { get; set; }
-
-    #endregion CoreType
 
     public ReactiveCommand<Unit, Unit> SaveCmd { get; }
 
@@ -221,68 +210,6 @@ public class OptionSettingViewModel : MyReactiveObject
 
         #endregion Tun mode
 
-        await InitCoreType();
-    }
-
-    private async Task InitCoreType()
-    {
-        if (_config.CoreTypeItem == null)
-        {
-            _config.CoreTypeItem = new List<CoreTypeItem>();
-        }
-
-        foreach (EConfigType it in Enum.GetValues(typeof(EConfigType)))
-        {
-            if (_config.CoreTypeItem.FindIndex(t => t.ConfigType == it) >= 0)
-            {
-                continue;
-            }
-
-            _config.CoreTypeItem.Add(new CoreTypeItem()
-            {
-                ConfigType = it,
-                CoreType = ECoreType.Xray
-            });
-        }
-        _config.CoreTypeItem.ForEach(it =>
-        {
-            var type = it.CoreType.ToString();
-            switch ((int)it.ConfigType)
-            {
-                case 1:
-                    CoreType1 = type;
-                    break;
-
-                case 2:
-                    CoreType2 = type;
-                    break;
-
-                case 3:
-                    CoreType3 = type;
-                    break;
-
-                case 4:
-                    CoreType4 = type;
-                    break;
-
-                case 5:
-                    CoreType5 = type;
-                    break;
-
-                case 6:
-                    CoreType6 = type;
-                    break;
-
-                case 7:
-                    CoreType7 = type;
-                    break;
-
-                case 9:
-                    CoreType9 = type;
-                    break;
-            }
-        });
-        await Task.CompletedTask;
     }
 
     private async Task SaveSettingAsync()
@@ -377,9 +304,6 @@ public class OptionSettingViewModel : MyReactiveObject
         _config.TunModeItem.Mtu = TunMtu;
         _config.TunModeItem.EnableIPv6Address = TunEnableIPv6Address;
 
-        //coreType
-        await SaveCoreType();
-
         if (await ConfigHandler.SaveConfig(_config) == 0)
         {
             await AutoStartupHandler.UpdateTask(_config);
@@ -392,53 +316,5 @@ public class OptionSettingViewModel : MyReactiveObject
         {
             NoticeManager.Instance.Enqueue(ResUI.OperationFailed);
         }
-    }
-
-    private async Task SaveCoreType()
-    {
-        for (var k = 1; k <= _config.CoreTypeItem.Count; k++)
-        {
-            var item = _config.CoreTypeItem[k - 1];
-            var type = string.Empty;
-            switch ((int)item.ConfigType)
-            {
-                case 1:
-                    type = CoreType1;
-                    break;
-
-                case 2:
-                    type = CoreType2;
-                    break;
-
-                case 3:
-                    type = CoreType3;
-                    break;
-
-                case 4:
-                    type = CoreType4;
-                    break;
-
-                case 5:
-                    type = CoreType5;
-                    break;
-
-                case 6:
-                    type = CoreType6;
-                    break;
-
-                case 7:
-                    type = CoreType7;
-                    break;
-
-                case 9:
-                    type = CoreType9;
-                    break;
-
-                default:
-                    continue;
-            }
-            item.CoreType = (ECoreType)Enum.Parse(typeof(ECoreType), type);
-        }
-        await Task.CompletedTask;
     }
 }

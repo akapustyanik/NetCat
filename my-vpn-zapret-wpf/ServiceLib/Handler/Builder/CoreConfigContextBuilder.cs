@@ -148,37 +148,7 @@ public class CoreConfigContextBuilder
             };
         }
 
-        if (!nodeContext.IsTunEnabled
-            || coreType != ECoreType.Xray
-            || node.ConfigType == EConfigType.Custom)
-        {
-            return null;
-        }
-
-        var tunProtectSsPort = Utils.GetFreePort();
-        var proxyRelaySsPort = Utils.GetFreePort();
-        var preItem = new ProfileItem()
-        {
-            CoreType = ECoreType.sing_box,
-            ConfigType = EConfigType.Shadowsocks,
-            Address = Global.Loopback,
-            Port = proxyRelaySsPort,
-            Password = Global.None,
-        };
-        preItem.SetProtocolExtra(preItem.GetProtocolExtra() with
-        {
-            SsMethod = Global.None,
-        });
-        var preResult2 = await Build(nodeContext.AppConfig, preItem);
-        return preResult2 with
-        {
-            Context = preResult2.Context with
-            {
-                ProtectDomainList = [.. nodeContext.ProtectDomainList ?? [], .. preResult2.Context.ProtectDomainList ?? []],
-                TunProtectSsPort = tunProtectSsPort,
-                ProxyRelaySsPort = proxyRelaySsPort,
-            }
-        };
+        return null;
     }
 
     /// <summary>

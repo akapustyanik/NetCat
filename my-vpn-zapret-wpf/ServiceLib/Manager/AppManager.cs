@@ -412,7 +412,10 @@ public sealed class AppManager
 
                 item.SetProtocolExtra(extra);
 
-                item.Password = GetLegacyString(item, "Id");
+                if (item.ConfigType != EConfigType.TUIC)
+                {
+                    item.Password = GetLegacyString(item, "Id");
+                }
 
                 item.ConfigVersion = 3;
 
@@ -467,7 +470,7 @@ public sealed class AppManager
             {
                 var extra = item.GetProtocolExtra();
 
-                extra = extra with { GroupType = nameof(item.ConfigType) };
+                extra = extra with { GroupType = item.ConfigType.ToString() };
                 groupItems.TryGetValue(item.IndexId, out var groupItem);
                 if (groupItem != null && !groupItem.NotHasChild())
                 {
@@ -560,52 +563,12 @@ public sealed class AppManager
 
     public List<string> GetShadowsocksSecurities(ProfileItem profileItem)
     {
-        var coreType = GetCoreType(profileItem, EConfigType.Shadowsocks);
-        switch (coreType)
-        {
-            case ECoreType.v2fly:
-                return Global.SsSecurities;
-
-            case ECoreType.Xray:
-                return Global.SsSecuritiesInXray;
-
-            case ECoreType.sing_box:
-                return Global.SsSecuritiesInSingbox;
-        }
         return Global.SsSecuritiesInSingbox;
     }
 
     public ECoreType GetCoreType(ProfileItem profileItem, EConfigType eConfigType)
     {
-        if (_config.TunModeItem.EnableTun)
-        {
-            if (ShouldPreferXrayUnderTun(profileItem, eConfigType))
-            {
-                return ECoreType.Xray;
-            }
-            return ECoreType.sing_box;
-        }
-
-        if (profileItem?.CoreType != null)
-        {
-            return (ECoreType)profileItem.CoreType;
-        }
-
-        var item = _config.CoreTypeItem?.FirstOrDefault(it => it.ConfigType == eConfigType);
-        return item?.CoreType ?? ECoreType.Xray;
-    }
-
-    private static bool ShouldPreferXrayUnderTun(ProfileItem? profileItem, EConfigType eConfigType)
-    {
-        if (profileItem == null || eConfigType == EConfigType.Custom)
-        {
-            return false;
-        }
-
-        // sing-box transport generation does not preserve gRPC authority, while Xray does.
-        // Under TUN, prefer Xray for gRPC nodes that rely on authority/host headers.
-        return string.Equals(profileItem.GetNetwork(), nameof(ETransport.grpc), StringComparison.Ordinal)
-            && profileItem.RequestHost.IsNotEmpty();
+        return ECoreType.sing_box;
     }
 
     #endregion Core Type

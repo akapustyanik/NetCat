@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
 		<OutputType>Library</OutputType>
@@ -21,13 +21,10 @@
 	</ItemGroup>
 
 	<ItemGroup>
-		<EmbeddedResource Include="Sample\clash_mixin_yaml" />
-		<EmbeddedResource Include="Sample\clash_tun_yaml" />
 		<EmbeddedResource Include="Sample\custom_routing_black" />
 		<EmbeddedResource Include="Sample\custom_routing_global" />
 		<EmbeddedResource Include="Sample\custom_routing_white" />
 		<EmbeddedResource Include="Sample\dns_singbox_normal" />
-		<EmbeddedResource Include="Sample\dns_v2ray_normal" />
 		<EmbeddedResource Include="Sample\kill_as_sudo_linux_sh" />
 		<EmbeddedResource Include="Sample\kill_as_sudo_osx_sh" />
 		<EmbeddedResource Include="Sample\pac" />

@@ -10,7 +10,6 @@ public class StatisticsManager
     private List<ServerStatItem> _lstServerStat;
     private Func<ServerSpeedItem, Task>? _updateFunc;
 
-    private StatisticsXrayService? _statisticsXray;
     private StatisticsSingboxService? _statisticsSingbox;
     private static readonly string _tag = "StatisticsHandler";
     public List<ServerStatItem> ServerStat => _lstServerStat;
@@ -23,7 +22,6 @@ public class StatisticsManager
         {
             await InitData();
 
-            _statisticsXray = new StatisticsXrayService(config, UpdateServerStatHandler);
             _statisticsSingbox = new StatisticsSingboxService(config, UpdateServerStatHandler);
         }
     }
@@ -32,7 +30,6 @@ public class StatisticsManager
     {
         try
         {
-            _statisticsXray?.Close();
             _statisticsSingbox?.Close();
         }
         catch (Exception ex)

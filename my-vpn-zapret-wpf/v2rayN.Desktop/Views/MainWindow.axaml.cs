@@ -14,8 +14,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>
     private CheckUpdateView? _checkUpdateView;
     private BackupAndRestoreView? _backupAndRestoreView;
     private bool _blCloseByUser = false;
-    private RegisteredWaitHandle? _privateHubCommandWaitHandle;
-    private EventWaitHandle? _privateHubCommandSignal;
+
 
     public MainWindow()
     {
@@ -159,7 +158,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>
             Title = $"{Utils.GetVersion()} - {(Utils.IsAdministrator() ? ResUI.RunAsAdmin : ResUI.NotRunAsAdmin)}";
 
             ThreadPool.RegisterWaitForSingleObject(Program.ProgramStarted, OnProgramStarted, null, -1, false);
-            RegisterPrivateHubCommandListener();
+
             HotkeyManager.Instance.Init(_config, OnHotkeyHandler);
         }
         else
@@ -185,49 +184,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>
             DispatcherPriority.Default);
     }
 
-    private void RegisterPrivateHubCommandListener()
-    {
-        try
-        {
-            _privateHubCommandSignal = new EventWaitHandle(false, EventResetMode.AutoReset, PrivateHubExternalCommandBridge.GetSignalName());
-            _privateHubCommandWaitHandle = ThreadPool.RegisterWaitForSingleObject(
-                _privateHubCommandSignal,
-                (_, _) => Dispatcher.UIThread.Post(() => _ = ProcessPendingPrivateHubCommandsAsync(), DispatcherPriority.Default),
-                null,
-                -1,
-                false);
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("RegisterPrivateHubCommandListener", ex);
-        }
-    }
 
-    private async Task ProcessPendingPrivateHubCommandsAsync()
-    {
-        var commands = PrivateHubExternalCommandBridge.TakePendingCommands();
-        if (commands.Count == 0 || ViewModel == null)
-        {
-            return;
-        }
-
-        foreach (var command in commands)
-        {
-            try
-            {
-                switch (command.Command)
-                {
-                    case PrivateHubExternalCommandNames.RefreshSubscriptions:
-                        await ViewModel.UpdateSubscriptionProcess("", command.UseProxy);
-                        break;
-                }
-            }
-            catch (Exception ex)
-            {
-                Logging.SaveLog($"PrivateHub command failed: {command.Command}", ex);
-            }
-        }
-    }
 
     private async Task DelegateSnackMsg(string content)
     {
@@ -318,8 +275,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>
     {
         if (_blCloseByUser)
         {
-            _privateHubCommandWaitHandle?.Unregister(null);
-            _privateHubCommandSignal?.Dispose();
+
             return;
         }
 
@@ -497,7 +453,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>
             ShowHideWindow(false);
         }
         RestoreUI();
-        _ = ProcessPendingPrivateHubCommandsAsync();
+
     }
 
     private void RestoreUI()

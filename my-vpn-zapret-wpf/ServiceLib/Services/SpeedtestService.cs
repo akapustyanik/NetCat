@@ -5,7 +5,7 @@ public class SpeedtestService(Config config, Func<SpeedTestResult, Task> updateF
     private static readonly string _tag = "SpeedtestService";
     private readonly Config? _config = config;
     private readonly Func<SpeedTestResult, Task>? _updateFunc = updateFunc;
-    private static readonly ConcurrentBag<string> _lstExitLoop = new();
+    private static readonly ConcurrentDictionary<string, byte> _lstExitLoop = new();
 
     public void RunLoop(ESpeedActionType actionType, List<ProfileItem> selecteds)
     {
@@ -22,20 +22,19 @@ public class SpeedtestService(Config config, Func<SpeedTestResult, Task> updateF
         if (!_lstExitLoop.IsEmpty)
         {
             _ = UpdateFunc("", ResUI.SpeedtestingStop);
-
             _lstExitLoop.Clear();
         }
     }
 
     private static bool ShouldStopTest(string exitLoopKey)
     {
-        return !_lstExitLoop.Any(p => p == exitLoopKey);
+        return !_lstExitLoop.ContainsKey(exitLoopKey);
     }
 
     private async Task RunAsync(ESpeedActionType actionType, List<ProfileItem> selecteds)
     {
         var exitLoopKey = Utils.GetGuid(false);
-        _lstExitLoop.Add(exitLoopKey);
+        _lstExitLoop.TryAdd(exitLoopKey, 0);
 
         var lstSelected = await GetClearItem(actionType, selecteds);
 
@@ -314,7 +313,7 @@ public class SpeedtestService(Config config, Func<SpeedTestResult, Task> updateF
 
     private async Task<int> DoRealPing(ServerTestItem it)
     {
-        var webProxy = new WebProxy($"socks5://{Global.Loopback}:{it.Port}");
+        var webProxy = new WebProxy($"{Global.Socks5Protocol}{Global.Loopback}:{it.Port}");
         var responseTime = await ConnectionHandler.GetRealPingTime(_config.SpeedTestItem.SpeedPingTestUrl, webProxy, 10);
 
         ProfileExManager.Instance.SetTestDelay(it.IndexId, responseTime > 0 ? responseTime : 0);
@@ -326,7 +325,7 @@ public class SpeedtestService(Config config, Func<SpeedTestResult, Task> updateF
     {
         await UpdateFunc(it.IndexId, null, ResUI.Speedtesting);
 
-        var webProxy = new WebProxy($"socks5://{Global.Loopback}:{it.Port}");
+        var webProxy = new WebProxy($"{Global.Socks5Protocol}{Global.Loopback}:{it.Port}");
         var url = _config.SpeedTestItem.SpeedTestUrl;
         var timeout = _config.SpeedTestItem.SpeedTestTimeout;
         await downloadHandle.DownloadDataAsync(url, webProxy, timeout, async (success, msg) =>
@@ -390,7 +389,10 @@ public class SpeedtestService(Config config, Func<SpeedTestResult, Task> updateF
 
     private async Task UpdateFunc(string indexId, string? delay, string speed = "")
     {
-        await _updateFunc?.Invoke(new() { IndexId = indexId, Delay = delay, Speed = speed });
+        if (_updateFunc != null)
+        {
+            await _updateFunc(new() { IndexId = indexId, Delay = delay, Speed = speed });
+        }
         if (indexId.IsNotEmpty() && speed.IsNotEmpty())
         {
             ProfileExManager.Instance.SetTestMessage(indexId, speed);

@@ -376,7 +376,11 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
     public async Task CheckUpdateZapret()
     {
         var archivePath = Utils.GetTempPath($"{Utils.GetGuid()}.zip");
-        var extractPath = Utils.GetTempPath($"zapret-update-{Utils.GetGuid()}");
+        var targetPath = GetZapretInstallPath();
+        
+        var targetParent = Path.GetDirectoryName(targetPath) ?? Utils.StartupPath();
+        var tempUpdatePath = Path.Combine(targetParent, $"zapret-update-temp-{Utils.GetGuid()}");
+        var backupOldPath = Path.Combine(targetParent, $"zapret-old-backup-{Utils.GetGuid()}");
         string? preservePath = null;
 
         try
@@ -398,7 +402,6 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
                 return;
             }
 
-            var targetPath = GetZapretInstallPath();
             var currentVersion = GetZapretLocalVersion(targetPath);
             var latestVersion = NormalizeZapretVersion(release.TagName)
                 ?? NormalizeZapretVersion(release.Name)
@@ -426,6 +429,20 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
 
             await UpdateFunc(false, ResUI.MsgUnpacking);
 
+            Directory.CreateDirectory(tempUpdatePath);
+            System.IO.Compression.ZipFile.ExtractToDirectory(archivePath, tempUpdatePath, true);
+            FileUtils.TryUnblockDirectoryFiles(tempUpdatePath);
+
+            var extractedZapretPath = FindZapretExtractRoot(tempUpdatePath);
+            if (extractedZapretPath.IsNullOrEmpty())
+            {
+                throw new DirectoryNotFoundException("Zapret archive does not contain a valid bundle.");
+            }
+
+            preservePath = BackupZapretUserFiles(targetPath);
+            RestoreZapretUserFiles(preservePath, extractedZapretPath);
+            ZapretHandler.SanitizeBrowserRedirects(extractedZapretPath);
+
             var wasRunning = ZapretHandler.IsRunning();
             var preferredConfig = _config?.GuiItem.LastZapretConfig;
             if (wasRunning)
@@ -434,22 +451,29 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
                 await WaitForZapretStopAsync();
             }
 
-            Directory.CreateDirectory(extractPath);
-            System.IO.Compression.ZipFile.ExtractToDirectory(archivePath, extractPath, true);
-            FileUtils.TryUnblockDirectoryFiles(extractPath);
-
-            var extractedZapretPath = FindZapretExtractRoot(extractPath);
-            if (extractedZapretPath.IsNullOrEmpty())
+            if (Directory.Exists(targetPath))
             {
-                throw new DirectoryNotFoundException("Zapret archive does not contain a valid bundle.");
+                Directory.Move(targetPath, backupOldPath);
             }
 
-            preservePath = BackupZapretUserFiles(targetPath);
+            try
+            {
+                Directory.Move(extractedZapretPath, targetPath);
+            }
+            catch (Exception ex)
+            {
+                Logging.SaveLog(_tag, ex);
+                if (Directory.Exists(backupOldPath))
+                {
+                    Directory.Move(backupOldPath, targetPath);
+                }
+                throw new IOException("Failed to replace Zapret directory, rolling back.", ex);
+            }
 
-            Directory.CreateDirectory(targetPath);
-            CopyZapretBundle(extractedZapretPath, targetPath);
-            RestoreZapretUserFiles(preservePath, targetPath);
-            ZapretHandler.SanitizeBrowserRedirects(targetPath);
+            if (Directory.Exists(backupOldPath))
+            {
+                TryDeleteDirectory(backupOldPath);
+            }
 
             var successTemplate = GetResourceText("MsgUpdateZapretSuccessfully", "Updated Zapret successfully ({0}).");
             var successVersion = latestVersion ?? release.TagName ?? asset.Name ?? "latest";
@@ -474,8 +498,12 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
         finally
         {
             TryDeleteFile(archivePath);
-            TryDeleteDirectory(extractPath);
+            TryDeleteDirectory(tempUpdatePath);
             TryDeleteDirectory(preservePath);
+            if (Directory.Exists(backupOldPath))
+            {
+                TryDeleteDirectory(backupOldPath);
+            }
         }
     }
 
@@ -543,7 +571,7 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
             };
         }
 
-        var url = Path.Combine(coreInfo.Url, "latest");
+        var url = coreInfo.Url.TrimEnd('/') + "/latest";
         var lastUrl = await downloadHandle.UrlRedirectAsync(url, true);
         if (lastUrl == null)
         {
@@ -893,9 +921,8 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
     private string GetInstalledZapretVersionDisplay()
     {
         var zapretPath = ZapretHandler.FindZapretPath(_config?.GuiItem.ZapretPath);
-        return GetZapretLocalVersion(zapretPath).IsNullOrEmpty()
-            ? "not installed"
-            : GetZapretLocalVersion(zapretPath)!;
+        var version = GetZapretLocalVersion(zapretPath);
+        return version.IsNullOrEmpty() ? "not installed" : version!;
     }
 
     private static bool TryReadGuiUpdateManifestMetadata(string archivePath, out GuiUpdateManifestMetadata? manifest)
@@ -1132,7 +1159,7 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
                 _ => null,
             };
         }
-        return await Task.FromResult("");
+        return string.Empty;
     }
 
     #endregion CheckUpdate private
@@ -1161,7 +1188,7 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
     private async Task<bool> UpdateOtherFiles()
     {
         //If it is not in China area, no update is required
-        if (_config.ConstItem.GeoSourceUrl.IsNotEmpty())
+        if (_config?.ConstItem?.GeoSourceUrl.IsNotEmpty() == true)
         {
             return false;
         }
@@ -1284,7 +1311,7 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
 
     private async Task<bool> UpdateSrsFile(string type, string srsName)
     {
-        var srsUrl = string.IsNullOrEmpty(_config.ConstItem.SrsSourceUrl)
+        var srsUrl = string.IsNullOrEmpty(_config?.ConstItem?.SrsSourceUrl)
                         ? Global.SingboxRulesetUrl
                         : _config.ConstItem.SrsSourceUrl;
 
@@ -1360,7 +1387,10 @@ public class UpdateService(Config config, Func<bool, string, Task> updateFunc)
 
     private async Task UpdateFunc(bool notify, string msg)
     {
-        await _updateFunc?.Invoke(notify, msg);
+        if (_updateFunc != null)
+        {
+            await _updateFunc(notify, msg);
+        }
     }
 
     private string GetGeoFileUpToDateMessage(string fileName)

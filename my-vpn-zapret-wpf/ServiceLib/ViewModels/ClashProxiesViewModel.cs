@@ -72,7 +72,7 @@ public class ClashProxiesViewModel : MyReactiveObject
         this.WhenAnyValue(
            x => x.RuleModeSelected,
            y => y >= 0)
-               .Subscribe(async c => await DoRuleModeSelected(c));
+               .Subscribe(async c => { try { await DoRuleModeSelected(c); } catch (Exception ex) { Logging.SaveLog("Subscribe", ex); } });
 
         this.WhenAnyValue(
            x => x.SortingSelected,
@@ -91,7 +91,7 @@ public class ClashProxiesViewModel : MyReactiveObject
         AppEvents.ProxiesReloadRequested
             .AsObservable()
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(async _ => await ProxiesReload());
+            .Subscribe(async _ => { try { await ProxiesReload(); } catch (Exception ex) { Logging.SaveLog("Subscribe", ex); } });
 
         #endregion AppEvents
 
@@ -457,3 +457,4 @@ public class ClashProxiesViewModel : MyReactiveObject
 
     #endregion task
 }
+
