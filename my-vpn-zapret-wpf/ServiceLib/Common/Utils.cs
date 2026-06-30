@@ -210,7 +210,8 @@ public class Utils
             return result;
         }
 
-        var parts = query[1..].Split('&', StringSplitOptions.RemoveEmptyEntries);
+        var rawQuery = query.StartsWith('?') ? query[1..] : query;
+        var parts = rawQuery.Split('&', StringSplitOptions.RemoveEmptyEntries);
         foreach (var part in parts)
         {
             var keyValue = part.Split('=');
@@ -491,9 +492,9 @@ public class Utils
     /// </summary>
     /// <param name="oText"></param>
     /// <returns></returns>
-    public static bool IsNumeric(string oText)
+    public static bool IsNumeric(string? oText)
     {
-        return oText.All(char.IsNumber);
+        return !string.IsNullOrEmpty(oText) && oText.All(char.IsDigit);
     }
 
     /// <summary>
@@ -930,13 +931,14 @@ public class Utils
             var cmd = Cli.Wrap(filePath);
             if (args != null)
             {
-                if (args.Count() == 1)
+                var list = args.ToList();
+                if (list.Count == 1)
                 {
-                    cmd = cmd.WithArguments(args.First());
+                    cmd = cmd.WithArguments(list[0]);
                 }
                 else
                 {
-                    cmd = cmd.WithArguments(args);
+                    cmd = cmd.WithArguments(list);
                 }
             }
 
@@ -1116,7 +1118,7 @@ public class Utils
 
         if (coreType != null)
         {
-            tempPath = Path.Combine(tempPath, coreType.ToLower().ToString());
+            tempPath = Path.Combine(tempPath, coreType.ToLower());
             if (!Directory.Exists(tempPath))
             {
                 Directory.CreateDirectory(tempPath);

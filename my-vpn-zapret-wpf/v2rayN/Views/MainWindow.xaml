@@ -178,6 +178,7 @@
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
                                     <Button
                                         Grid.Column="0"
@@ -187,9 +188,15 @@
                                         Click="OnAddLink" />
                                     <Button
                                         Grid.Column="1"
+                                        Content="Импорт из файла"
+                                        Style="{StaticResource SubtleButton}"
+                                        Margin="0,0,6,0"
+                                        Click="OnImportFromFile" />
+                                    <Button
+                                        Grid.Column="2"
                                         Content="Создать конфиг"
                                         Style="{StaticResource SubtleButton}"
-                                        Margin="6,0,0,0"
+                                        Margin="0,0,0,0"
                                         Click="OnCreateConfigClick">
                                         <Button.ContextMenu>
                                             <ContextMenu>
@@ -559,6 +566,140 @@
                                 </ListBox.ItemTemplate>
                                 </ListBox>
                                 <TextBlock Grid.Row="3" Margin="0,8,0,0" FontSize="12" Opacity="0.7" Text="{Binding ZapretStatus}" TextWrapping="Wrap" />
+                            </Grid>
+                        </GroupBox>
+                    </Grid>
+                </TabItem>
+
+                <TabItem Header="OpenVPN">
+                    <Grid Margin="16,0,8,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="18" />
+                            <ColumnDefinition Width="320" />
+                        </Grid.ColumnDefinitions>
+
+                        <GroupBox Header="OpenVPN Profiles" Style="{StaticResource MyGroupBox}">
+                            <Grid Margin="12">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <WrapPanel Grid.Row="0">
+                                    <Button Content="Импорт" Style="{StaticResource DefButton}" Click="OnImportParallelOpenVpnProfile" />
+                                    <Button Margin="8,0,0,0" Content="Запустить" Style="{StaticResource SubtleButton}" Click="OnStartParallelOpenVpn" />
+                                    <Button Margin="8,0,0,0" Content="Остановить" Style="{StaticResource SubtleButton}" Click="OnStopParallelOpenVpn" />
+                                    <Button Margin="8,0,0,0" Content="Удалить" Style="{StaticResource SubtleButton}" Click="OnRemoveParallelOpenVpnProfile" />
+                                    <Button Margin="8,0,0,0" Content="Папка" Style="{StaticResource SubtleButton}" Click="OnOpenParallelOpenVpnFolder" />
+                                </WrapPanel>
+                                <TextBlock Grid.Row="1" Margin="0,8,0,0" FontSize="12" Opacity="0.75" Text="{Binding ParallelOpenVpnStatus}" TextWrapping="Wrap" />
+                                <ListBox
+                                    Grid.Row="2"
+                                    Margin="0,8,0,0"
+                                    ItemsSource="{Binding ParallelOpenVpnProfiles}"
+                                    SelectedItem="{Binding SelectedParallelOpenVpnProfile}"
+                                    PreviewMouseWheel="OnNestedScrollViewerPreviewMouseWheel"
+                                    ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                    ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                    ScrollViewer.CanContentScroll="False"
+                                    common:SmoothScrollBehavior.IsEnabled="True"
+                                    MinHeight="220">
+                                    <ListBox.ItemContainerStyle>
+                                        <Style TargetType="ListBoxItem">
+                                            <Setter Property="OverridesDefaultStyle" Value="True" />
+                                            <Setter Property="Padding" Value="0" />
+                                            <Setter Property="Margin" Value="0,0,0,8" />
+                                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                            <Setter Property="Template">
+                                                <Setter.Value>
+                                                    <ControlTemplate TargetType="ListBoxItem">
+                                                        <Border Background="Transparent" BorderBrush="Transparent" BorderThickness="0">
+                                                            <ContentPresenter />
+                                                        </Border>
+                                                    </ControlTemplate>
+                                                </Setter.Value>
+                                            </Setter>
+                                        </Style>
+                                    </ListBox.ItemContainerStyle>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border
+                                                x:Name="OpenVpnProfileCard"
+                                                Padding="10"
+                                                Background="{DynamicResource NetCatSurfaceAltBrush}"
+                                                BorderBrush="{DynamicResource NetCatWindowChromeBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="18">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel>
+                                                        <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                                                        <TextBlock Margin="0,4,0,0" FontSize="12" Opacity="0.8" Text="{Binding Summary}" TextWrapping="Wrap" />
+                                                    </StackPanel>
+                                                    <TextBlock
+                                                        Grid.Column="1"
+                                                        Margin="12,0,0,0"
+                                                        VerticalAlignment="Center"
+                                                        FontSize="12"
+                                                        FontWeight="SemiBold"
+                                                        Opacity="0.85"
+                                                        Text="{Binding Status}" />
+                                                </Grid>
+                                            </Border>
+                                            <DataTemplate.Triggers>
+                                                <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=IsSelected}" Value="True">
+                                                    <Setter TargetName="OpenVpnProfileCard" Property="BorderThickness" Value="2" />
+                                                    <Setter TargetName="OpenVpnProfileCard" Property="BorderBrush" Value="{DynamicResource NetCatAccentBrush}" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding IsRunning}" Value="True">
+                                                    <Setter TargetName="OpenVpnProfileCard" Property="Background" Value="#1F2E7D32" />
+                                                    <Setter TargetName="OpenVpnProfileCard" Property="BorderBrush" Value="#4CAF50" />
+                                                    <Setter TargetName="OpenVpnProfileCard" Property="BorderThickness" Value="2" />
+                                                </DataTrigger>
+                                            </DataTemplate.Triggers>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                                <TextBlock Grid.Row="3" Margin="0,8,0,0" FontSize="12" Opacity="0.7" Text="{Binding SelectedParallelOpenVpnConfigPath}" TextWrapping="Wrap" />
+                            </Grid>
+                        </GroupBox>
+
+                        <GroupBox Grid.Column="2" Header="OpenVPN Domains" Style="{StaticResource MyGroupBox}">
+                            <Grid Margin="12">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <Grid Grid.Row="0" Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox Style="{StaticResource MyOutlinedTextBox}" Text="{Binding NewParallelOpenVpnDomain, UpdateSourceTrigger=PropertyChanged}" MinHeight="40" VerticalContentAlignment="Center" />
+                                    <Button Grid.Column="1" Margin="8,0,0,0" Content="Add" Style="{StaticResource DefButton}" Click="OnAddParallelOpenVpnDomain" Width="80" />
+                                </Grid>
+
+                                <ListBox
+                                    Grid.Row="1"
+                                    ItemsSource="{Binding ParallelOpenVpnDomains}"
+                                    SelectedItem="{Binding SelectedParallelOpenVpnDomain}"
+                                    PreviewMouseWheel="OnNestedScrollViewerPreviewMouseWheel"
+                                    ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                    ScrollViewer.CanContentScroll="False"
+                                    common:SmoothScrollBehavior.IsEnabled="True"
+                                    MinHeight="320" />
+
+                                <Separator Grid.Row="2" Margin="12,12,12,12" Background="#26FFFFFF" Height="1" />
+
+                                <Button Grid.Row="3" Content="Remove" Style="{StaticResource SubtleButton}" Click="OnRemoveParallelOpenVpnDomain" Height="36" />
                             </Grid>
                         </GroupBox>
                     </Grid>

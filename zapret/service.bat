@@ -1,5 +1,5 @@
 @echo off
-set "LOCAL_VERSION=1.9.8"
+set "LOCAL_VERSION=1.9.9c"
 
 :: External commands
 if "%~1"=="status_zapret" (
@@ -53,16 +53,21 @@ if "%1"=="admin" (
 
 :: MENU ================================
 setlocal EnableDelayedExpansion
+title ZAPRET SERVICE MANAGER v!LOCAL_VERSION!
 :menu
+
 cls
+
 call :ipset_switch_status
 call :game_switch_status
 call :check_updates_switch_status
+call :get_strategy_name
 
 set "menu_choice=null"
 
 echo.
 echo   ZAPRET SERVICE MANAGER v!LOCAL_VERSION!
+echo.  !CurrentStrategy!
 echo   ----------------------------------------
 echo.
 echo   :: SERVICE
@@ -113,7 +118,8 @@ if not exist "%LISTS_PATH%ipset-exclude-user.txt" (
     echo 203.0.113.113/32>"%LISTS_PATH%ipset-exclude-user.txt"
 )
 if not exist "%LISTS_PATH%list-general-user.txt" (
-    echo domain.example.abc>"%LISTS_PATH%list-general-user.txt"
+    echo # Never leave this file empty>"%LISTS_PATH%list-general-user.txt"
+    echo domain.example.abc>>"%LISTS_PATH%list-general-user.txt"
 )
 if not exist "%LISTS_PATH%list-exclude-user.txt" (
     echo domain.example.abc>"%LISTS_PATH%list-exclude-user.txt"
@@ -124,6 +130,7 @@ exit /b
 
 :: TCP ENABLE ==========================
 :tcp_enable
+chcp 437 > nul
 netsh interface tcp show global | findstr /i "timestamps" | findstr /i "enabled" > nul || netsh interface tcp set global timestamps=enabled > nul 2>&1
 exit /b
 
@@ -359,6 +366,22 @@ goto menu
 
 :: CHECK UPDATES =======================
 :service_check_updates
+if "%1"=="soft" exit
+goto menu
+if "%1"=="soft" exit
+goto menu
+if "%1"=="soft" exit
+goto menu
+if "%1"=="soft" exit
+goto menu
+if "%1"=="soft" exit
+goto menu
+if "%1"=="soft" exit
+goto menu
+if "%1"=="soft" exit
+goto menu
+if "%1"=="soft" exit
+goto menu
 chcp 437 > nul
 cls
 
@@ -391,7 +414,7 @@ echo New version available: %GITHUB_VERSION%
 echo Release page: %GITHUB_RELEASE_URL%%GITHUB_VERSION%
 
 echo Opening the download page...
-start "" "%GITHUB_DOWNLOAD_URL%"
+rem NetCat blocked browser redirect: start "" "%GITHUB_DOWNLOAD_URL%"
 
 
 if "%1"=="soft" exit 
@@ -816,7 +839,7 @@ for /f %%i in ('type "%listFile%" 2^>nul ^| find /c /v ""') do set "lineCount=%%
 if !lineCount!==0 (
     set "IPsetStatus=any"
 ) else (
-    findstr /R "^203\.0\.113\.113/32$" "%listFile%" >nul
+    findstr /C:"203.0.113.113/32" "%listFile%" >nul
     if !errorlevel!==0 (
         set "IPsetStatus=none"
     ) else (
@@ -992,6 +1015,13 @@ echo.
 start "" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0utils\test zapret.ps1"
 pause
 goto menu
+
+
+:: Get strategy name
+:get_strategy_name
+set "CurrentStrategy="
+for /f "tokens=2*" %%A in ('reg query "HKLM\System\CurrentControlSet\Services\zapret" /v zapret-discord-youtube 2^>nul') do set "CurrentStrategy=Strategy: %%B"
+exit /b
 
 
 :: Utility functions

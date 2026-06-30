@@ -220,7 +220,10 @@ public class CoreManager
 
     private async Task UpdateFunc(bool notify, string msg)
     {
-        await _updateFunc?.Invoke(notify, msg);
+        if (_updateFunc != null)
+        {
+            await _updateFunc(notify, msg);
+        }
     }
 
     #endregion Private

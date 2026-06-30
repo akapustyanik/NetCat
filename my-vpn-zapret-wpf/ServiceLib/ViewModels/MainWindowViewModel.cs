@@ -229,22 +229,22 @@ public class MainWindowViewModel : MyReactiveObject
         AppEvents.ReloadRequested
             .AsObservable()
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(async _ => await Reload());
+            .Subscribe(async _ => { try { await Reload(); } catch (Exception ex) { Logging.SaveLog("Subscribe", ex); } });
 
         AppEvents.AddServerViaScanRequested
             .AsObservable()
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(async _ => await AddServerViaScanAsync());
+            .Subscribe(async _ => { try { await AddServerViaScanAsync(); } catch (Exception ex) { Logging.SaveLog("Subscribe", ex); } });
 
         AppEvents.AddServerViaClipboardRequested
             .AsObservable()
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(async _ => await AddServerViaClipboardAsync(null));
+            .Subscribe(async _ => { try { await AddServerViaClipboardAsync(null); } catch (Exception ex) { Logging.SaveLog("Subscribe", ex); } });
 
         AppEvents.SubscriptionsUpdateRequested
             .AsObservable()
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(async blProxy => await UpdateSubscriptionProcess("", blProxy));
+            .Subscribe(async blProxy => { try { await UpdateSubscriptionProcess("", blProxy); } catch (Exception ex) { Logging.SaveLog("Subscribe", ex); } });
 
         #endregion AppEvents
 
@@ -617,3 +617,4 @@ public class MainWindowViewModel : MyReactiveObject
 
     #endregion Presets
 }
+

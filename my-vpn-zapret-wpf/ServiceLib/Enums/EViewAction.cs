@@ -8,6 +8,7 @@ public enum EViewAction
     AddBatchRoutingRulesYesNo,
     SetClipboardData,
     AddServerViaClipboard,
+    AddServerViaFile,
     ImportRulesFromClipboard,
     ProfilesFocus,
     ShareSub,

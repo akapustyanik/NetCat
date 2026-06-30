@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Net.NetworkInformation;
+using System.Text;
 using System.Threading.Tasks;
 using ServiceLib.Common;
 using ServiceLib.Models;
@@ -61,6 +62,8 @@ public static class ZapretHandler
 
         return Directory.GetFiles(zapretPath, "*.bat")
             .Select(Path.GetFileName)
+            .Where(name => name != null)
+            .Select(name => name!)
             .Where(name => !string.Equals(name, "service.bat", StringComparison.OrdinalIgnoreCase))
             .Where(name => !IsHiddenLaunchBat(name))
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
@@ -123,10 +126,16 @@ public static class ZapretHandler
             Path.GetDirectoryName(batPath) ?? Path.GetTempPath(),
             $"{HiddenLaunchPrefix}{Path.GetFileNameWithoutExtension(batPath)}-{Guid.NewGuid():N}.bat");
 
-        var content = File.ReadAllText(batPath);
-        content = content.Replace("start \"zapret: %~n0\" /min", "start \"\" /b", StringComparison.OrdinalIgnoreCase);
+        // Use Encoding.Default (system ANSI codepage) to preserve Cyrillic and other
+        // non-ASCII chars that .bat files may contain (ANSI, not UTF-8 w/BOM)
+        var content = File.ReadAllText(batPath, Encoding.Default);
+        content = System.Text.RegularExpressions.Regex.Replace(
+            content,
+            @"start\s+(?:""[^""]*"")?\s*/min",
+            "start \"\" /b",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         content = StripBrowserRedirectCommands(content);
-        File.WriteAllText(tempPath, content);
+        File.WriteAllText(tempPath, content, Encoding.Default);
         return tempPath;
     }
 
@@ -144,11 +153,12 @@ public static class ZapretHandler
         {
             try
             {
-                var content = File.ReadAllText(filePath);
+                // Use Encoding.Default (system ANSI codepage) — .bat/.cmd files may be ANSI-encoded
+                var content = File.ReadAllText(filePath, Encoding.Default);
                 var sanitized = StripBrowserRedirectCommands(content);
                 if (!string.Equals(content, sanitized, StringComparison.Ordinal))
                 {
-                    File.WriteAllText(filePath, sanitized);
+                    File.WriteAllText(filePath, sanitized, Encoding.Default);
                     changed++;
                 }
             }
@@ -164,15 +174,26 @@ public static class ZapretHandler
     private static string StripBrowserRedirectCommands(string content)
     {
         var lines = content.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        var newLines = new System.Collections.Generic.List<string>();
         for (var i = 0; i < lines.Length; i++)
         {
-            if (IsBrowserRedirectLine(lines[i]))
+            var line = lines[i];
+            if (IsBrowserRedirectLine(line))
             {
-                lines[i] = $"rem NetCat blocked browser redirect: {lines[i]}";
+                newLines.Add($"rem NetCat blocked browser redirect: {line}");
+            }
+            else
+            {
+                newLines.Add(line);
+                if (line.Trim().Equals(":service_check_updates", StringComparison.OrdinalIgnoreCase))
+                {
+                    newLines.Add("if \"%1\"==\"soft\" exit");
+                    newLines.Add("goto menu");
+                }
             }
         }
 
-        return string.Join(Environment.NewLine, lines);
+        return string.Join(Environment.NewLine, newLines);
     }
 
     private static bool IsBrowserRedirectLine(string line)
@@ -275,6 +296,10 @@ public static class ZapretHandler
 
             result.Message = BuildSummaryMessage(result);
         }
+        catch (OperationCanceledException)
+        {
+            throw; // propagate cancellation — don't swallow into result.Message
+        }
         catch (Exception ex)
         {
             result.Message = ex.Message;
@@ -312,17 +337,17 @@ public static class ZapretHandler
     public static int CleanupHiddenLaunchBats(string zapretPath)
     {
         var removed = 0;
-        try
+        foreach (var filePath in EnumerateHiddenLaunchBats(zapretPath))
         {
-            foreach (var filePath in EnumerateHiddenLaunchBats(zapretPath))
+            try
             {
                 File.Delete(filePath);
                 removed++;
             }
-        }
-        catch
-        {
-            // ignore stale temp launcher cleanup failures
+            catch
+            {
+                // ignore individual cleanup failures — continue with remaining files
+            }
         }
 
         return removed;
@@ -398,16 +423,18 @@ public static class ZapretHandler
         return null;
     }
 
+    // Shared HttpClient: creating per-call instances exhausts sockets (TIME_WAIT state)
+    private static readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(15) };
+
     private static async Task<(bool Success, long? HttpMs, string Detail)> TryHttpAsync(string url, CancellationToken cancellationToken)
     {
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.TryAddWithoutValidation("User-Agent", "Mozilla/5.0");
 
         try
         {
             var start = Stopwatch.StartNew();
-            using var response = await client.SendAsync(request, cancellationToken);
+            using var response = await _httpClient.SendAsync(request, cancellationToken);
             start.Stop();
 
             return response.IsSuccessStatusCode

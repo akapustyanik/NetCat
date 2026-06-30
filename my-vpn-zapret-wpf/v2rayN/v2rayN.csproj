@@ -67,11 +67,6 @@
 	</ItemGroup>
 
 	<ItemGroup>
-		<Content Include="..\..\my-vpn-zapret\resources\xray\**\*">
-			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-			<CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-			<Link>resources\xray\%(RecursiveDir)%(Filename)%(Extension)</Link>
-		</Content>
 		<Content Include="..\..\my-vpn-zapret\resources\v2rayn\bin\sing_box\**\*">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 			<CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>

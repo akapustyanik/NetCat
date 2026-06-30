@@ -28,13 +28,20 @@ function Test-ZipContainsEntry {
     )
 
     Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $normalizedExpectedEntry = Normalize-ZipEntryName -EntryName $ExpectedEntry
     $zip = [System.IO.Compression.ZipFile]::OpenRead($ArchivePath)
     try {
-        return $zip.Entries.FullName -contains $ExpectedEntry
+        return ($zip.Entries | Where-Object { (Normalize-ZipEntryName -EntryName $_.FullName) -eq $normalizedExpectedEntry } | Select-Object -First 1) -ne $null
     }
     finally {
         $zip.Dispose()
     }
+}
+
+function Normalize-ZipEntryName {
+    param([string]$EntryName)
+
+    return $EntryName.Replace('\', '/')
 }
 
 function Get-ZipEntryContent {
@@ -44,9 +51,10 @@ function Get-ZipEntryContent {
     )
 
     Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $normalizedEntryName = Normalize-ZipEntryName -EntryName $EntryName
     $zip = [System.IO.Compression.ZipFile]::OpenRead($ArchivePath)
     try {
-        $entry = $zip.Entries | Where-Object { $_.FullName -eq $EntryName } | Select-Object -First 1
+        $entry = $zip.Entries | Where-Object { (Normalize-ZipEntryName -EntryName $_.FullName) -eq $normalizedEntryName } | Select-Object -First 1
         if ($null -eq $entry) {
             return $null
         }
@@ -335,7 +343,7 @@ function Invoke-TelegramLocalSocksSmoke {
         $curlSucceeded = $false
         $curlErrors = @()
         foreach ($target in @("https://api.telegram.org", "https://149.154.167.220")) {
-            $curlOutput = & curl.exe --socks5-hostname "127.0.0.1:$port" --max-time 45 --connect-timeout 25 -k -o NUL -D - $target 2>&1
+            $curlOutput = & curl.exe -sS --socks5-hostname "127.0.0.1:$port" --max-time 45 --connect-timeout 25 -k -o NUL -D - $target 2>&1
             $curlText = ($curlOutput | Out-String)
             if ($LASTEXITCODE -eq 0 -and $curlText -match "HTTP/\d\.\d\s+(200|30[12378]|40[013])") {
                 $curlSucceeded = $true
@@ -380,7 +388,6 @@ $requiredPaths = @(
     "updater\AmazTool.exe",
     "userdata\guiNConfig.json",
     "release-manifest.json",
-    "bin\xray\xray.exe",
     "bin\sing_box\sing-box.exe",
     "bin\geoip.dat",
     "bin\geosite.dat"
@@ -388,6 +395,11 @@ $requiredPaths = @(
 
 foreach ($relativePath in $requiredPaths) {
     Assert-PathExists (Join-Path $OutputDir $relativePath) "Package is missing required path: $relativePath"
+}
+
+$openVpnBundleDir = Join-Path $OutputDir "bin\openvpn"
+if (Test-Path $openVpnBundleDir) {
+    Assert-PathExists (Join-Path $openVpnBundleDir "openvpn.exe") "OpenVPN bundle is present but openvpn.exe is missing."
 }
 
 $packageVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $OutputDir "NetCat.exe")).ProductVersion

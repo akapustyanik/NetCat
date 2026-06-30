@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
@@ -50,13 +51,17 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     private readonly ServerCountryLookup _serverCountryLookup = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<Task<string>>> _countryFlagCache = new(StringComparer.OrdinalIgnoreCase);
     private QuickRuleConfig _quickRules;
+    private ParallelOpenVpnConfig _parallelOpenVpnConfig = new();
+    private readonly HashSet<string> _parallelOpenVpnInjectedDirectDomains = new(StringComparer.OrdinalIgnoreCase);
     private readonly DispatcherTimer _connectionPingTimer;
+    private Process? _parallelOpenVpnProcess;
     private bool _closing;
     private bool _isPickingCustomColor;
     private bool _isPickingInterfaceColor;
     private bool _isUpdatingConnectionPing;
     private bool _isRefreshingZapretConfigs;
     private bool _isSwitchingZapretConfig;
+    private bool _isEditingProfile;
     private bool _isAutoTestingZapret;
     private bool _startupUiHandled;
     private bool _startupZapretRestorePending = true;
@@ -64,14 +69,13 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     private bool _suppressConnectionToggleEvents;
     private bool _suppressAutoFailoverEvents;
     private bool _isLoadingAutoFailoverSelection;
+    private bool _isLoadingParallelOpenVpnDomains;
     private SpeedtestService? _profileSpeedtestService;
     private int _autoRunSecretClickCount;
     private int _profileCountryRefreshVersion;
     private CancellationTokenSource? _zapretAutoTestCts;
     private Task? _zapretAutoTestTask;
     private RegisteredWaitHandle? _singleInstanceWaitHandle;
-    private RegisteredWaitHandle? _privateHubCommandWaitHandle;
-    private EventWaitHandle? _privateHubCommandSignal;
 
     public ObservableCollection<ProfileItemModel> Profiles { get; } = new();
     public ObservableCollection<string> DirectApps { get; } = new();
@@ -79,6 +83,8 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
     public ObservableCollection<string> ProxyApps { get; } = new();
     public ObservableCollection<string> ProxyDomains { get; } = new();
     public ObservableCollection<string> BlockDomains { get; } = new();
+    public ObservableCollection<ParallelOpenVpnProfile> ParallelOpenVpnProfiles { get; } = new();
+    public ObservableCollection<string> ParallelOpenVpnDomains { get; } = new();
     public ObservableCollection<ZapretConfigItem> ZapretConfigs { get; } = new();
     public ObservableCollection<RunningProcessItem> RunningProcesses { get; } = new();
     public ObservableCollection<PrimaryColorOption> PrimaryColors { get; } = new();
@@ -127,6 +133,27 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         set => SetField(ref _selectedProxyApp, value);
     }
 
+    private string? _selectedParallelOpenVpnDomain;
+    public string? SelectedParallelOpenVpnDomain
+    {
+        get => _selectedParallelOpenVpnDomain;
+        set => SetField(ref _selectedParallelOpenVpnDomain, value);
+    }
+
+    private ParallelOpenVpnProfile? _selectedParallelOpenVpnProfile;
+    public ParallelOpenVpnProfile? SelectedParallelOpenVpnProfile
+    {
+        get => _selectedParallelOpenVpnProfile;
+        set
+        {
+            if (SetField(ref _selectedParallelOpenVpnProfile, value))
+            {
+                LoadSelectedParallelOpenVpnDomains();
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedParallelOpenVpnConfigPath)));
+            }
+        }
+    }
+
     private string _inputLink = string.Empty;
     public string InputLink
     {
@@ -155,12 +182,35 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         set => SetField(ref _newProxyDomain, value);
     }
 
+    private string _newParallelOpenVpnDomain = string.Empty;
+    public string NewParallelOpenVpnDomain
+    {
+        get => _newParallelOpenVpnDomain;
+        set => SetField(ref _newParallelOpenVpnDomain, value);
+    }
+
     private string _statusMessage = string.Empty;
     public string StatusMessage
     {
         get => _statusMessage;
         set => SetField(ref _statusMessage, value);
     }
+
+    private string _parallelOpenVpnStatus = "OpenVPN stopped";
+    public string ParallelOpenVpnStatus
+    {
+        get => _parallelOpenVpnStatus;
+        set => SetField(ref _parallelOpenVpnStatus, value);
+    }
+
+    private bool _parallelOpenVpnRunning;
+    public bool ParallelOpenVpnRunning
+    {
+        get => _parallelOpenVpnRunning;
+        set => SetField(ref _parallelOpenVpnRunning, value);
+    }
+
+    public string SelectedParallelOpenVpnConfigPath => SelectedParallelOpenVpnProfile?.ConfigPath ?? string.Empty;
 
     private string _updateBannerMessage = string.Empty;
     public string UpdateBannerMessage
@@ -567,6 +617,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 
         _config = AppManager.Instance.Config;
         _quickRules = QuickRuleHandler.Load();
+        _parallelOpenVpnConfig = ParallelOpenVpnConfigHandler.Load();
         RunningProcessesView = CollectionViewSource.GetDefaultView(RunningProcesses);
         RunningProcessesView.Filter = FilterRunningProcess;
 
@@ -585,6 +636,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         LoadCustomAppearance();
         ApplyAppearance();
         LoadQuickLists();
+        LoadParallelOpenVpnProfiles();
         RefreshRunningProcesses();
         VpnEnabled = _config.SystemProxyItem.SysProxyType == ESysProxyType.ForcedChange;
         EncryptAllTraffic = _config.UiItem.PreferFullTrafficVpn || (!VpnEnabled && TunEnabled);
@@ -606,7 +658,6 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         _connectionPingTimer.Tick += ConnectionPingTimer_Tick;
         _connectionPingTimer.Start();
         RegisterSingleInstanceRestore();
-        RegisterPrivateHubCommandListener();
         _ = RefreshProfilesAsync();
         UpdateTrayToolTip();
         _ = UpdateConnectionPingAsync();
@@ -628,7 +679,6 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         }
 
         await RefreshZapretAsync();
-        await ProcessPendingPrivateHubCommandsAsync();
         await RefreshSupportSnapshotAsync(true);
         if (!_startupUpdateCheckStarted)
         {
@@ -684,6 +734,90 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
                 ProxyDomains.Add(domain);
             }
         }
+    }
+
+    private void LoadParallelOpenVpnProfiles()
+    {
+        ParallelOpenVpnProfiles.Clear();
+        foreach (var profile in _parallelOpenVpnConfig.Profiles
+                     .Where(profile => !profile.Id.IsNullOrEmpty() && !profile.ConfigPath.IsNullOrEmpty()))
+        {
+            profile.IsRunning = false;
+            profile.Status = File.Exists(profile.ConfigPath) ? "Stopped" : "Config file missing";
+            if (profile.Name.IsNullOrEmpty())
+            {
+                profile.Name = Path.GetFileNameWithoutExtension(profile.ConfigPath);
+            }
+
+            ParallelOpenVpnProfiles.Add(profile);
+        }
+
+        SelectedParallelOpenVpnProfile = _parallelOpenVpnConfig.SelectedProfileId.IsNullOrEmpty()
+            ? ParallelOpenVpnProfiles.FirstOrDefault()
+            : ParallelOpenVpnProfiles.FirstOrDefault(profile => string.Equals(profile.Id, _parallelOpenVpnConfig.SelectedProfileId, StringComparison.OrdinalIgnoreCase))
+              ?? ParallelOpenVpnProfiles.FirstOrDefault();
+
+        ParallelOpenVpnStatus = FindOpenVpnExecutable().IsNullOrEmpty()
+            ? "OpenVPN core not found: put openvpn.exe into bin\\openvpn or install OpenVPN."
+            : "OpenVPN ready";
+    }
+
+    private void LoadSelectedParallelOpenVpnDomains()
+    {
+        _isLoadingParallelOpenVpnDomains = true;
+        try
+        {
+            ParallelOpenVpnDomains.Clear();
+            foreach (var domain in (SelectedParallelOpenVpnProfile?.Domains ?? [])
+                         .Select(NormalizeDomainRule)
+                         .Where(domain => !domain.IsNullOrEmpty())
+                         .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                ParallelOpenVpnDomains.Add(domain);
+            }
+        }
+        finally
+        {
+            _isLoadingParallelOpenVpnDomains = false;
+        }
+    }
+
+    private void SaveSelectedParallelOpenVpnDomains()
+    {
+        if (_isLoadingParallelOpenVpnDomains || SelectedParallelOpenVpnProfile == null)
+        {
+            return;
+        }
+
+        SelectedParallelOpenVpnProfile.Domains = ParallelOpenVpnDomains
+            .Where(domain => !domain.IsNullOrEmpty())
+            .Select(NormalizeDomainRule)
+            .Where(domain => !domain.IsNullOrEmpty())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private async Task SaveParallelOpenVpnConfigAsync()
+    {
+        SaveSelectedParallelOpenVpnDomains();
+        _parallelOpenVpnConfig.SelectedProfileId = SelectedParallelOpenVpnProfile?.Id;
+        _parallelOpenVpnConfig.Profiles = ParallelOpenVpnProfiles
+            .Select(profile => new ParallelOpenVpnProfile
+            {
+                Id = profile.Id,
+                Name = profile.Name,
+                ConfigPath = profile.ConfigPath,
+                Domains = profile.Domains
+                    .Where(domain => !domain.IsNullOrEmpty())
+                    .Select(NormalizeDomainRule)
+                    .Where(domain => !domain.IsNullOrEmpty())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList(),
+                IsRunning = false,
+                Status = "Stopped"
+            })
+            .ToList();
+        await ParallelOpenVpnConfigHandler.Save(_parallelOpenVpnConfig);
     }
 
     private async Task RefreshProfilesAsync()
@@ -930,7 +1064,6 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             "NL" => "Netherlands",
             "FR" => "France",
             "GB" => "United Kingdom",
-            "UK" => "United Kingdom",
             "RU" => "Russia",
             "FI" => "Finland",
             "SE" => "Sweden",
@@ -960,6 +1093,13 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 
     private async Task ApplyQuickRulesAsync(bool reload)
     {
+        var transientDirectDomains = DirectDomains
+            .Where(domain => _parallelOpenVpnInjectedDirectDomains.Contains(domain))
+            .Select(NormalizeDomainRule)
+            .Where(domain => !domain.IsNullOrEmpty())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
         _quickRules.DirectProcesses = DirectApps
             .Where(t => !string.IsNullOrWhiteSpace(t))
             .Select(t => t.Trim())
@@ -969,6 +1109,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             .Where(t => !string.IsNullOrWhiteSpace(t))
             .Select(NormalizeDomainRule)
             .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Where(t => !transientDirectDomains.Contains(t, StringComparer.OrdinalIgnoreCase))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         _quickRules.ProxyProcesses = ProxyApps
@@ -995,7 +1136,33 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             ? QuickRuleConfig.TelegramTrafficModeLocalSocks
             : QuickRuleConfig.TelegramTrafficModeVpn;
 
-        await QuickRuleHandler.Apply(_config, _quickRules);
+        if (transientDirectDomains.Count == 0)
+        {
+            await QuickRuleHandler.Apply(_config, _quickRules);
+        }
+        else
+        {
+            var applyRules = new QuickRuleConfig
+            {
+                DirectProcesses = _quickRules.DirectProcesses.ToList(),
+                DirectDomains = _quickRules.DirectDomains
+                    .Concat(transientDirectDomains)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList(),
+                ProxyProcesses = _quickRules.ProxyProcesses.ToList(),
+                ProxyDomains = _quickRules.ProxyDomains.ToList(),
+                BlockDomains = _quickRules.BlockDomains.ToList(),
+                UseProxyDomainsPreset = _quickRules.UseProxyDomainsPreset,
+                ProxyOnlyMode = _quickRules.ProxyOnlyMode,
+                BypassPrivate = _quickRules.BypassPrivate,
+                TelegramTrafficMode = _quickRules.TelegramTrafficMode,
+                RoutingId = _quickRules.RoutingId
+            };
+
+            await QuickRuleHandler.Apply(_config, applyRules, save: false);
+            _quickRules.RoutingId = applyRules.RoutingId;
+            await QuickRuleHandler.Save(_quickRules);
+        }
 
         if (reload)
         {
@@ -1098,7 +1265,6 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         sb.AppendLine(TelegramWsProxyHandler.GetRuntimeSummary(_quickRules.TelegramTrafficMode));
         sb.AppendLine($"Updater: {(Utils.UpgradeAppExists(out var updaterPath) ? "ready" : "missing")}");
         sb.AppendLine($"Updater path: {updaterPath}");
-        sb.AppendLine($"Xray core: {(await CoreExistsAsync(ECoreType.Xray) ? "ready" : "missing")}");
         sb.AppendLine($"sing-box core: {(await CoreExistsAsync(ECoreType.sing_box) ? "ready" : "missing")}");
         sb.AppendLine($"Zapret folder: {(ZapretPath.IsNullOrEmpty() ? "missing" : ZapretPath)}");
         sb.AppendLine($"Connection: {ConnectionPing}");
@@ -1226,6 +1392,8 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         await RefreshSupportSnapshotAsync(false);
     }
 
+    private bool _isShuttingDown = false;
+
     private async void MainWindow_Closing(object? sender, CancelEventArgs e)
     {
         if (!_closing && HideToTrayOnClose)
@@ -1237,19 +1405,28 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 
         if (_closing)
         {
+            if (!_isShuttingDown)
+            {
+                e.Cancel = true;
+            }
             return;
         }
 
         _closing = true;
         e.Cancel = true;
-        await AppManager.Instance.AppExitAsync(true);
+        await StopParallelOpenVpnAsync(updateRouting: false, showStatus: false);
+        await AppManager.Instance.AppExitAsync(false);
+        
+        _isShuttingDown = true;
+        Application.Current?.Dispatcher.Invoke(() =>
+        {
+            Application.Current?.Shutdown();
+        });
     }
 
     private void MainWindow_Closed(object? sender, EventArgs e)
     {
         _singleInstanceWaitHandle?.Unregister(null);
-        _privateHubCommandWaitHandle?.Unregister(null);
-        _privateHubCommandSignal?.Dispose();
         _connectionPingTimer.Stop();
         TrayIcon?.Dispose();
     }
@@ -1604,9 +1781,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             await ViewModel.Reload();
             await SysProxyHandler.UpdateSysProxy(_config, false);
             await Task.Delay(800);
-            var running = Process.GetProcessesByName("xray").Length > 0
-                          || Process.GetProcessesByName("sing-box").Length > 0
-                          || Process.GetProcessesByName("mihomo").Length > 0;
+            var running = Process.GetProcessesByName("sing-box").Length > 0;
             MainVpnEnabled = VpnEnabled || TunEnabled;
             await UpdateConnectionPingAsync();
             SetStatus(running ? "Прокси через VPN включен" : "Прокси включен, но core не запущен");
@@ -1648,6 +1823,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
                 var beforeCount = (await AppManager.Instance.ProfileItems(""))?.Count ?? 0;
                 var subscriptionExists = (await AppManager.Instance.SubItems())
                     .Any(t => string.Equals(t.Url, link, StringComparison.OrdinalIgnoreCase));
+                
                 var ret = await ConfigHandler.AddSubItem(_config, link);
                 if (ret == 0)
                 {
@@ -1686,6 +1862,39 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         }
 
         await RefreshProfilesAsync();
+    }
+
+    private async void OnImportFromFile(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Filter = "Текстовые и конфигурационные файлы (*.json;*.yaml;*.yml;*.txt)|*.json;*.yaml;*.yml;*.txt|Все файлы (*.*)|*.*",
+            Title = "Выберите файл с конфигурацией или ссылками",
+            Multiselect = false
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            try
+            {
+                var fileContent = await System.IO.File.ReadAllTextAsync(dialog.FileName);
+                var ret = await ConfigHandler.AddBatchServers(_config, fileContent, _config.SubIndexId, false);
+                if (ret > 0)
+                {
+                    await RefreshProfilesAsync();
+                    SetStatus(string.Format(ResUI.SuccessfullyImportedServerViaClipboard, ret));
+                }
+                else
+                {
+                    SetStatus(ResUI.OperationFailed);
+                }
+            }
+            catch (Exception ex)
+            {
+                SetStatus($"Ошибка: {ex.Message}");
+                Logging.SaveLog(ex.Message, ex);
+            }
+        }
     }
 
     private async Task<int> TryImportSubscriptionContentDirectlyAsync(string link)
@@ -1781,7 +1990,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 
     private async void OnProfilesMouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (SelectedProfile == null)
+        if (SelectedProfile == null || _isEditingProfile)
         {
             return;
         }
@@ -1828,45 +2037,57 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 
     private async void OnEditProfile(object sender, RoutedEventArgs e)
     {
-        if (SelectedProfile == null)
-        {
-            SetStatus("Select a profile first");
-            return;
-        }
-
-        var item = await AppManager.Instance.GetProfileItem(SelectedProfile.IndexId);
-        if (item == null)
-        {
-            SetStatus("Configuration not found");
-            return;
-        }
-
-        bool? result;
-        if (item.ConfigType == EConfigType.Custom)
-        {
-            result = new AddServer2Window(item).ShowDialog();
-        }
-        else if (item.ConfigType.IsGroupType())
-        {
-            result = new AddGroupServerWindow(item).ShowDialog();
-        }
-        else
-        {
-            result = new AddServerWindow(item).ShowDialog();
-        }
-
-        if (result != true)
+        if (_isEditingProfile)
         {
             return;
         }
-
-        await RefreshProfilesAsync();
-        if (item.IndexId == _config.IndexId)
+        _isEditingProfile = true;
+        try
         {
-            await ViewModel.Reload();
-        }
+            if (SelectedProfile == null)
+            {
+                SetStatus("Select a profile first");
+                return;
+            }
 
-        SetStatus("Configuration updated");
+            var item = await AppManager.Instance.GetProfileItem(SelectedProfile.IndexId);
+            if (item == null)
+            {
+                SetStatus("Configuration not found");
+                return;
+            }
+
+            bool? result;
+            if (item.ConfigType == EConfigType.Custom)
+            {
+                result = new AddServer2Window(item).ShowDialog();
+            }
+            else if (item.ConfigType.IsGroupType())
+            {
+                result = new AddGroupServerWindow(item).ShowDialog();
+            }
+            else
+            {
+                result = new AddServerWindow(item).ShowDialog();
+            }
+
+            if (result != true)
+            {
+                return;
+            }
+
+            await RefreshProfilesAsync();
+            if (item.IndexId == _config.IndexId)
+            {
+                await ViewModel.Reload();
+            }
+
+            SetStatus("Configuration updated");
+        }
+        finally
+        {
+            _isEditingProfile = false;
+        }
     }
 
     private async void OnDeleteProfile(object sender, RoutedEventArgs e)
@@ -2065,8 +2286,8 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 
     private async Task ApplyAutoFailoverAsync(bool showStatusWhenIncomplete)
     {
-        const int standbyCount = 1;
-        const int requiredCount = standbyCount + 1;
+        var standbyCount = Math.Clamp((int)Math.Round(AutoProtocolFailoverStandbyCount), 1, 8);
+        var requiredCount = standbyCount + 1;
         var candidateModels = GetAutoFailoverCandidateModels();
 
         if (!AutoProtocolFailoverEnabled)
@@ -2182,8 +2403,8 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             Logging.SaveLog($"AutoProtocolFailover skipped incompatible profiles | {string.Join(" | ", skipped)}");
         }
         SetStatus(skipped.Count > 0
-            ? $"Автосмена активна: основной {primary.Remarks}, резервов 1, профилей {selected.Count}; пропущено несовместимых {skipped.Count}."
-            : $"Автосмена активна: основной {primary.Remarks}, резервов 1, профилей {selected.Count}.");
+            ? $"Автосмена активна: основной {primary.Remarks}, резервов {standbyCount}, профилей {selected.Count}; пропущено несовместимых {skipped.Count}."
+            : $"Автосмена активна: основной {primary.Remarks}, резервов {standbyCount}, профилей {selected.Count}.");
     }
 
     private static bool IsAutoFailoverCompatibleWithSingbox(ProfileItem item, out string reason)
@@ -2196,7 +2417,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 
         if (AppManager.Instance.GetCoreType(item, item.ConfigType) != ECoreType.sing_box)
         {
-            reason = "requires Xray under current mode";
+            reason = "only sing-box core is supported";
             return false;
         }
 
@@ -2636,6 +2857,614 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         SetStatus("VPN domain removed");
     }
 
+    private async void OnImportParallelOpenVpnProfile(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Filter = "OpenVPN config (*.ovpn;*.conf)|*.ovpn;*.conf|OpenVPN bundle (*.zip)|*.zip|OpenVPN installer (*.exe)|*.exe|All files (*.*)|*.*",
+            CheckFileExists = true,
+            Title = "Import OpenVPN config"
+        };
+
+        if (dialog.ShowDialog() != true || dialog.FileName.IsNullOrEmpty())
+        {
+            return;
+        }
+
+        try
+        {
+            var id = Utils.GetGuid(false);
+            var importRoot = ParallelOpenVpnConfigHandler.GetImportedProfilesPath();
+            var profileDir = Path.Combine(importRoot, id);
+            Directory.CreateDirectory(profileDir);
+            var sourceName = Path.GetFileName(dialog.FileName);
+            var sidecarCount = 0;
+            string targetPath;
+            if (IsZipArchive(dialog.FileName))
+            {
+                targetPath = ExtractOpenVpnBundle(dialog.FileName, profileDir);
+            }
+            else
+            {
+                var targetName = SanitizeFileName(sourceName.IsNullOrEmpty() ? $"{id}.ovpn" : sourceName);
+                targetPath = Path.Combine(profileDir, targetName);
+                File.Copy(dialog.FileName, targetPath, overwrite: true);
+                sidecarCount = CopyOpenVpnReferencedFiles(dialog.FileName, profileDir);
+            }
+
+            var profile = new ParallelOpenVpnProfile
+            {
+                Id = id,
+                Name = Path.GetFileNameWithoutExtension(sourceName).NullIfEmpty() ?? sourceName,
+                ConfigPath = targetPath,
+                Status = IsOpenVpnConfigFile(targetPath) ? "Stopped" : "Import .ovpn config"
+            };
+
+            ParallelOpenVpnProfiles.Add(profile);
+            SelectedParallelOpenVpnProfile = profile;
+            await SaveParallelOpenVpnConfigAsync();
+            ParallelOpenVpnStatus = IsOpenVpnConfigFile(targetPath)
+                ? $"OpenVPN config imported. Side files: {sidecarCount}."
+                : "OpenVPN installer imported. Import the generated .ovpn config to start.";
+            SetStatus("OpenVPN config imported");
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog($"ParallelOpenVPN import failed: {ex}");
+            ParallelOpenVpnStatus = $"Import failed: {ex.Message}";
+            SetStatus("OpenVPN import failed");
+        }
+    }
+
+    private async void OnRemoveParallelOpenVpnProfile(object sender, RoutedEventArgs e)
+    {
+        var profile = SelectedParallelOpenVpnProfile;
+        if (profile == null)
+        {
+            return;
+        }
+
+        if (profile.IsRunning)
+        {
+            await StopParallelOpenVpnAsync(updateRouting: true, showStatus: false);
+        }
+
+        ParallelOpenVpnProfiles.Remove(profile);
+        SelectedParallelOpenVpnProfile = ParallelOpenVpnProfiles.FirstOrDefault();
+        await SaveParallelOpenVpnConfigAsync();
+        SetStatus("OpenVPN profile removed");
+    }
+
+    private async void OnStartParallelOpenVpn(object sender, RoutedEventArgs e)
+    {
+        await StartParallelOpenVpnAsync();
+    }
+
+    private async void OnStopParallelOpenVpn(object sender, RoutedEventArgs e)
+    {
+        await StopParallelOpenVpnAsync(updateRouting: true, showStatus: true);
+    }
+
+    private async void OnAddParallelOpenVpnDomain(object sender, RoutedEventArgs e)
+    {
+        var domain = NewParallelOpenVpnDomain?.Trim();
+        if (domain.IsNullOrEmpty())
+        {
+            SetStatus("Введите домен для OpenVPN");
+            return;
+        }
+
+        var normalized = NormalizeDomainRule(domain);
+        if (ParallelOpenVpnDomains.Any(item => string.Equals(item, normalized, StringComparison.OrdinalIgnoreCase)))
+        {
+            SetStatus("OpenVPN domain already in list");
+            return;
+        }
+
+        ParallelOpenVpnDomains.Add(normalized);
+        NewParallelOpenVpnDomain = string.Empty;
+        SaveSelectedParallelOpenVpnDomains();
+        await SaveParallelOpenVpnConfigAsync();
+
+        if (ParallelOpenVpnRunning)
+        {
+            await InjectParallelOpenVpnDirectDomainsAsync(reload: true);
+        }
+
+        SetStatus("OpenVPN domain added");
+    }
+
+    private async void OnRemoveParallelOpenVpnDomain(object sender, RoutedEventArgs e)
+    {
+        if (SelectedParallelOpenVpnDomain == null)
+        {
+            return;
+        }
+
+        var removed = SelectedParallelOpenVpnDomain;
+        ParallelOpenVpnDomains.Remove(removed);
+        if (_parallelOpenVpnInjectedDirectDomains.Remove(removed))
+        {
+            DirectDomains.Remove(removed);
+        }
+        SaveSelectedParallelOpenVpnDomains();
+        await SaveParallelOpenVpnConfigAsync();
+
+        if (ParallelOpenVpnRunning)
+        {
+            await ApplyQuickRulesAsync(reload: true);
+        }
+
+        SetStatus("OpenVPN domain removed");
+    }
+
+    private void OnOpenParallelOpenVpnFolder(object sender, RoutedEventArgs e)
+    {
+        OpenPath(ParallelOpenVpnConfigHandler.GetImportedProfilesPath());
+    }
+
+    private async Task StartParallelOpenVpnAsync()
+    {
+        var profile = SelectedParallelOpenVpnProfile;
+        if (profile == null)
+        {
+            ParallelOpenVpnStatus = "Import an OpenVPN config first";
+            SetStatus("Import an OpenVPN config first");
+            return;
+        }
+
+        SaveSelectedParallelOpenVpnDomains();
+        await SaveParallelOpenVpnConfigAsync();
+
+        if (!File.Exists(profile.ConfigPath))
+        {
+            profile.Status = "Config file missing";
+            ParallelOpenVpnStatus = "OpenVPN config file is missing";
+            SetStatus("OpenVPN config file is missing");
+            return;
+        }
+
+        if (!IsOpenVpnConfigFile(profile.ConfigPath))
+        {
+            profile.Status = "Import .ovpn config";
+            ParallelOpenVpnStatus = "This file is not an OpenVPN config. Import the generated .ovpn file.";
+            SetStatus("Import the generated .ovpn file");
+            return;
+        }
+
+        var openVpnExe = FindOpenVpnExecutable();
+        if (openVpnExe.IsNullOrEmpty())
+        {
+            ParallelOpenVpnStatus = "OpenVPN core not found: put openvpn.exe into bin\\openvpn or install OpenVPN.";
+            SetStatus("OpenVPN core not found");
+            return;
+        }
+
+        if (_parallelOpenVpnProcess is { HasExited: false })
+        {
+            await StopParallelOpenVpnAsync(updateRouting: false, showStatus: false);
+        }
+
+        try
+        {
+            var arguments = $"--config {QuoteArgument(profile.ConfigPath)} --pull-filter ignore redirect-gateway --verb 3";
+            var process = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = openVpnExe,
+                    Arguments = arguments,
+                    WorkingDirectory = Path.GetDirectoryName(profile.ConfigPath) ?? ParallelOpenVpnConfigHandler.GetImportedProfilesPath(),
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                },
+                EnableRaisingEvents = true
+            };
+            process.OutputDataReceived += (_, args) => LogParallelOpenVpnLine(profile, args.Data);
+            process.ErrorDataReceived += (_, args) => LogParallelOpenVpnLine(profile, args.Data);
+            process.Exited += OnParallelOpenVpnExited;
+
+            if (!process.Start())
+            {
+                ParallelOpenVpnStatus = "OpenVPN did not start";
+                profile.Status = "Start failed";
+                SetStatus("OpenVPN did not start");
+                return;
+            }
+
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+            _parallelOpenVpnProcess = process;
+
+            foreach (var item in ParallelOpenVpnProfiles)
+            {
+                item.IsRunning = false;
+                item.Status = item == profile ? "Running" : "Stopped";
+            }
+
+            profile.IsRunning = true;
+            ParallelOpenVpnRunning = true;
+            ParallelOpenVpnStatus = $"OpenVPN running: {profile.Name}";
+            Logging.SaveLog($"ParallelOpenVPN started | profile={profile.Name} | config={profile.ConfigPath}");
+            await InjectParallelOpenVpnDirectDomainsAsync(reload: true);
+            SetStatus("OpenVPN started");
+        }
+        catch (Exception ex)
+        {
+            Logging.SaveLog($"ParallelOpenVPN start failed: {ex}");
+            profile.IsRunning = false;
+            profile.Status = $"Start failed: {ex.Message}";
+            ParallelOpenVpnRunning = false;
+            ParallelOpenVpnStatus = $"OpenVPN start failed: {ex.Message}";
+            SetStatus("OpenVPN start failed");
+        }
+    }
+
+    private async Task StopParallelOpenVpnAsync(bool updateRouting, bool showStatus)
+    {
+        var process = _parallelOpenVpnProcess;
+        _parallelOpenVpnProcess = null;
+        if (process != null)
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.CloseMainWindow();
+                    if (!process.WaitForExit(2500))
+                    {
+                        process.Kill(entireProcessTree: true);
+                        process.WaitForExit(2500);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logging.SaveLog($"ParallelOpenVPN stop warning: {ex.GetType().Name}: {ex.Message}");
+            }
+            finally
+            {
+                process.Dispose();
+            }
+        }
+
+        foreach (var profile in ParallelOpenVpnProfiles)
+        {
+            profile.IsRunning = false;
+            if (profile.Status.StartsWith("Running", StringComparison.OrdinalIgnoreCase))
+            {
+                profile.Status = "Stopped";
+            }
+        }
+
+        ParallelOpenVpnRunning = false;
+        ParallelOpenVpnStatus = "OpenVPN stopped";
+        await RemoveParallelOpenVpnDirectDomainsAsync(updateRouting);
+
+        if (showStatus)
+        {
+            SetStatus("OpenVPN stopped");
+        }
+    }
+
+    private async void OnParallelOpenVpnExited(object? sender, EventArgs e)
+    {
+        await Dispatcher.InvokeAsync(async () =>
+        {
+            if (!ReferenceEquals(sender, _parallelOpenVpnProcess))
+            {
+                return;
+            }
+
+            _parallelOpenVpnProcess = null;
+            foreach (var profile in ParallelOpenVpnProfiles)
+            {
+                if (profile.IsRunning)
+                {
+                    profile.Status = "Stopped unexpectedly";
+                }
+
+                profile.IsRunning = false;
+            }
+
+            ParallelOpenVpnRunning = false;
+            ParallelOpenVpnStatus = "OpenVPN stopped unexpectedly";
+            await RemoveParallelOpenVpnDirectDomainsAsync(updateRouting: true);
+            SetStatus("OpenVPN stopped unexpectedly");
+        });
+    }
+
+    private async Task InjectParallelOpenVpnDirectDomainsAsync(bool reload)
+    {
+        var profile = SelectedParallelOpenVpnProfile;
+        if (profile == null)
+        {
+            return;
+        }
+
+        SaveSelectedParallelOpenVpnDomains();
+        var normalizedDomains = profile.Domains
+            .Select(NormalizeDomainRule)
+            .Where(domain => !domain.IsNullOrEmpty())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        foreach (var domain in normalizedDomains)
+        {
+            if (DirectDomains.Any(item => string.Equals(item, domain, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            DirectDomains.Add(domain);
+            _parallelOpenVpnInjectedDirectDomains.Add(domain);
+        }
+
+        await ApplyQuickRulesAsync(reload);
+        ParallelOpenVpnStatus = normalizedDomains.Count == 0
+            ? $"OpenVPN running: {profile.Name}. No domain rules configured."
+            : $"OpenVPN running: {profile.Name}. Direct domains: {normalizedDomains.Count}.";
+    }
+
+    private async Task RemoveParallelOpenVpnDirectDomainsAsync(bool updateRouting)
+    {
+        if (_parallelOpenVpnInjectedDirectDomains.Count == 0)
+        {
+            return;
+        }
+
+        var injected = _parallelOpenVpnInjectedDirectDomains.ToList();
+        _parallelOpenVpnInjectedDirectDomains.Clear();
+        foreach (var domain in injected)
+        {
+            DirectDomains.Remove(domain);
+        }
+
+        if (updateRouting)
+        {
+            await ApplyQuickRulesAsync(reload: true);
+        }
+    }
+
+    private static void LogParallelOpenVpnLine(ParallelOpenVpnProfile profile, string? line)
+    {
+        if (line.IsNullOrEmpty())
+        {
+            return;
+        }
+
+        Logging.SaveLog($"ParallelOpenVPN[{profile.Name}]: {line}");
+    }
+
+    private static string FindOpenVpnExecutable()
+    {
+        var candidates = new[]
+        {
+            Path.Combine(Utils.GetBinPath("", "openvpn"), "openvpn.exe"),
+            Utils.GetBinPath("openvpn.exe"),
+            Path.Combine(Utils.StartupPath(), "openvpn", "bin", "openvpn.exe"),
+            Path.Combine(Utils.StartupPath(), "openvpn.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "OpenVPN", "bin", "openvpn.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "OpenVPN", "bin", "openvpn.exe"),
+            SearchExecutableOnPath("openvpn.exe")
+        };
+
+        return candidates.FirstOrDefault(path => !path.IsNullOrEmpty() && File.Exists(path)) ?? string.Empty;
+    }
+
+    private static bool IsOpenVpnConfigFile(string path)
+    {
+        var extension = Path.GetExtension(path);
+        return extension.Equals(".ovpn", StringComparison.OrdinalIgnoreCase)
+               || extension.Equals(".conf", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsZipArchive(string path)
+    {
+        return Path.GetExtension(path).Equals(".zip", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ExtractOpenVpnBundle(string archivePath, string targetDirectory)
+    {
+        using var archive = System.IO.Compression.ZipFile.OpenRead(archivePath);
+        foreach (var entry in archive.Entries)
+        {
+            if (entry.FullName.IsNullOrEmpty() || entry.FullName.EndsWith("/", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var relativeName = entry.FullName.Replace('/', Path.DirectorySeparatorChar);
+            var targetPath = Path.GetFullPath(Path.Combine(targetDirectory, relativeName));
+            var root = Path.GetFullPath(targetDirectory);
+            if (!targetPath.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException($"OpenVPN bundle contains unsafe path: {entry.FullName}");
+            }
+
+            var parent = Path.GetDirectoryName(targetPath);
+            if (!parent.IsNullOrEmpty())
+            {
+                Directory.CreateDirectory(parent);
+            }
+
+            entry.ExtractToFile(targetPath, overwrite: true);
+        }
+
+        var configPath = Directory
+            .EnumerateFiles(targetDirectory, "*.*", SearchOption.AllDirectories)
+            .Where(IsOpenVpnConfigFile)
+            .OrderBy(path => path.Length)
+            .FirstOrDefault();
+        if (configPath.IsNullOrEmpty())
+        {
+            throw new InvalidOperationException("OpenVPN bundle does not contain .ovpn or .conf config.");
+        }
+
+        return configPath;
+    }
+
+    private static int CopyOpenVpnReferencedFiles(string sourceConfigPath, string targetDirectory)
+    {
+        if (!IsOpenVpnConfigFile(sourceConfigPath))
+        {
+            return 0;
+        }
+
+        var sourceDirectory = Path.GetDirectoryName(sourceConfigPath);
+        if (sourceDirectory.IsNullOrEmpty())
+        {
+            return 0;
+        }
+
+        var copied = 0;
+        foreach (var line in File.ReadLines(sourceConfigPath))
+        {
+            if (!TryGetOpenVpnReferencedPath(line, out var referencedPath))
+            {
+                continue;
+            }
+
+            var sourcePath = Path.IsPathFullyQualified(referencedPath)
+                ? referencedPath
+                : Path.Combine(sourceDirectory, referencedPath);
+            if (!File.Exists(sourcePath))
+            {
+                continue;
+            }
+
+            var targetName = SanitizeFileName(Path.GetFileName(sourcePath));
+            if (targetName.IsNullOrEmpty())
+            {
+                continue;
+            }
+
+            File.Copy(sourcePath, Path.Combine(targetDirectory, targetName), overwrite: true);
+            copied++;
+        }
+
+        return copied;
+    }
+
+    private static bool TryGetOpenVpnReferencedPath(string line, out string referencedPath)
+    {
+        referencedPath = string.Empty;
+        var trimmed = line.Trim();
+        if (trimmed.IsNullOrEmpty()
+            || trimmed.StartsWith("#", StringComparison.Ordinal)
+            || trimmed.StartsWith(";", StringComparison.Ordinal)
+            || trimmed.StartsWith("<", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var tokens = SplitOpenVpnLine(trimmed);
+        if (tokens.Count < 2)
+        {
+            return false;
+        }
+
+        var directive = tokens[0].ToLowerInvariant();
+        var pathDirectives = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "ca",
+            "cert",
+            "key",
+            "pkcs12",
+            "tls-auth",
+            "tls-crypt",
+            "secret",
+            "crl-verify",
+            "auth-user-pass"
+        };
+
+        if (!pathDirectives.Contains(directive))
+        {
+            return false;
+        }
+
+        referencedPath = tokens[1].Trim();
+        return !referencedPath.IsNullOrEmpty()
+               && !referencedPath.StartsWith("[[INLINE]]", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static List<string> SplitOpenVpnLine(string line)
+    {
+        var result = new List<string>();
+        var current = new StringBuilder();
+        var inQuotes = false;
+        for (var i = 0; i < line.Length; i++)
+        {
+            var ch = line[i];
+            if (ch == '"')
+            {
+                inQuotes = !inQuotes;
+                continue;
+            }
+
+            if (char.IsWhiteSpace(ch) && !inQuotes)
+            {
+                if (current.Length > 0)
+                {
+                    result.Add(current.ToString());
+                    current.Clear();
+                }
+
+                continue;
+            }
+
+            current.Append(ch);
+        }
+
+        if (current.Length > 0)
+        {
+            result.Add(current.ToString());
+        }
+
+        return result;
+    }
+
+    private static string? SearchExecutableOnPath(string fileName)
+    {
+        var path = Environment.GetEnvironmentVariable("PATH");
+        if (path.IsNullOrEmpty())
+        {
+            return null;
+        }
+
+        foreach (var directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            try
+            {
+                var candidate = Path.Combine(directory.Trim(), fileName);
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+            catch
+            {
+                // Ignore malformed PATH entries.
+            }
+        }
+
+        return null;
+    }
+
+    private static string QuoteArgument(string value)
+    {
+        return $"\"{value.Replace("\"", "\\\"")}\"";
+    }
+
+    private static string SanitizeFileName(string fileName)
+    {
+        var invalidChars = Path.GetInvalidFileNameChars();
+        var sanitized = new string(fileName.Select(ch => invalidChars.Contains(ch) ? '_' : ch).ToArray()).Trim();
+        return sanitized.IsNullOrEmpty() ? "openvpn.ovpn" : sanitized;
+    }
+
     private async void OnZapretRefresh(object sender, RoutedEventArgs e)
     {
         await RefreshZapretAsync();
@@ -3057,11 +3886,9 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         sb.AppendLine($"VpnEnabled: {VpnEnabled}");
         var localPort = AppManager.Instance.GetLocalPort(EInboundProtocol.socks);
         var localPortFree = Utils.GetFreePort(localPort) == localPort;
-        var xrayRunning = Process.GetProcessesByName("xray").Length > 0
-                          || Process.GetProcessesByName("sing-box").Length > 0
-                          || Process.GetProcessesByName("mihomo").Length > 0;
+        var singboxRunning = Process.GetProcessesByName("sing-box").Length > 0;
         sb.AppendLine($"LocalSocksPort: {localPort}");
-        sb.AppendLine($"LocalSocksPortFree: {localPortFree} (xray running: {xrayRunning})");
+        sb.AppendLine($"LocalSocksPortFree: {localPortFree} (sing-box running: {singboxRunning})");
         sb.AppendLine($"ZapretPath: {ZapretPath}");
         sb.AppendLine($"ZapretConfig: {SelectedZapretConfig?.Name}");
         sb.AppendLine($"ZapretRunning: {ZapretRunning}");
@@ -3073,6 +3900,11 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         sb.AppendLine($"BlockDomains: {BlockDomains.Count}");
         sb.AppendLine($"ProxyOnlyMode: {ProxyOnlyMode}");
         sb.AppendLine($"BypassPrivate: {BypassPrivate}");
+        sb.AppendLine($"ParallelOpenVpnRunning: {ParallelOpenVpnRunning}");
+        sb.AppendLine($"ParallelOpenVpnProfiles: {ParallelOpenVpnProfiles.Count}");
+        sb.AppendLine($"ParallelOpenVpnSelected: {SelectedParallelOpenVpnProfile?.Name}");
+        sb.AppendLine($"ParallelOpenVpnDomains: {ParallelOpenVpnDomains.Count}");
+        sb.AppendLine($"ParallelOpenVpnCore: {FindOpenVpnExecutable().NullIfEmpty() ?? "MISSING"}");
         var defaultProfile = SelectedProfile != null
             ? await AppManager.Instance.GetProfileItem(SelectedProfile.IndexId)
             : await ConfigHandler.GetDefaultServer(_config);
@@ -3096,8 +3928,8 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             sb.AppendLine("ActiveProfile: none");
         }
 
-        var xrayDir = Utils.GetBinPath("", ECoreType.Xray.ToString());
-        sb.AppendLine($"XrayDir: {xrayDir}");
+        var singboxDir = Utils.GetBinPath("", ECoreType.sing_box.ToString());
+        sb.AppendLine($"SingboxDir: {singboxDir}");
         var binDir = Utils.GetBinPath("");
         sb.AppendLine($"BinRoot: {binDir}");
         foreach (var name in new[] { "geoip.dat", "geosite.dat" })
@@ -3105,17 +3937,18 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             var path = Path.Combine(binDir, name);
             sb.AppendLine(File.Exists(path) ? $"BinAsset: {name} OK" : $"BinAsset: {name} MISSING");
         }
-        foreach (var name in new[] { "xray.exe", "geoip.dat", "geosite.dat" })
+        var exeName = Utils.GetExeName("sing-box");
+        foreach (var name in new[] { exeName, "geoip.dat", "geosite.dat" })
         {
-            var path = Path.Combine(xrayDir, name);
+            var path = Path.Combine(singboxDir, name);
             if (File.Exists(path))
             {
                 var info = new FileInfo(path);
-                sb.AppendLine($"XrayFile: {name} {info.Length} bytes {info.LastWriteTime}");
+                sb.AppendLine($"SingboxFile: {name} {info.Length} bytes {info.LastWriteTime}");
             }
             else
             {
-                sb.AppendLine($"XrayFile: {name} MISSING");
+                sb.AppendLine($"SingboxFile: {name} MISSING");
             }
         }
 
@@ -3150,14 +3983,12 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             sb.AppendLine("CoreConfigMissing");
         }
 
-        sb.AppendLine($"Process xray: {Process.GetProcessesByName("xray").Length}");
-        sb.AppendLine($"Process v2ray: {Process.GetProcessesByName("v2ray").Length}");
         sb.AppendLine($"Process sing-box: {Process.GetProcessesByName("sing-box").Length}");
-        sb.AppendLine($"Process mihomo: {Process.GetProcessesByName("mihomo").Length}");
+        sb.AppendLine($"Process openvpn: {Process.GetProcessesByName("openvpn").Length}");
 
-        if (!VpnEnabled && Process.GetProcessesByName("xray").Length > 0)
+        if (!VpnEnabled && Process.GetProcessesByName("sing-box").Length > 0)
         {
-            sb.AppendLine("Warning: xray is running while VPN/system proxy is OFF");
+            sb.AppendLine("Warning: sing-box is running while VPN/system proxy is OFF");
         }
 
         var logDir = Utils.GetLogPath();
@@ -3199,52 +4030,15 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         return sb.ToString();
     }
 
-    private async Task<bool> EnsureXrayCoreAsync()
-    {
-        var coreInfo = CoreInfoManager.Instance.GetCoreInfo(ECoreType.Xray);
-        var coreExec = CoreInfoManager.Instance.GetCoreExecFile(coreInfo, out _);
-        if (!coreExec.IsNullOrEmpty())
-        {
-            await EnsureXrayAssetsAsync();
-            return true;
-        }
 
-        var targetDir = Utils.GetBinPath("", ECoreType.Xray.ToString());
-        var candidateDirs = new List<string>();
 
-        var current = new DirectoryInfo(Utils.StartupPath());
-        for (var i = 0; i < 6 && current != null; i++)
-        {
-            candidateDirs.Add(Path.Combine(current.FullName, "my-vpn-zapret", "resources", "xray"));
-            candidateDirs.Add(Path.Combine(current.FullName, "resources", "xray"));
-            candidateDirs.Add(Path.Combine(current.FullName, "xray"));
-            current = current.Parent;
-        }
-
-        var sourceDir = candidateDirs.FirstOrDefault(dir => File.Exists(Path.Combine(dir, "xray.exe")));
-        if (sourceDir.IsNullOrEmpty())
-        {
-            return false;
-        }
-
-        Directory.CreateDirectory(targetDir);
-        foreach (var file in Directory.GetFiles(sourceDir))
-        {
-            var dest = Path.Combine(targetDir, Path.GetFileName(file));
-            File.Copy(file, dest, true);
-        }
-
-        await EnsureXrayAssetsAsync();
-        return File.Exists(Path.Combine(targetDir, "xray.exe"));
-    }
-
-    private async Task<bool> EnsureSingboxCoreAsync()
+    private Task<bool> EnsureSingboxCoreAsync()
     {
         var coreInfo = CoreInfoManager.Instance.GetCoreInfo(ECoreType.sing_box);
         var coreExec = CoreInfoManager.Instance.GetCoreExecFile(coreInfo, out _);
         if (!coreExec.IsNullOrEmpty())
         {
-            return true;
+            return Task.FromResult(true);
         }
 
         var targetDir = Utils.GetBinPath("", ECoreType.sing_box.ToString());
@@ -3264,7 +4058,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         var sourceDir = candidateDirs.FirstOrDefault(dir => File.Exists(Path.Combine(dir, exeName)));
         if (sourceDir.IsNullOrEmpty())
         {
-            return false;
+            return Task.FromResult(false);
         }
 
         Directory.CreateDirectory(targetDir);
@@ -3275,7 +4069,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         }
 
         TryCopyWintun(targetDir, sourceDir);
-        return File.Exists(Path.Combine(targetDir, exeName));
+        return Task.FromResult(File.Exists(Path.Combine(targetDir, exeName)));
     }
 
     private void TryCopyWintun(string targetDir, string sourceDir)
@@ -3311,26 +4105,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         }
     }
 
-    private async Task EnsureXrayAssetsAsync()
-    {
-        var assetTarget = Utils.GetBinPath("");
-        var sourceDir = Utils.GetBinPath("", ECoreType.Xray.ToString());
-        var files = new[] { "geoip.dat", "geosite.dat" };
-        foreach (var file in files)
-        {
-            var src = Path.Combine(sourceDir, file);
-            if (File.Exists(src))
-            {
-                var dest = Path.Combine(assetTarget, file);
-                if (!File.Exists(dest))
-                {
-                    File.Copy(src, dest, true);
-                }
-            }
-        }
 
-        await Task.CompletedTask;
-    }
 
     private async Task EnsureInboundPortAvailableAsync()
     {
@@ -3352,11 +4127,11 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 
     private async void OnTestCore(object sender, RoutedEventArgs e)
     {
-        var coreType = TunEnabled ? ECoreType.sing_box : ECoreType.Xray;
-        var ready = TunEnabled ? await EnsureSingboxCoreAsync() : await EnsureXrayCoreAsync();
+        var coreType = ECoreType.sing_box;
+        var ready = await EnsureSingboxCoreAsync();
         if (!ready)
         {
-            SetStatus(TunEnabled ? "sing-box core not found" : "Xray core not found");
+            SetStatus("sing-box core not found");
             return;
         }
 
@@ -3364,11 +4139,11 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         var coreExec = CoreInfoManager.Instance.GetCoreExecFile(coreInfo, out _);
         if (coreExec.IsNullOrEmpty())
         {
-            SetStatus(TunEnabled ? "sing-box core not found" : "Xray core not found");
+            SetStatus("sing-box core not found");
             return;
         }
 
-        var versionArg = coreInfo?.VersionArg.IsNullOrEmpty() == true ? "-version" : coreInfo?.VersionArg ?? "-version";
+        var versionArg = coreInfo?.VersionArg.IsNullOrEmpty() == true ? "version" : coreInfo?.VersionArg ?? "version";
 
         try
         {
@@ -3382,11 +4157,6 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
                 RedirectStandardOutput = true,
                 RedirectStandardError = true
             };
-            if (coreType == ECoreType.Xray)
-            {
-                startInfo.EnvironmentVariables[Global.XrayLocalAsset] = Utils.GetBinPath("");
-                startInfo.EnvironmentVariables[Global.XrayLocalCert] = Utils.GetBinPath("");
-            }
 
             using var proc = Process.Start(startInfo);
             if (proc == null)
@@ -3410,19 +4180,17 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 
     private async void OnTestConfig(object sender, RoutedEventArgs e)
     {
-        if (Process.GetProcessesByName("xray").Length > 0
-            || Process.GetProcessesByName("sing-box").Length > 0
-            || Process.GetProcessesByName("mihomo").Length > 0)
+        if (Process.GetProcessesByName("sing-box").Length > 0)
         {
             SetStatus("Stop VPN before config test");
             return;
         }
 
-        var coreType = TunEnabled ? ECoreType.sing_box : ECoreType.Xray;
-        var ready = TunEnabled ? await EnsureSingboxCoreAsync() : await EnsureXrayCoreAsync();
+        var coreType = ECoreType.sing_box;
+        var ready = await EnsureSingboxCoreAsync();
         if (!ready)
         {
-            SetStatus(TunEnabled ? "sing-box core not found" : "Xray core not found");
+            SetStatus("sing-box core not found");
             return;
         }
 
@@ -3430,7 +4198,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         var coreExec = CoreInfoManager.Instance.GetCoreExecFile(coreInfo, out _);
         if (coreExec.IsNullOrEmpty())
         {
-            SetStatus(TunEnabled ? "sing-box core not found" : "Xray core not found");
+            SetStatus("sing-box core not found");
             return;
         }
 
@@ -3446,25 +4214,18 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             var startInfo = new ProcessStartInfo
             {
                 FileName = coreExec,
-                Arguments = coreType == ECoreType.sing_box
-                    ? $"run -c \"{configPath}\" --disable-color"
-                    : $"run -c \"{configPath}\"",
+                Arguments = $"run -c \"{configPath}\" --disable-color",
                 WorkingDirectory = Path.GetDirectoryName(coreExec) ?? Utils.GetBinPath(""),
                 CreateNoWindow = true,
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true
             };
-            if (coreType == ECoreType.Xray)
-            {
-                startInfo.EnvironmentVariables[Global.XrayLocalAsset] = Utils.GetBinPath("");
-                startInfo.EnvironmentVariables[Global.XrayLocalCert] = Utils.GetBinPath("");
-            }
 
             using var proc = Process.Start(startInfo);
             if (proc == null)
             {
-                SetStatus("Failed to start xray");
+                SetStatus("Failed to start sing-box");
                 return;
             }
 
@@ -3755,12 +4516,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             return false;
         }
 
-        var coreType = AppManager.Instance.GetCoreType(profile, profile.ConfigType);
-        return coreType switch
-        {
-            ECoreType.sing_box or ECoreType.mihomo => await EnsureSingboxCoreAsync(),
-            _ => await EnsureXrayCoreAsync()
-        };
+        return await EnsureSingboxCoreAsync();
     }
 
     private async void OnToggleZapret(object sender, RoutedEventArgs e)
@@ -4362,9 +5118,7 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
 
     private async Task<int?> MeasureProxyPingAsync()
     {
-        var coreRunning = Process.GetProcessesByName("xray").Length > 0
-                          || Process.GetProcessesByName("sing-box").Length > 0
-                          || Process.GetProcessesByName("mihomo").Length > 0;
+        var coreRunning = Process.GetProcessesByName("sing-box").Length > 0;
         if (!coreRunning || (!VpnEnabled && !TunEnabled))
         {
             return null;
@@ -4373,7 +5127,8 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
         try
         {
             var port = AppManager.Instance.GetLocalPort(EInboundProtocol.socks);
-            var webProxy = new WebProxy($"socks5://{Global.Loopback}:{port}");
+            if (port <= 0) return null;
+            var webProxy = new WebProxy($"{Global.Socks5Protocol}{Global.Loopback}:{port}");
             using var client = new HttpClient(new SocketsHttpHandler
             {
                 Proxy = webProxy,
@@ -4453,57 +5208,6 @@ public partial class MainWindow : WindowBase<MainWindowViewModel>, INotifyProper
             null,
             Timeout.Infinite,
             false);
-    }
-
-    private void RegisterPrivateHubCommandListener()
-    {
-        try
-        {
-            _privateHubCommandSignal = new EventWaitHandle(false, EventResetMode.AutoReset, PrivateHubExternalCommandBridge.GetSignalName());
-            _privateHubCommandWaitHandle = ThreadPool.RegisterWaitForSingleObject(
-                _privateHubCommandSignal,
-                (_, _) => Dispatcher.BeginInvoke(new Action(() => _ = ProcessPendingPrivateHubCommandsAsync())),
-                null,
-                Timeout.Infinite,
-                false);
-        }
-        catch (Exception ex)
-        {
-            Logging.SaveLog("RegisterPrivateHubCommandListener", ex);
-        }
-    }
-
-    private async Task ProcessPendingPrivateHubCommandsAsync()
-    {
-        var commands = PrivateHubExternalCommandBridge.TakePendingCommands();
-        if (commands.Count == 0 || ViewModel == null)
-        {
-            return;
-        }
-
-        foreach (var command in commands)
-        {
-            try
-            {
-                switch (command.Command)
-                {
-                    case PrivateHubExternalCommandNames.RefreshSubscriptions:
-                        SetStatus(command.UseProxy
-                            ? "PrivateHub requested subscription update via proxy"
-                            : "PrivateHub requested subscription update");
-                        await ViewModel.UpdateSubscriptionProcess("", command.UseProxy);
-                        break;
-                }
-            }
-            catch (Exception ex)
-            {
-                Logging.SaveLog($"PrivateHub command failed: {command.Command}", ex);
-                SetStatus($"PrivateHub command failed: {ex.Message}");
-            }
-        }
-
-        await RefreshProfilesAsync();
-        await RefreshSupportSnapshotAsync(false);
     }
 
     private bool ShouldHideWindowOnStartup()

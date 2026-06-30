@@ -27,3 +27,10 @@ tmp-*.json
 New-NetCatDevCodeSigningCert.ps1
 my-vpn-zapret/resources/v2rayn/v2rayN.exe
 my-vpn-zapret/
+
+.dotnet-sdk/
+sing-box-extracted/
+sing-box.zip
+artifacts/NetCat-release*
+artifacts/*.zip
+artifacts/*.zip.sha256

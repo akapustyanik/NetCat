@@ -61,21 +61,21 @@ public class ProfilesSelectViewModel : MyReactiveObject
         this.WhenAnyValue(
             x => x.SelectedSub,
             y => y != null && !y.Remarks.IsNullOrEmpty() && _subIndexId != y.Id)
-                .Subscribe(async c => await SubSelectedChangedAsync(c));
+                .Subscribe(async c => { try { await SubSelectedChangedAsync(c); } catch (Exception ex) { Logging.SaveLog("Subscribe", ex); } });
 
         this.WhenAnyValue(
           x => x.ServerFilter,
           y => y != null && _serverFilter != y)
-              .Subscribe(async c => await ServerFilterChanged(c));
+              .Subscribe(async c => { try { await ServerFilterChanged(c); } catch (Exception ex) { Logging.SaveLog("Subscribe", ex); } });
 
         // React to ConfigType filter changes
         this.WhenAnyValue(x => x.FilterExclude)
             .Skip(1)
-            .Subscribe(async _ => await RefreshServersBiz());
+            .Subscribe(async _ => { try { await RefreshServersBiz(); } catch (Exception ex) { Logging.SaveLog("Subscribe", ex); } });
 
         this.WhenAnyValue(x => x.FilterConfigTypes)
             .Skip(1)
-            .Subscribe(async _ => await RefreshServersBiz());
+            .Subscribe(async _ => { try { await RefreshServersBiz(); } catch (Exception ex) { Logging.SaveLog("Subscribe", ex); } });
 
         #endregion WhenAnyValue && ReactiveCommand
 
@@ -327,3 +327,4 @@ public class ProfilesSelectViewModel : MyReactiveObject
 
     #endregion Public API
 }
+

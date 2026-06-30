@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace ServiceLib.Services.CoreConfig;
 
 public partial class CoreConfigSingboxService
@@ -255,7 +257,7 @@ public partial class CoreConfigSingboxService
                                 // may be a range like 5-10
                                 var parts = protocolExtra.HopInterval.Split('-');
                                 if (parts.Length == 2 && int.TryParse(parts[0], out var hiL) &&
-                                    int.TryParse(parts[0], out var hiH))
+                                    int.TryParse(parts[1], out var hiH))
                                 {
                                     var hi = (hiL + hiH) / 2;
                                     outbound.hop_interval = hi >= 5 ? $"{hi}s" : outbound.hop_interval;
@@ -304,7 +306,9 @@ public partial class CoreConfigSingboxService
                         {
                             public_key = protocolExtra.WgPublicKey,
                             pre_shared_key = protocolExtra.WgPresharedKey,
-                            reserved = Utils.String2List(protocolExtra.WgReserved)?.Select(int.Parse).ToList(),
+                            reserved = Utils.String2List(protocolExtra.WgReserved)
+                                ?.Select(s => int.TryParse(s.Trim(), out var v) ? v : 0)
+                                .ToList(),
                             address = _node.Address,
                             port = _node.Port,
                             // TODO default ["0.0.0.0/0", "::/0"]
@@ -350,11 +354,12 @@ public partial class CoreConfigSingboxService
     {
         try
         {
-            if (_node.StreamSecurity is not (Global.StreamSecurityReality or Global.StreamSecurity))
+            if (_node.ConfigType is EConfigType.Shadowsocks or EConfigType.SOCKS or EConfigType.WireGuard)
             {
                 return;
             }
-            if (_node.ConfigType is EConfigType.Shadowsocks or EConfigType.SOCKS or EConfigType.WireGuard)
+            var isTrojan = _node.ConfigType == EConfigType.Trojan;
+            if (_node.StreamSecurity != Global.StreamSecurity && _node.StreamSecurity != Global.StreamSecurityReality && !isTrojan)
             {
                 return;
             }
@@ -371,7 +376,7 @@ public partial class CoreConfigSingboxService
             {
                 enabled = true,
                 record_fragment = _config.CoreBasicItem.EnableFragment ? true : null,
-                server_name = serverName,
+                server_name = serverName.IsNullOrEmpty() ? _node.Address : serverName,
                 insecure = Utils.ToBool(_node.AllowInsecure.IsNullOrEmpty() ? _config.CoreBasicItem.DefAllowInsecure.ToString().ToLower() : _node.AllowInsecure),
                 alpn = _node.GetAlpnForTransport(),
             };
@@ -380,7 +385,7 @@ public partial class CoreConfigSingboxService
                 tls.utls = new Utls4Sbox()
                 {
                     enabled = true,
-                    fingerprint = _node.Fingerprint.IsNullOrEmpty() ? _config.CoreBasicItem.DefFingerprint : _node.Fingerprint
+                    fingerprint = _node.Fingerprint
                 };
             }
             if (_node.StreamSecurity == Global.StreamSecurity)
@@ -415,6 +420,9 @@ public partial class CoreConfigSingboxService
         }
     }
 
+    private static readonly Regex _wsEdRegex = new(@"[?&]ed=(\d+)", RegexOptions.Compiled);
+    private static readonly Regex _wsEhRegex = new(@"[?&]eh=([^&]+)", RegexOptions.Compiled);
+
     private void FillOutboundTransport(Outbound4Sbox outbound)
     {
         try
@@ -445,14 +453,13 @@ public partial class CoreConfigSingboxService
                     // Parse eh and ed parameters from path using regex
                     if (!wsPath.IsNullOrEmpty())
                     {
-                        var edRegex = new Regex(@"[?&]ed=(\d+)");
-                        var edMatch = edRegex.Match(wsPath);
+                        var edMatch = _wsEdRegex.Match(wsPath);
                         if (edMatch.Success && int.TryParse(edMatch.Groups[1].Value, out var edValue))
                         {
                             transport.max_early_data = edValue;
                             transport.early_data_header_name = "Sec-WebSocket-Protocol";
 
-                            wsPath = edRegex.Replace(wsPath, "");
+                            wsPath = _wsEdRegex.Replace(wsPath, "");
                             wsPath = wsPath.Replace("?&", "?");
                             if (wsPath.EndsWith('?'))
                             {
@@ -460,8 +467,7 @@ public partial class CoreConfigSingboxService
                             }
                         }
 
-                        var ehRegex = new Regex(@"[?&]eh=([^&]+)");
-                        var ehMatch = ehRegex.Match(wsPath);
+                        var ehMatch = _wsEhRegex.Match(wsPath);
                         if (ehMatch.Success)
                         {
                             transport.early_data_header_name = Uri.UnescapeDataString(ehMatch.Groups[1].Value);
@@ -491,7 +497,12 @@ public partial class CoreConfigSingboxService
 
                 case nameof(ETransport.grpc):
                     transport.type = nameof(ETransport.grpc);
-                    transport.service_name = _node.Path;
+                    var serviceName = _node.Path ?? string.Empty;
+                    if (serviceName.StartsWith('/'))
+                    {
+                        serviceName = serviceName.TrimStart('/');
+                    }
+                    transport.service_name = serviceName;
                     transport.idle_timeout = _config.GrpcItem.IdleTimeout?.ToString("##s");
                     transport.ping_timeout = _config.GrpcItem.HealthCheckTimeout?.ToString("##s");
                     transport.permit_without_stream = _config.GrpcItem.PermitWithoutStream;
@@ -522,10 +533,10 @@ public partial class CoreConfigSingboxService
         var healthCheckUrl = _config.SpeedTestItem.SpeedPingTestUrl.NullIfEmpty() ?? Global.SpeedPingTestUrls.First();
         if (isFallback)
         {
-            healthCheckInterval = "1s";
+            healthCheckInterval = "10s";
             healthCheckUrl = "http://cp.cloudflare.com/generate_204";
             tolerance = 10;
-            Logging.SaveLog($"AutoProtocolFailover sing-box urltest | outbounds={proxyTags.Count} | interval={healthCheckInterval} | tolerance={tolerance} | interrupt=true | url={healthCheckUrl}");
+            Logging.SaveLog($"AutoProtocolFailover sing-box urltest | outbounds={proxyTags.Count} | interval={healthCheckInterval} | tolerance={tolerance} | interrupt=false | url={healthCheckUrl}");
             var configuredStandbyCount = protocolExtra.FailoverStandbyCount.GetValueOrDefault(1);
             var standbyCount = Math.Clamp(configuredStandbyCount <= 0 ? 1 : configuredStandbyCount, 1, Math.Max(1, proxyTags.Count - 1));
             RegisterAutoFailoverWarmStandby(proxyTags.Take(standbyCount + 1).ToList());
@@ -536,7 +547,7 @@ public partial class CoreConfigSingboxService
             type = "urltest",
             tag = $"{baseTagName}-auto",
             outbounds = proxyTags,
-            interrupt_exist_connections = isFallback,
+            interrupt_exist_connections = false,
             url = healthCheckUrl,
             interval = healthCheckInterval,
             idle_timeout = idleTimeout,
@@ -548,9 +559,9 @@ public partial class CoreConfigSingboxService
         {
             type = "selector",
             tag = baseTagName,
-            outbounds = JsonUtils.DeepCopy(proxyTags),
+            outbounds = proxyTags.ToList(),
             @default = isFallback ? outUrltest.tag : null,
-            interrupt_exist_connections = isFallback,
+            interrupt_exist_connections = false,
         };
         outSelector.outbounds.Insert(0, outUrltest.tag);
 

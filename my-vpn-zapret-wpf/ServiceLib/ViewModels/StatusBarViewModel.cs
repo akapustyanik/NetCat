@@ -115,7 +115,7 @@ public class StatusBarViewModel : MyReactiveObject
         this.WhenAnyValue(
                 x => x.SelectedRouting,
                 y => y != null && !y.Remarks.IsNullOrEmpty())
-            .Subscribe(async c => await RoutingSelectedChangedAsync(c));
+            .Subscribe(async c => { try { await RoutingSelectedChangedAsync(c); } catch (Exception ex) { Logging.SaveLog("Subscribe", ex); } });
 
         this.WhenAnyValue(
                 x => x.SelectedServer,
@@ -126,12 +126,12 @@ public class StatusBarViewModel : MyReactiveObject
         this.WhenAnyValue(
                 x => x.SystemProxySelected,
                 y => y >= 0)
-            .Subscribe(async c => await DoSystemProxySelected(c));
+            .Subscribe(async c => { try { await DoSystemProxySelected(c); } catch (Exception ex) { Logging.SaveLog("Subscribe", ex); } });
 
         this.WhenAnyValue(
                 x => x.EnableTun,
                 y => y == true)
-            .Subscribe(async c => await DoEnableTun(c));
+            .Subscribe(async c => { try { await DoEnableTun(c); } catch (Exception ex) { Logging.SaveLog("Subscribe", ex); } });
 
         CopyProxyCmdToClipboardCmd = ReactiveCommand.CreateFromTask(async () =>
         {
@@ -201,27 +201,27 @@ public class StatusBarViewModel : MyReactiveObject
         AppEvents.DispatcherStatisticsRequested
             .AsObservable()
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(async result => await UpdateStatistics(result));
+            .Subscribe(async result => { try { await UpdateStatistics(result); } catch (Exception ex) { Logging.SaveLog("Subscribe", ex); } });
 
         AppEvents.RoutingsMenuRefreshRequested
             .AsObservable()
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(async _ => await RefreshRoutingsMenu());
+            .Subscribe(async _ => { try { await RefreshRoutingsMenu(); } catch (Exception ex) { Logging.SaveLog("Subscribe", ex); } });
 
         AppEvents.TestServerRequested
             .AsObservable()
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(async _ => await TestServerAvailability());
+            .Subscribe(async _ => { try { await TestServerAvailability(); } catch (Exception ex) { Logging.SaveLog("Subscribe", ex); } });
 
         AppEvents.InboundDisplayRequested
             .AsObservable()
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(async _ => await InboundDisplayStatus());
+            .Subscribe(async _ => { try { await InboundDisplayStatus(); } catch (Exception ex) { Logging.SaveLog("Subscribe", ex); } });
 
         AppEvents.SysProxyChangeRequested
             .AsObservable()
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(async result => await SetListenerType(result));
+            .Subscribe(async result => { try { await SetListenerType(result); } catch (Exception ex) { Logging.SaveLog("Subscribe", ex); } });
 
         #endregion AppEvents
 
@@ -244,7 +244,7 @@ public class StatusBarViewModel : MyReactiveObject
             AppEvents.ProfilesRefreshRequested
               .AsObservable()
               .ObserveOn(RxSchedulers.MainThreadScheduler)
-              .Subscribe(async _ => await RefreshServersBiz()); //.DisposeWith(_disposables);
+              .Subscribe(async _ => { try { await RefreshServersBiz(); } catch (Exception ex) { Logging.SaveLog("Subscribe", ex); } }); //.DisposeWith(_disposables);
         }
     }
 
@@ -568,3 +568,4 @@ public class StatusBarViewModel : MyReactiveObject
 
     #endregion UI
 }
+

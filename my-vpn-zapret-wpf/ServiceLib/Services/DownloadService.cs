@@ -35,10 +35,13 @@ public class DownloadService
         }
         catch (Exception ex)
         {
-            await updateFunc?.Invoke(false, ex.Message);
-            if (ex.InnerException != null)
+            if (updateFunc != null)
             {
-                await updateFunc?.Invoke(false, ex.InnerException.Message);
+                await updateFunc(false, ex.Message);
+                if (ex.InnerException != null)
+                {
+                    await updateFunc(false, ex.InnerException.Message);
+                }
             }
         }
         return 0;
@@ -79,7 +82,7 @@ public class DownloadService
             AllowAutoRedirect = false,
             Proxy = await GetWebProxy(blProxy)
         };
-        var client = new HttpClient(webRequestHandler);
+        using var client = new HttpClient(webRequestHandler);
 
         var response = await client.GetAsync(url);
         if (response.StatusCode == HttpStatusCode.Redirect && response.Headers.Location is not null)
@@ -155,7 +158,7 @@ public class DownloadService
         try
         {
             var webProxy = await GetWebProxy(blProxy);
-            var client = new HttpClient(new SocketsHttpHandler()
+            using var client = new HttpClient(new SocketsHttpHandler()
             {
                 Proxy = webProxy,
                 UseProxy = webProxy != null

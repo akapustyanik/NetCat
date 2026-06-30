@@ -1,7 +1,7 @@
 <Project>
 
     <PropertyGroup>
-        <Version>0.3.7</Version>
+        <Version>0.4.0</Version>
         <NetCatVersionFamily>$(Version)</NetCatVersionFamily>
         <NetCatTelegramWsProxyImplementation>tg-ws-proxy-main</NetCatTelegramWsProxyImplementation>
         <NetCatTelegramWsProxySchemaVersion>3</NetCatTelegramWsProxySchemaVersion>
@@ -9,7 +9,8 @@
     </PropertyGroup>
 
     <PropertyGroup>
-        <TargetFramework>net8.0</TargetFramework>
+        <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+        <LangVersion>latest</LangVersion>
         <TargetLatestRuntimePatch>true</TargetLatestRuntimePatch>
         <UseRidGraph>true</UseRidGraph>
         <CheckForOverflowUnderflow>true</CheckForOverflowUnderflow>

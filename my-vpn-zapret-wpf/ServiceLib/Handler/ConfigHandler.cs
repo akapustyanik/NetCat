@@ -1483,6 +1483,13 @@ public static class ConfigHandler
                 continue;
             }
 
+            var valResult = Builder.NodeValidator.Validate(profileItem, ECoreType.sing_box);
+            if (!valResult.Success)
+            {
+                Logging.SaveLog($"Skipping import of unsupported configuration [{profileItem.Remarks}]: {string.Join(", ", valResult.Errors)}");
+                continue;
+            }
+
             //exist sub items //filter
             if (isSub && subid.IsNotEmpty() && subFilter.IsNotEmpty())
             {
@@ -1504,7 +1511,6 @@ public static class ConfigHandler
                 EConfigType.Hysteria2 => await AddHysteria2Server(config, profileItem, false),
                 EConfigType.TUIC => await AddTuicServer(config, profileItem, false),
                 EConfigType.WireGuard => await AddWireguardServer(config, profileItem, false),
-                EConfigType.Anytls => await AddAnytlsServer(config, profileItem, false),
                 _ => -1,
             };
 
@@ -1550,11 +1556,6 @@ public static class ConfigHandler
         {
             lstProfiles = SingboxFmt.ResolveFullArray(strData, subRemarks);
         }
-        //Is v2ray array configuration
-        if (lstProfiles is null || lstProfiles.Count <= 0)
-        {
-            lstProfiles = V2rayFmt.ResolveFullArray(strData, subRemarks);
-        }
         if (lstProfiles != null && lstProfiles.Count > 0)
         {
             if (isSub && subid.IsNotEmpty())
@@ -1567,6 +1568,14 @@ public static class ConfigHandler
                 it.Subid = subid;
                 it.IsSub = isSub;
                 it.PreSocksPort = preSocksPort;
+
+                var valResult = Builder.NodeValidator.Validate(it, ECoreType.sing_box);
+                if (!valResult.Success)
+                {
+                    Logging.SaveLog($"Skipping custom node [{it.Remarks}]: {string.Join(", ", valResult.Errors)}");
+                    continue;
+                }
+
                 if (await AddCustomServer(config, it, true) == 0)
                 {
                     count++;
@@ -1584,26 +1593,6 @@ public static class ConfigHandler
         {
             profileItem = SingboxFmt.ResolveFull(strData, subRemarks);
         }
-        //Is v2ray configuration
-        if (profileItem is null)
-        {
-            profileItem = V2rayFmt.ResolveFull(strData, subRemarks);
-        }
-        //Is Html Page
-        if (profileItem is null && HtmlPageFmt.IsHtmlPage(strData))
-        {
-            return -1;
-        }
-        //Is Clash configuration
-        if (profileItem is null)
-        {
-            profileItem = ClashFmt.ResolveFull(strData, subRemarks);
-        }
-        //Is hysteria configuration
-        if (profileItem is null)
-        {
-            profileItem = Hysteria2Fmt.ResolveFull2(strData, subRemarks);
-        }
         if (profileItem is null || profileItem.Address.IsNullOrEmpty())
         {
             return -1;
@@ -1612,6 +1601,13 @@ public static class ConfigHandler
         if (isSub && subid.IsNotEmpty())
         {
             await RemoveServersViaSubid(config, subid, isSub);
+        }
+
+        var valRes = Builder.NodeValidator.Validate(profileItem, ECoreType.sing_box);
+        if (!valRes.Success)
+        {
+            Logging.SaveLog($"Skipping custom configuration [{profileItem.Remarks}]: {string.Join(", ", valRes.Errors)}");
+            return -1;
         }
 
         profileItem.Subid = subid;
@@ -1700,11 +1696,6 @@ public static class ConfigHandler
         {
             counter = await AddBatchServersCommon(config, strData, subid, isSub);
         }
-        if (counter < 1)
-        {
-            counter = await AddBatchServersCommon(config, Utils.Base64Decode(strData), subid, isSub);
-        }
-
         if (counter < 1)
         {
             counter = await AddBatchServers4SsSIP008(config, strData, subid, isSub);
@@ -1857,14 +1848,15 @@ public static class ConfigHandler
         {
             return -1;
         }
+        var safeSubid = subid.Replace("'", "''");
         var customProfile = await SQLiteHelper.Instance.TableAsync<ProfileItem>().Where(t => t.Subid == subid && t.ConfigType == EConfigType.Custom).ToListAsync();
         if (isSub)
         {
-            await SQLiteHelper.Instance.ExecuteAsync($"delete from ProfileItem where isSub = 1 and subid = '{subid}'");
+            await SQLiteHelper.Instance.ExecuteAsync($"delete from ProfileItem where isSub = 1 and subid = '{safeSubid}'");
         }
         else
         {
-            await SQLiteHelper.Instance.ExecuteAsync($"delete from ProfileItem where subid = '{subid}'");
+            await SQLiteHelper.Instance.ExecuteAsync($"delete from ProfileItem where subid = '{safeSubid}'");
         }
         foreach (var item in customProfile)
         {
@@ -2104,8 +2096,12 @@ public static class ConfigHandler
         if (item is null)
         {
             var item2 = await SQLiteHelper.Instance.TableAsync<RoutingItem>().FirstOrDefaultAsync();
-            await SetDefaultRouting(config, item2);
-            return item2;
+            if (item2 != null)
+            {
+                await SetDefaultRouting(config, item2);
+                return item2;
+            }
+            return new RoutingItem();
         }
 
         return item;

@@ -94,7 +94,7 @@ public sealed class AutoProtocolWarmStandbyService : IDisposable
     {
         var handler = new SocketsHttpHandler
         {
-            Proxy = new WebProxy($"http://{Global.Loopback}:{port}"),
+            Proxy = new WebProxy($"{Global.Socks5Protocol}{Global.Loopback}:{port}"),
             UseProxy = true,
             ConnectTimeout = TimeSpan.FromSeconds(2),
             PooledConnectionIdleTimeout = TimeSpan.FromMinutes(10),
@@ -132,6 +132,7 @@ public sealed class AutoProtocolWarmStandbyService : IDisposable
                 else if (!healthy && wasHealthy)
                 {
                     Logging.SaveLog($"AutoProtocolFailover warm standby unhealthy | inbound={inbound.Tag} | port={inbound.Port} | status={(int)response.StatusCode} | elapsed={elapsed.ElapsedMilliseconds}ms");
+                    successLogged = false;
                 }
 
                 wasHealthy = healthy;
@@ -147,11 +148,12 @@ public sealed class AutoProtocolWarmStandbyService : IDisposable
                     Logging.SaveLog($"AutoProtocolFailover warm standby failed | inbound={inbound.Tag} | port={inbound.Port} | error={ex.GetType().Name}: {ex.Message}");
                 }
                 wasHealthy = false;
+                successLogged = false;
             }
 
             try
             {
-                await Task.Delay(TimeSpan.FromSeconds(1), token);
+                await Task.Delay(TimeSpan.FromSeconds(10), token);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {

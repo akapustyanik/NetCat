@@ -22,7 +22,7 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         var args = e.Args ?? Array.Empty<string>();
-        var exePathKey = Utils.GetMd5(Utils.GetExePath());
+        var exePathKey = "Global\\NetCat_SingleInstance_Mutex_9b91b22d";
 
         StartMinimizedToTray = args.Any(t => string.Equals(t, Global.StartMinimizedToTray, StringComparison.OrdinalIgnoreCase));
         var rebootas = args.Any(t => string.Equals(t, Global.RebootAs, StringComparison.OrdinalIgnoreCase));

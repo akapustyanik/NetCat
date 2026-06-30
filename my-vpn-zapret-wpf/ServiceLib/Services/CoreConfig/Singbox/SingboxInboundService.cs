@@ -63,7 +63,15 @@ public partial class CoreConfigSingboxService
 
                 var tunInbound = JsonUtils.Deserialize<Inbound4Sbox>(EmbedUtils.GetEmbedText(Global.TunSingboxInboundFileName)) ?? new Inbound4Sbox { };
                 tunInbound.interface_name = Utils.IsMacOS() ? $"utun{new Random().Next(99)}" : "singbox_tun";
-                tunInbound.mtu = _config.TunModeItem.Mtu;
+                var tunMtu = _config.TunModeItem.Mtu;
+                if (_node != null && (_node.ConfigType == EConfigType.Hysteria2 || _node.ConfigType == EConfigType.TUIC || _node.ConfigType == EConfigType.WireGuard))
+                {
+                    if (tunMtu > 1280)
+                    {
+                        tunMtu = 1280;
+                    }
+                }
+                tunInbound.mtu = tunMtu;
                 tunInbound.auto_route = _config.TunModeItem.AutoRoute;
                 tunInbound.strict_route = _config.TunModeItem.StrictRoute;
                 tunInbound.stack = _config.TunModeItem.Stack;

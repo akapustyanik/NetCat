@@ -160,7 +160,6 @@ function Test-CompleteBinLayout {
     param([string]$PackageRoot)
 
     $requiredPaths = @(
-        "bin\xray\xray.exe",
         "bin\sing_box\sing-box.exe",
         "bin\geoip.dat",
         "bin\geosite.dat"
@@ -216,6 +215,24 @@ function Ensure-BundledBinLayout {
     Copy-Item $sourceBinPath $targetBinPath -Recurse
 }
 
+function Get-RelativePathCompat {
+    param(
+        [string]$BasePath,
+        [string]$Path
+    )
+
+    $baseFullPath = [System.IO.Path]::GetFullPath($BasePath).TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+    $targetFullPath = [System.IO.Path]::GetFullPath($Path)
+
+    if ($targetFullPath.StartsWith($baseFullPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $targetFullPath.Substring($baseFullPath.Length)
+    }
+
+    $baseUri = New-Object System.Uri($baseFullPath)
+    $targetUri = New-Object System.Uri($targetFullPath)
+    return [System.Uri]::UnescapeDataString($baseUri.MakeRelativeUri($targetUri).ToString()).Replace('/', [System.IO.Path]::DirectorySeparatorChar)
+}
+
 function Copy-UpdaterBundle {
     param(
         [string]$RepoRoot,
@@ -235,7 +252,7 @@ function Copy-UpdaterBundle {
     Get-ChildItem -Path $amazToolDir -Recurse -File -ErrorAction SilentlyContinue |
         Where-Object { $_.FullName -notmatch '\\guiLogs\\' } |
         ForEach-Object {
-            $relativePath = [System.IO.Path]::GetRelativePath($amazToolDir, $_.FullName)
+            $relativePath = Get-RelativePathCompat -BasePath $amazToolDir -Path $_.FullName
             $targetPath = Join-Path $updaterDir $relativePath
             $targetParent = Split-Path -Parent $targetPath
             if (-not [string]::IsNullOrWhiteSpace($targetParent)) {
@@ -244,6 +261,62 @@ function Copy-UpdaterBundle {
 
             Copy-Item $_.FullName $targetPath -Force
         }
+}
+
+function Resolve-OpenVpnBundleSourceDirectory {
+    param([string]$RepoRoot)
+
+    $programFilesX86 = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFilesX86)
+    $programFiles = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
+    $candidates = @(
+        (Join-Path $RepoRoot "resources\openvpn\bin"),
+        (Join-Path $RepoRoot "resources\openvpn"),
+        (Join-Path $RepoRoot "my-vpn-zapret\resources\openvpn\bin"),
+        (Join-Path $RepoRoot "my-vpn-zapret\resources\openvpn"),
+        (Join-Path $programFiles "OpenVPN\bin"),
+        (Join-Path $programFilesX86 "OpenVPN\bin")
+    )
+
+    $artifactRoot = Join-Path $RepoRoot "artifacts"
+    if (Test-Path $artifactRoot) {
+        $artifactCandidates = Get-ChildItem -Path $artifactRoot -Directory -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { Test-Path (Join-Path $_.FullName "openvpn.exe") }
+        $candidates += @($artifactCandidates | Select-Object -ExpandProperty FullName)
+    }
+
+    return $candidates |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path (Join-Path $_ "openvpn.exe")) } |
+        Select-Object -First 1
+}
+
+function Copy-OpenVpnBundle {
+    param(
+        [string]$RepoRoot,
+        [string]$OutputDir
+    )
+
+    $targetDir = Join-Path $OutputDir "bin\openvpn"
+    $targetExe = Join-Path $targetDir "openvpn.exe"
+    if (Test-Path $targetExe) {
+        return
+    }
+
+    $sourceDir = Resolve-OpenVpnBundleSourceDirectory -RepoRoot $RepoRoot
+    if ([string]::IsNullOrWhiteSpace($sourceDir)) {
+        Write-Warning "OpenVPN bundle source was not found. The app can still use a system OpenVPN installation."
+        return
+    }
+
+    New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+    Get-ChildItem -Path $sourceDir -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -in @(".exe", ".dll") } |
+        ForEach-Object {
+            Copy-Item $_.FullName (Join-Path $targetDir $_.Name) -Force
+        }
+
+    if (-not (Test-Path $targetExe)) {
+        throw "OpenVPN source directory did not contain openvpn.exe: $sourceDir"
+    }
 }
 
 function Resolve-SignToolPath {
@@ -483,7 +556,7 @@ try {
             Remove-Item $publishSourceDir -Recurse -Force
         }
         $selfContainedArg = $SelfContained.ToString().ToLowerInvariant()
-        dotnet publish $projectPath -c $Configuration -r $Runtime --self-contained $selfContainedArg
+        dotnet publish $projectPath -c $Configuration -r $Runtime --self-contained $selfContainedArg -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true
         if ($LASTEXITCODE -ne 0) {
             throw "dotnet publish failed with exit code $LASTEXITCODE"
         }
@@ -504,6 +577,19 @@ try {
     Copy-Item $publishSourceDir $stagingDir -Recurse
     Copy-Item $stagingDir $OutputDir -Recurse
     Ensure-BundledBinLayout -RepoRoot $repoRoot -OutputDir $OutputDir
+    Copy-OpenVpnBundle -RepoRoot $repoRoot -OutputDir $OutputDir
+    
+    # Clean up unused legacy proxy core directories
+    $unusedDirs = @(
+        (Join-Path $OutputDir "bin\xray"),
+        (Join-Path $OutputDir "bin\mihomo")
+    )
+    foreach ($dir in $unusedDirs) {
+        if (Test-Path $dir) {
+            Remove-Item $dir -Recurse -Force
+        }
+    }
+
     Copy-UpdaterBundle -RepoRoot $repoRoot -Configuration $Configuration -Runtime $Runtime -OutputDir $OutputDir
     Try-SignPackageExecutables `
         -PackageRoot $OutputDir `
@@ -526,6 +612,9 @@ try {
     Remove-Item (Join-Path $OutputDir "guiNConfig.json") -Force -ErrorAction SilentlyContinue
     Remove-Item (Join-Path $OutputDir "updater\guiLogs") -Recurse -Force -ErrorAction SilentlyContinue
     Get-ChildItem -Path (Join-Path $OutputDir "zapret") -File -Filter "zapret-hidden-*.bat" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $OutputDir "resources") -Recurse -Force -ErrorAction SilentlyContinue
+    Copy-Item (Join-Path $repoRoot "domains.lst") (Join-Path $OutputDir "domains.lst") -Force -ErrorAction SilentlyContinue
+    Copy-Item (Join-Path $repoRoot "..\secret.dat") (Join-Path $OutputDir "secret.dat") -Force -ErrorAction SilentlyContinue
     if ((Test-Path $defaultConfigPath) -and (-not (Test-Path (Join-Path $userDataDir "guiNConfig.json")))) {
         Copy-Item $defaultConfigPath (Join-Path $userDataDir "guiNConfig.json") -Force
     }

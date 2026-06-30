@@ -76,10 +76,6 @@ public class FmtHandler
             {
                 return WireguardFmt.Resolve(str, out msg);
             }
-            else if (str.StartsWith(Global.ProtocolShares[EConfigType.Anytls]))
-            {
-                return AnytlsFmt.Resolve(str, out msg);
-            }
             else
             {
                 msg = ResUI.NonvmessOrssProtocol;

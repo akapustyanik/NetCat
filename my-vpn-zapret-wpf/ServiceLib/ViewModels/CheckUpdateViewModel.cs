@@ -89,8 +89,6 @@ public class CheckUpdateViewModel : MyReactiveObject
             //Not Windows and under Win10
             if (!(Utils.IsWindows() && Environment.OSVersion.Version.Major < 10))
             {
-                CheckUpdateModels.Add(GetCheckUpdateModel(ECoreType.Xray.ToString()));
-                CheckUpdateModels.Add(GetCheckUpdateModel(ECoreType.mihomo.ToString()));
                 CheckUpdateModels.Add(GetCheckUpdateModel(ECoreType.sing_box.ToString()));
             }
         }
@@ -436,10 +434,6 @@ public class CheckUpdateViewModel : MyReactiveObject
                 return;
             }
             await CheckUpdateN();
-        }
-        else if (item.CoreType == ECoreType.Xray.ToString())
-        {
-            await CheckUpdateCore(item);
         }
         else
         {
@@ -878,8 +872,6 @@ public class CheckUpdateViewModel : MyReactiveObject
         {
             "GeoFiles" => GetResourceText("UpdateHintGeoFiles", "Geo databases and sing-box rule sets used by routing and DNS."),
             "Zapret" => GetResourceText("UpdateHintZapret", "Zapret bundle with winws, service.bat and bundled DPI bypass presets."),
-            "Xray" => GetResourceText("UpdateHintXray", "Xray core used for proxy protocols and connections."),
-            "mihomo" => GetResourceText("UpdateHintMihomo", "Mihomo core used for Clash-compatible profiles and rule processing."),
             "sing_box" => GetResourceText("UpdateHintSingBox", "sing-box core used for sing-box profiles, DNS and rule sets."),
             _ => GetResourceText("UpdateHintNetCat", "Main application update from GitHub Releases. If GitHub is unavailable, you can install from a local .zip package.")
         };
@@ -890,3 +882,4 @@ public class CheckUpdateViewModel : MyReactiveObject
         return ResUI.ResourceManager.GetString(resourceKey, ResUI.Culture) ?? fallback;
     }
 }
+
