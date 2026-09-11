@@ -1,0 +1,63 @@
+{
+  "log": {
+    "level": "warn",
+    "timestamp": true
+  },
+  "dns": {
+    "servers": [
+      { "tag": "dns-remote", "address": "tcp://1.1.1.1", "detour": "proxy-out" },
+      { "tag": "dns-direct", "address": "local", "detour": "direct" },
+      { "tag": "dns-block", "address": "rcode://success" }
+    ],
+    "rules": [
+      { "outbound": "any", "server": "dns-direct" },
+      { "clash_mode": "Direct", "server": "dns-direct" },
+      { "clash_mode": "Global", "server": "dns-remote" }
+    ],
+    "strategy": "prefer_ipv4"
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "tun-in",
+      "interface_name": "wintun-netcat",
+      "inet4_address": "172.19.0.1/30",
+      "auto_route": true,
+      "strict_route": true,
+      "stack": "mixed",
+      "sniff": true
+    },
+    {
+      "type": "socks",
+      "tag": "socks-in",
+      "listen": "127.0.0.1",
+      "listen_port": 10808,
+      "sniff": true
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "urltest",
+      "tag": "proxy-out",
+      "outbounds": ["out-primary", "out-backup"],
+      "url": "http://cp.cloudflare.com/generate_204",
+      "interval": "5s",
+      "tolerance": 50
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "block",
+      "tag": "block"
+    }
+  ],
+  "route": {
+    "rules": [
+      { "protocol": "dns", "outbound": "dns-direct" },
+      { "ip_is_private": true, "outbound": "direct" }
+    ],
+    "auto_detect_interface": true
+  }
+}

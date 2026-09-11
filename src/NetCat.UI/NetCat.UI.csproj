@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <LangVersion>12.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\..\assets\icons\app.ico</ApplicationIcon>
+    <RootNamespace>NetCat.UI</RootNamespace>
+    <AssemblyName>NetCat</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NetCat.Core\NetCat.Core.csproj" />
+    <ProjectReference Include="..\NetCat.Engine\NetCat.Engine.csproj" />
+    <ProjectReference Include="..\NetCat.Network\NetCat.Network.csproj" />
+    <ProjectReference Include="..\NetCat.Updater\NetCat.Updater.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.2.2" />
+    <PackageReference Include="AvalonEdit" Version="6.3.0.90" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="..\..\assets\logo.png">
+      <Link>assets\logo.png</Link>
+    </Resource>
+    <Content Include="..\..\assets\icons\*.ico">
+      <Link>assets\icons\%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>
