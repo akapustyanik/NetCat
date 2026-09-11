@@ -1,36 +1,31 @@
+# Build output folders
+**/[Bb]in/Debug/
+**/[Bb]in/Release/
+**/[Oo]bj/
 artifacts/
-.publish-staging/
-.zip-staging/
-.test-installs/
-.dotnet-cli/
 .vs/
-**/.dotnet/
-**/.tmp/
-ui-backups/
-
-**/bin/
-**/obj/
-**/node_modules/
-**/dist/
-**/guiTemps/
-**/guiLogs/
-**/guiBackups/
-**/guiConfigs/
-
-tmp-*.log
-tmp-*.json
-*.log
 *.user
 *.suo
-*.cache
+*.userosscache
+*.sln.docstates
+.vscode/
 
-New-NetCatDevCodeSigningCert.ps1
-my-vpn-zapret/resources/v2rayn/v2rayN.exe
-my-vpn-zapret/
+# Ignore compiled binaries in bin root, but keep manifest and directory structure
+bin/**/*.exe
+bin/**/*.dll
+bin/**/*.sys
+bin/**/*.zip
+bin/**/*.rar
+bin/**/*.tar.gz
+!bin/modules_manifest.json
+!bin/**/.gitkeep
 
-.dotnet-sdk/
-sing-box-extracted/
-sing-box.zip
-artifacts/NetCat-release*
-artifacts/*.zip
-artifacts/*.zip.sha256
+# Temporary and backup files
+*.bak
+*.tmp
+*.log
+*.swp
+
+# Runtime generated user data
+data/generated_*.json
+data/profiles.json

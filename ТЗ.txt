@@ -1,0 +1,601 @@
+# ТЕХНИЧЕСКОЕ ЗАДАНИЕ И СИСТЕМНАЯ АРХИТЕКТУРА: HYBRID-VPN (WINDOWS NATIVE)
+
+## 1. Стек технологий и окружение
+
+* **Целевая платформа:** Windows 10 / 11 (x64, ARM64).
+* **Среда выполнения:** .NET 8.0 LTS (C# 12), Native AOT-совместимая архитектура.
+* **Графический интерфейс:** WPF (DirectX/DirectWrite аппаратное ускорение), CommunityToolkit.Mvvm. Исключено использование Electron, CEF, WebView2 и сторонних веб-оберток.
+* **Сетевой стек L3/L4:** Wintun Driver v0.14+ (L3 TUN-адаптер нулевого копирования).
+* **Пакетный фильтр DPI:** WinDivert 1.4+ (модуль Zapret / `winws.exe`).
+* **Бинарные ядра (управление дочерними процессами):**
+* `sing-box.exe` (v1.9+) — первичный L3/L4 маршрутизатор, TUN-адаптер, DNS-резолвер, поддержка протоколов VLESS, VMess, Shadowsocks, Trojan, Hysteria2, TUIC.
+* `xray.exe` (v1.8+) — вспомогательное ядро для расширенных конфигураций Xray-core (VLESS XTLS Reality, gRPC fallback).
+* `openvpn.exe` (v2.6+) — поддержка классических конфигураций `.ovpn`.
+* `winws.exe` (Zapret) — модификация заголовков TCP/UDP пакетов на физическом сетевом адаптере.
+
+
+* **Хранилище данных:** SQLite / LiteDB (история задержек, метрики сессий), JSON (конфигурации, правила, манифесты).
+
+---
+
+## 2. Структура файловой системы проекта
+
+```text
+HybridVPN/
+├── .github/
+│   └── workflows/
+│       └── build-and-release.yml
+├── assets/
+│   ├── icons/
+│   │   ├── app.ico
+│   │   ├── tray_active.ico
+│   │   ├── tray_idle.ico
+│   │   └── tray_error.ico
+│   └── geodata/
+│       ├── geoip.db
+│       └── geosite.db
+├── bin/
+│   ├── sing-box/
+│   │   └── sing-box.exe
+│   ├── xray/
+│   │   └── xray.exe
+│   ├── openvpn/
+│   │   ├── openvpn.exe
+│   │   └── wintun.dll
+│   ├── zapret/
+│   │   ├── winws.exe
+│   │   ├── WinDivert.dll
+│   │   └── WinDivert64.sys
+│   └── modules_manifest.json
+├── data/
+│   ├── appsettings.json
+│   ├── profiles.db
+│   └── routing_rules.json
+├── src/
+│   ├── HybridVPN.Core/
+│   │   ├── Enums/
+│   │   │   ├── CoreType.cs
+│   │   │   ├── RoutingMode.cs
+│   │   │   ├── FailoverStrategy.cs
+│   │   │   └── NodeStatus.cs
+│   │   ├── Models/
+│   │   │   ├── ProxyProfile.cs
+│   │   │   ├── RoutingRule.cs
+│   │   │   ├── LatencyResult.cs
+│   │   │   └── ManifestModel.cs
+│   │   └── Interfaces/
+│   │       ├── IEngineService.cs
+│   │       ├── IRoutingService.cs
+│   │       ├── IFailoverEngine.cs
+│   │       ├── IHealthChecker.cs
+│   │       └── IUpdateManager.cs
+│   ├── HybridVPN.Engine/
+│   │   ├── Management/
+│   │   │   ├── ProcessSupervisor.cs
+│   │   │   └── PortAllocator.cs
+│   │   ├── SingBox/
+│   │   │   ├── SingBoxProcess.cs
+│   │   │   └── SingBoxConfigBuilder.cs
+│   │   ├── Xray/
+│   │   │   ├── XrayProcess.cs
+│   │   │   └── XrayConfigBuilder.cs
+│   │   ├── OpenVpn/
+│   │   │   ├── OpenVpnProcess.cs
+│   │   │   └── OpenVpnAdapter.cs
+│   │   ├── Zapret/
+│   │   │   ├── ZapretProcess.cs
+│   │   │   └── ZapretArgsBuilder.cs
+│   │   └── Parsers/
+│   │       ├── ProtocolParser.cs
+│   │       ├── SubscriptionParser.cs
+│   │       └── LinkDecoders.cs
+│   ├── HybridVPN.Network/
+│   │   ├── Failover/
+│   │   │   ├── DualPathFailoverEngine.cs
+│   │   │   └── RacingStreamRouter.cs
+│   │   ├── Metrics/
+│   │   │   ├── RealDelayTester.cs
+│   │   │   └── TcpRttTester.cs
+│   │   ├── Tun/
+│   │   │   ├── WintunManager.cs
+│   │   │   └── RouteTableManager.cs
+│   │   └── Dns/
+│   │       └── DnsLeakProtector.cs
+│   ├── HybridVPN.Updater/
+│   │   ├── GitHubApiClient.cs
+│   │   ├── ChecksumValidator.cs
+│   │   └── DifferentialUpdater.cs
+│   └── HybridVPN.UI/
+│       ├── App.xaml
+│       ├── App.xaml.cs
+│       ├── ViewModels/
+│       │   ├── MainViewModel.cs
+│       │   ├── ConfigListViewModel.cs
+│       │   ├── ConfigEditorViewModel.cs
+│       │   ├── RoutingViewModel.cs
+│       │   ├── SettingsViewModel.cs
+│       │   └── LogsViewModel.cs
+│       ├── Views/
+│       │   ├── MainWindow.xaml
+│       │   ├── ConfigEditorWindow.xaml
+│       │   ├── SettingsWindow.xaml
+│       │   └── Components/
+│       │       ├── TrayIconManager.cs
+│       │       ├── TrafficGraph.xaml
+│       │       └── LatencyBadge.xaml
+│       ├── Styles/
+│       │   ├── Themes/
+│       │   │   ├── DarkTheme.xaml
+│       │   │   └── LightTheme.xaml
+│       │   └── Controls.xaml
+│       └── SystemIntegration/
+│           ├── TaskSchedulerManager.cs
+│           ├── SystemProxyManager.cs
+│           └── NativeMethods.cs
+└── HybridVPN.sln
+
+```
+
+---
+
+## 3. Архитектура ядра и сетевого стека
+
+### 3.1. Структурная схема взаимодействия модулей
+
+```text
+               +-------------------------------------------------------------+
+               |                  Физический сетевой адаптер                 |
+               +-------------------------------------------------------------+
+                                              |
+                              [WinDivert / Zapret (winws.exe)]
+                                (DPI Bypass: модификация пакетов)
+                                              |
++---------------------------------------------v---------------------------------------------+
+|                                    Wintun TUN Adapter                                     |
+|                                    (172.19.0.1 / 30)                                      |
++-------------------------------------------------------------------------------------------+
+                                              |
++---------------------------------------------v---------------------------------------------+
+|                                   ГЛАВНЫЙ МАРШРУТИЗАТОР                                   |
+|                                     sing-box Core                                         |
+|                                                                                           |
+|  [Inbounds]                                                                               |
+|  - tun-in (Default System Gateway)                                                        |
+|  - socks-in (127.0.0.1:10808 для Telegram / Apps)                                         |
+|                                                                                           |
+|  [Routing Rules Engine]                                                                   |
+|  - Process Name (Discord.exe, Chrome.exe ...)                                             |
+|  - Domain / Geosite (direct / proxy / block)                                              |
+|  - IP / GeoIP (Bypass LAN, Direct RU, Proxy Out)                                          |
+|                                                                                           |
+|  [Outbound Multiplexer & Dual-Path Fallover]                                              |
+|  - urltest / active-active pool                                                           |
++----------------------+--------------------+---------------------+-------------------------+
+                       |                    |                     |
+     +-----------------+                    |                     +-------------------+
+     | Direct                               | Socks5 Bridge                           | Socks5 Bridge
+     v                                      v                                         v
+[Физический шлюз]              [127.0.0.1:10850]                         [127.0.0.1:10851]
+                                       |                                         |
+                            +----------v-----------+                  +----------v-----------+
+                            |      Xray-core       |                  |     OpenVPN CLI      |
+                            | (XTLS Reality/gRPC)  |                  |    (.ovpn config)    |
+                            +----------------------+                  +----------------------+
+
+```
+
+### 3.2. Принцип Dual-Path Failover (Отказоустойчивость с нулевой задержкой)
+
+Для обеспечения непрерывности соединения без разрыва активных сессий (TCP/UDP) реализуется гибридная схема:
+
+1. **Синхронный TCP Racing (Active-Active):**
+* При инициации нового TCP-соединения `sing-box` отправляет параллельные `SYN`-пакеты сразу через два независимых Outbound (например: Основной — VLESS-Reality через Sing-box; Резервный — Hysteria2 или локальный Xray bridge).
+* Соединение, подтвердившее `SYN-ACK` с минимальным RTT, назначается рабочим для данного потока. Второе соединение завершается отправкой `RST`.
+
+
+2. **Fallback-мониторинг постоянных сессий:**
+* Фоновый сервис `HealthChecker` опрашивает конечные точки (`generate_204`) с частотой 1 раз в 5 секунд.
+* При фиксации 2 последовательных потерь пакетов на активном канале `sing-box` переключает шлюз на резервный узел через internal unix-socket API без перезапуска TUN-интерфейса.
+
+
+
+### 3.3. Модуль Zapret (DPI Bypass)
+
+* Запуск: `winws.exe` запускается с аргументами, соответствующими активному профилю провайдера.
+* Фильтрация трафика: задействуется WinDivert с фильтром:
+`outbound and ip and (tcp.DstPort == 80 or tcp.DstPort == 443 or udp.DstPort == 443)`.
+* Разделение ответственности: Zapret работает на L2/L3 до попадания зашифрованных VPN-туннелей в сеть, обрабатывая трафик, идущий в обход VPN (`Direct`), предотвращая блокировку самих VPN-нод и доступных напрямую сайтов.
+
+---
+
+## 4. Контракты интерфейсов и модели данных
+
+### 4.1. Доменные перечисления и модели (`HybridVPN.Core`)
+
+```csharp
+namespace HybridVPN.Core.Enums
+{
+    public enum CoreType
+    {
+        SingBox,
+        Xray,
+        OpenVpn
+    }
+
+    public enum RoutingMode
+    {
+        Global,             // Весь трафик через VPN
+        RuleBased,          // Маршрутизация по базам Geosite/GeoIP
+        SelectiveVpn,       // VPN только для указанных приложений/доменов (Whitelist)
+        SelectiveDirect     // VPN для всего, кроме указанных приложений/доменов (Blacklist)
+    }
+
+    public enum FailoverStrategy
+    {
+        ActiveActiveRacing, // Параллельная отправка SYN на 2 протокола
+        HotStandby          // Мгновенное переключение при падении метрик
+    }
+
+    public enum NodeStatus
+    {
+        Active,
+        Standby,
+        Degraded,
+        Dead
+    }
+}
+
+```
+
+```csharp
+namespace HybridVPN.Core.Models
+{
+    public class ProxyProfile
+    {
+        public Guid Id { get; set; } = Guid.NewGuid();
+        public string Name { get; set; } = string.Empty;
+        public CoreType TargetCore { get; set; }
+        public string Protocol { get; set; } = string.Empty; // vless, vmess, trojan, hysteria2, ss, ovpn
+        public string ServerAddress { get; set; } = string.Empty;
+        public int ServerPort { get; set; }
+        public string RawUri { get; set; } = string.Empty;
+        public string GeneratedConfigJson { get; set; } = string.Empty;
+        public bool IsPrimary { get; set; }
+        public bool IsBackup { get; set; }
+        public LatencyResult LastMetrics { get; set; } = new();
+    }
+
+    public class RoutingRule
+    {
+        public Guid Id { get; set; } = Guid.NewGuid();
+        public string Target { get; set; } = string.Empty; // "discord.exe", "domain:youtube.com", "geoip:ru"
+        public RuleType Type { get; set; } // Process, Domain, IP, GeoData
+        public RuleAction Action { get; set; } // Proxy, Direct, Block
+    }
+
+    public class LatencyResult
+    {
+        public int TcpPingMs { get; set; } = -1;
+        public int RealHttpDelayMs { get; set; } = -1;
+        public double PacketLossRate { get; set; } = 0.0;
+        public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+    }
+}
+
+```
+
+### 4.2. Сервисные интерфейсы (`HybridVPN.Core.Interfaces`)
+
+```csharp
+namespace HybridVPN.Core.Interfaces
+{
+    public interface IEngineService
+    {
+        Task InitializeAsync();
+        Task StartRoutingAsync(ProxyProfile primary, ProxyProfile? backup = null);
+        Task StopRoutingAsync();
+        Task RestartWithConfigAsync(string configPath);
+        event EventHandler<string> OnEngineLogReceived;
+    }
+
+    public interface IFailoverEngine
+    {
+        void RegisterNodes(ProxyProfile primary, ProxyProfile backup);
+        Task ExecuteFastSwitchAsync();
+        Task StartMonitorAsync(CancellationToken cancellationToken);
+    }
+
+    public interface IHealthChecker
+    {
+        Task<LatencyResult> TestNodeRealDelayAsync(ProxyProfile node, int timeoutMs = 2500);
+        Task<int> TestTcpRttAsync(string host, int port, int timeoutMs = 1500);
+    }
+
+    public interface IUpdateManager
+    {
+        Task<ManifestModel> CheckForUpdatesAsync();
+        Task<bool> UpdateComponentAsync(string componentKey, IProgress<double> progress);
+        Task RollbackComponentAsync(string componentKey);
+    }
+}
+
+```
+
+---
+
+## 5. Спецификация конфигураций и генерации правил
+
+### 5.1. Шаблон базовой конфигурации `sing-box` (`data/sing-box-template.json`)
+
+Генератор `SingBoxConfigBuilder` динамически собирает JSON перед стартом:
+
+```json
+{
+  "log": {
+    "level": "warn",
+    "timestamp": true
+  },
+  "dns": {
+    "servers": [
+      { "tag": "dns-remote", "address": "tcp://1.1.1.1", "detour": "proxy-out" },
+      { "tag": "dns-direct", "address": "local", "detour": "direct" },
+      { "tag": "dns-block", "address": "rcode://success" }
+    ],
+    "rules": [
+      { "outbound": "any", "server": "dns-direct" },
+      { "clash_mode": "Direct", "server": "dns-direct" },
+      { "clash_mode": "Global", "server": "dns-remote" },
+      { "rule_set": "geosite-category-ads-all", "server": "dns-block" },
+      { "rule_set": "geosite-geolocation-!cn", "server": "dns-remote" }
+    ],
+    "strategy": "prefer_ipv4"
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "tun-in",
+      "interface_name": "wintun-hybrid",
+      "inet4_address": "172.19.0.1/30",
+      "auto_route": true,
+      "strict_route": true,
+      "stack": "mixed",
+      "sniff": true
+    },
+    {
+      "type": "socks",
+      "tag": "socks-in",
+      "listen": "127.0.0.1",
+      "listen_port": 10808,
+      "sniff": true
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "urltest",
+      "tag": "proxy-out",
+      "outbounds": ["out-primary", "out-backup"],
+      "url": "http://cp.cloudflare.com/generate_204",
+      "interval": "5s",
+      "tolerance": 50
+    },
+    {
+      "type": "vless",
+      "tag": "out-primary",
+      "server": "primary.node.example",
+      "server_port": 443,
+      "uuid": "00000000-0000-0000-0000-000000000000",
+      "tls": {
+        "enabled": true,
+        "server_name": "primary.node.example",
+        "utls": { "enabled": true, "fingerprint": "chrome" }
+      }
+    },
+    {
+      "type": "socks",
+      "tag": "out-backup",
+      "server": "127.0.0.1",
+      "server_port": 10850
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "block",
+      "tag": "block"
+    }
+  ],
+  "route": {
+    "rules": [
+      { "protocol": "dns", "outbound": "dns-direct" },
+      { "ip_is_private": true, "outbound": "direct" },
+      { "domain_suffix": [".ru", "gosuslugi.ru", "vk.com"], "outbound": "direct" },
+      { "process_name": ["Discord.exe", "Telegram.exe"], "outbound": "proxy-out" }
+    ],
+    "auto_detect_interface": true
+  }
+}
+
+```
+
+---
+
+## 6. Механизм гранулярного модульного обновления
+
+Модули обновляются независимо от клиентского приложения. Флаг `pinned: true` запрещает модификацию файла, защищая пользовательские кастомные сборки.
+
+### 6.1. Манифест модулей (`bin/modules_manifest.json`)
+
+```json
+{
+  "app_version": "1.0.0",
+  "last_check": "2026-09-11T00:00:00Z",
+  "modules": {
+    "sing-box": {
+      "version": "1.9.3",
+      "repo": "SagerNet/sing-box",
+      "asset_pattern": "sing-box-.*-windows-amd64.zip",
+      "binary_path": "bin/sing-box/sing-box.exe",
+      "expected_sha256": "8a35b809a7b6b3e945c7ad48817a14ec8e7b99c15d48729910d54a20b080f12a",
+      "pinned": false
+    },
+    "xray": {
+      "version": "1.8.11",
+      "repo": "XTLS/Xray-core",
+      "asset_pattern": "Xray-windows-64.zip",
+      "binary_path": "bin/xray/xray.exe",
+      "expected_sha256": "4b68ef53d8548c772c695b7f14ad313b63a0a4c042dc081a29f8c6799fcb63b2",
+      "pinned": false
+    },
+    "zapret": {
+      "version": "69.2",
+      "repo": "bol-van/zapret-win-bundle",
+      "asset_pattern": "zapret-win-.*.zip",
+      "binary_path": "bin/zapret/winws.exe",
+      "expected_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "pinned": true
+    },
+    "openvpn": {
+      "version": "2.6.9",
+      "repo": "OpenVPN/openvpn",
+      "asset_pattern": "OpenVPN-.*-amd64.msi",
+      "binary_path": "bin/openvpn/openvpn.exe",
+      "expected_sha256": "6a9e14e082855140ecfa574bbdaff6ea054817a58a74e50d6a89c447bc9eb9e7",
+      "pinned": false
+    }
+  }
+}
+
+```
+
+### 6.2. Алгоритм дифференциального обновления (`ModularUpdateManager.cs`)
+
+```text
+[Проверка обновлений]
+          │
+          v
+[Запрос GitHub Releases API по каждому модулю]
+          │
+          v
+  (RemoteVersion > LocalVersion) И (pinned == false)?
+     ├── НЕТ ──> Пропустить модуль
+     └── ДА
+          │
+          v
+  [Скачивание архива в temp/{module}.zip]
+          │
+          v
+  [Вычисление SHA-256] ── Не совпал? ──> [Удалить архив, прервать, Лог ошибки]
+          │ (Совпал)
+          v
+  [Остановка запущенного процесса модуля (SIGTERM/Process.Kill)]
+          │
+          v
+  [Резервное копирование старого .exe -> .exe.bak]
+          │
+          v
+  [Распаковка и замена .exe]
+          │
+          v
+  [Обновление версии в modules_manifest.json]
+          │
+          v
+  [Рестарт процесса модуля в составе цепочки]
+
+```
+
+---
+
+## 7. Системная интеграция и нативный UI
+
+### 7.1. Работа с привилегиями Windows
+
+* Работа с сетевыми драйверами `wintun.dll` и `WinDivert.dll` требует прав Администратора.
+* Приложение компилируется с манифестом `requireAdministrator`.
+* **Автозапуск без всплывающего UAC:**
+* Автозапуск настраивается через Task Scheduler API (`ITaskService`).
+* Создается задача `HybridVPN_AutoStart` с параметрами: `Run with highest privileges`, `At log on of any user`. Запись в ветку реестра `Run` не используется во избежание блокировок системы контролем учетных записей.
+
+
+
+### 7.2. Жизненный цикл интерфейса и трей
+
+* Класс `TrayIconManager`: использует нативные вызовы `Shell_NotifyIcon` через Win32 API.
+* Событие `Window_Closing`:
+* Если опция `MinimizeToTrayOnClose = true`, то `e.Cancel = true; this.Hide();`.
+* Значок в трее отображает контекстное меню:
+* Статус активного узла и пинг (зеленый/желтый/красный маркер).
+* Быстрый селектор режимов: `Global`, `Rule-based`, `Selective VPN`, `Direct`.
+* Пункт «Включить / Отключить VPN».
+* Кнопка полного выхода.
+
+
+
+
+* Штатное завершение приложения:
+* Перехват событий `AppDomain.CurrentDomain.ProcessExit` и `Application.Current.Exit`.
+* Гарантированная остановка процессов `winws.exe`, `sing-box.exe`, `xray.exe`, `openvpn.exe`.
+* Сброс интерфейса Wintun и очистка добавленных статических маршрутов таблицы маршрутизации Windows.
+
+
+
+### 7.3. UI / MVVM Спецификация
+
+* **Кастомизация стилей:**
+* Поддержка цветовых тем через сменные словари ресурсов: `DarkTheme.xaml`, `LightTheme.xaml`.
+* Акцентные цвета сохраняются в `appsettings.json` и связываются динамическими ресурсами (`DynamicResource AccentColorBrush`).
+
+
+* **Редактор конфигураций:**
+* Встроенный компонент редактора JSON на базе AvalonEdit (без сторонних Web-редакторов).
+* Подсветка синтаксиса JSON, валидация структуры схемы перед сохранением.
+
+
+* **Мониторинг трафика:**
+* Нативный компонент `TrafficGraph.xaml`, отрисовывающий `Polyline` через аппаратный контекст `DrawingContext` (DirectX/WPF) с частотой обновления 1 Гц (без выделения памяти под DOM-структуры).
+
+
+
+---
+
+## 8. Пошаговый сценарий сборки проекта через CLI
+
+Для генерации каркаса проекта через командную строку выполнить следующий набор команд:
+
+```powershell
+# 1. Создание директории и Solution
+mkdir HybridVPN
+cd HybridVPN
+dotnet new sln -n HybridVPN
+
+# 2. Создание проектов архитектурных слоев
+dotnet new classlib -n HybridVPN.Core -f net8.0
+dotnet new classlib -n HybridVPN.Engine -f net8.0
+dotnet new classlib -n HybridVPN.Network -f net8.0
+dotnet new classlib -n HybridVPN.Updater -f net8.0
+dotnet new wpf -n HybridVPN.UI -f net8.0-windows
+
+# 3. Связывание проектов в Solution
+dotnet sln add src/HybridVPN.Core/HybridVPN.Core.csproj
+dotnet sln add src/HybridVPN.Engine/HybridVPN.Engine.csproj
+dotnet sln add src/HybridVPN.Network/HybridVPN.Network.csproj
+dotnet sln add src/HybridVPN.Updater/HybridVPN.Updater.csproj
+dotnet sln add src/HybridVPN.UI/HybridVPN.UI.csproj
+
+# 4. Настройка проектных зависимостей
+dotnet add src/HybridVPN.Engine/HybridVPN.Engine.csproj reference src/HybridVPN.Core/HybridVPN.Core.csproj
+dotnet add src/HybridVPN.Network/HybridVPN.Network.csproj reference src/HybridVPN.Core/HybridVPN.Core.csproj
+dotnet add src/HybridVPN.Updater/HybridVPN.Updater.csproj reference src/HybridVPN.Core/HybridVPN.Core.csproj
+dotnet add src/HybridVPN.UI/HybridVPN.UI.csproj reference src/HybridVPN.Core/HybridVPN.Core.csproj
+dotnet add src/HybridVPN.UI/HybridVPN.UI.csproj reference src/HybridVPN.Engine/HybridVPN.Engine.csproj
+dotnet add src/HybridVPN.UI/HybridVPN.UI.csproj reference src/HybridVPN.Network/HybridVPN.Network.csproj
+dotnet add src/HybridVPN.UI/HybridVPN.UI.csproj reference src/HybridVPN.Updater/HybridVPN.Updater.csproj
+
+# 5. Установка необходимых NuGet-пакетов
+dotnet add src/HybridVPN.UI/HybridVPN.UI.csproj package CommunityToolkit.Mvvm --version 8.2.2
+dotnet add src/HybridVPN.UI/HybridVPN.UI.csproj package AvalonEdit --version 6.3.0.90
+dotnet add src/HybridVPN.Core/HybridVPN.Core.csproj package System.Text.Json --version 8.0.4
+dotnet add src/HybridVPN.Engine/HybridVPN.Engine.csproj package LiteDB --version 5.0.19
+dotnet add src/HybridVPN.Updater/HybridVPN.Updater.csproj package Octokit --version 13.0.1
+
+```

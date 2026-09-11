@@ -1,0 +1,37 @@
+[
+  {
+    "Id": "11111111-1111-1111-1111-111111111111",
+    "Target": "ip_is_private",
+    "Type": "IP",
+    "Action": "Direct",
+    "Description": "Локальные и частные сети (Bypass LAN)"
+  },
+  {
+    "Id": "22222222-2222-2222-2222-222222222222",
+    "Target": "geoip:ru",
+    "Type": "GeoData",
+    "Action": "Direct",
+    "Description": "Российские IP адреса напрямую"
+  },
+  {
+    "Id": "33333333-3333-3333-3333-333333333333",
+    "Target": ".ru,gosuslugi.ru,vk.com,yandex.ru,mail.ru,sberbank.ru,tbank.ru",
+    "Type": "Domain",
+    "Action": "Direct",
+    "Description": "Домены зоны .RU напрямую"
+  },
+  {
+    "Id": "44444444-4444-4444-4444-444444444444",
+    "Target": "Discord.exe,Telegram.exe,chrome.exe",
+    "Type": "Process",
+    "Action": "Proxy",
+    "Description": "Трафик приложений через VPN прокси"
+  },
+  {
+    "Id": "55555555-5555-5555-5555-555555555555",
+    "Target": "youtube.com,googlevideo.com,discord.com,discordapp.com",
+    "Type": "Domain",
+    "Action": "Proxy",
+    "Description": "YouTube и Discord через прокси/Zapret"
+  }
+]

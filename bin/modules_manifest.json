@@ -1,0 +1,46 @@
+{
+  "app_version": "0.5.0",
+  "last_check": "2026-09-11T00:00:00Z",
+  "modules": {
+    "sing-box": {
+      "version": "1.14.0",
+      "repo": "SagerNet/sing-box",
+      "asset_pattern": "sing-box-.*-windows-amd64\\.zip",
+      "binary_path": "bin/sing-box/sing-box.exe",
+      "expected_sha256": "",
+      "pinned": false
+    },
+    "xray": {
+      "version": "1.8.24",
+      "repo": "XTLS/Xray-core",
+      "asset_pattern": "Xray-windows-64\\.zip",
+      "binary_path": "bin/xray/xray.exe",
+      "expected_sha256": "",
+      "pinned": false
+    },
+    "zapret": {
+      "version": "1.10.2",
+      "repo": "Flowseal/zapret-discord-youtube",
+      "asset_pattern": "zapret-discord-youtube-.*\\.zip",
+      "binary_path": "bin/zapret/winws.exe",
+      "expected_sha256": "5eaac9fb2e4b1abd693487452a3ff3f4dfe9578a45f9ddddfa4bc1f5a6bb62d5",
+      "pinned": false
+    },
+    "tg-proxy": {
+      "version": "1.10.2",
+      "repo": "Flowseal/tg-ws-proxy",
+      "asset_pattern": "TgWsProxy_windows\\.exe",
+      "binary_path": "bin/tg-ws-proxy/TgWsProxy_windows.exe",
+      "expected_sha256": "17be7f17b2e19920935988822d66f14dd2b727372ff565a28ff64b757ff4d898",
+      "pinned": false
+    },
+    "openvpn": {
+      "version": "2.6.12",
+      "repo": "OpenVPN/openvpn",
+      "asset_pattern": "OpenVPN-.*-amd64\\.msi",
+      "binary_path": "bin/openvpn/openvpn.exe",
+      "expected_sha256": "",
+      "pinned": false
+    }
+  }
+}
