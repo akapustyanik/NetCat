@@ -1,9 +1,10 @@
-﻿param([string]$Root = (Split-Path $PSScriptRoot -Parent))
+param([string]$Root = (Split-Path $PSScriptRoot -Parent))
 $ErrorActionPreference = 'Stop'
 $moduleRoot = Join-Path $Root 'bin'
 $cache = Join-Path $Root 'artifacts/downloads'
 New-Item -ItemType Directory -Force $cache,$moduleRoot | Out-Null
 $headers = @{ 'User-Agent' = 'NetCat-Build'; Accept = 'application/vnd.github+json' }
+if ($env:GITHUB_TOKEN) { $headers['Authorization'] = "Bearer $env:GITHUB_TOKEN" }
 $records = @()
 function Get-GitHubModule([string]$Key, [string]$Repo, [string]$Tag, [string]$Pattern, [string]$Binary) {
     $release = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/tags/$Tag" -Headers $headers

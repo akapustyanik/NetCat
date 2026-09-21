@@ -21,5 +21,12 @@ jobs:
       - name: Restore dependencies
         run: dotnet restore NetCat.sln
 
+      - name: Fetch modules
+        run: |
+          powershell -ExecutionPolicy Bypass -File scripts/Fetch-OfficialModules.ps1
+          powershell -ExecutionPolicy Bypass -File scripts/Fetch-TelegramHeadless.ps1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run tests
         run: dotnet test NetCat.sln -c Release --no-restore
