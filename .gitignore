@@ -1,31 +1,31 @@
-# Build output folders
-**/[Bb]in/Debug/
-**/[Bb]in/Release/
-**/[Oo]bj/
-artifacts/
-.vs/
+# Build outputs
+/bin/*
+!/bin/modules.lock.json
+src/**/bin/
+tests/**/bin/
+**/obj/
+/artifacts/
+**/TestResults/
+
+# IDE and tooling
+/.vs/
+/.vscode/
 *.user
 *.suo
-*.userosscache
-*.sln.docstates
-.vscode/
 
-# Ignore compiled binaries in bin root, but keep manifest and directory structure
-bin/**/*.exe
-bin/**/*.dll
-bin/**/*.sys
-bin/**/*.zip
-bin/**/*.rar
-bin/**/*.tar.gz
-!bin/modules_manifest.json
-!bin/**/.gitkeep
-
-# Temporary and backup files
-*.bak
-*.tmp
+# Runtime, logs, and temporary state
+data/
+runtime/
 *.log
-*.swp
+*.tmp
+*.prepared*
 
-# Runtime generated user data
-data/generated_*.json
-data/profiles.json
+# Sensitive credentials and certificates
+*.ovpn
+*.pfx
+*.key
+*.cer
+*.crt
+
+# Geodata and binary databases
+*.dat
