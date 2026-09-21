@@ -41,7 +41,7 @@ foreach($taskWheel in (Get-ChildItem $taskWheels -Filter '*.whl')) {
     $taskExpected=($taskMeta.urls | Where-Object filename -EQ $taskWheel.Name).digests.sha256
     $taskSha=(Get-FileHash -LiteralPath $taskWheel.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     if($taskSha -ne $taskExpected) { throw 'PyPI wheel hash mismatch' }
-    [IO.Compression.ZipFile]::ExtractToDirectory($taskWheel.FullName,$taskPackages,$true)
+    Expand-Archive -LiteralPath $taskWheel.FullName -DestinationPath $taskPackages -Force
     $taskRecords+=@{file=$taskWheel.Name;sha256=$taskSha}
 }
 @{python='3.13.15';pythonSha256=(Get-FileHash $taskPython).Hash.ToLowerInvariant();sourceTree=$taskTree.sha;wheels=$taskRecords} | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $taskRuntime 'runtime.lock.json') -Encoding utf8
