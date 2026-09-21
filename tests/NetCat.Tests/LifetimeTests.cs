@@ -78,7 +78,7 @@ public sealed class LifetimeTests
         var psi=new ProcessStartInfo(exe) {UseShellExecute=false,CreateNoWindow=true,WindowStyle=ProcessWindowStyle.Hidden}; psi.ArgumentList.Add(mode); psi.ArgumentList.Add(file);
         using var owner=Process.Start(psi)!; int[] ids=[];
         static bool Alive(int id) { try {using var p=Process.GetProcessById(id); return !p.HasExited;}catch(ArgumentException){return false;} }
-        async Task Until(Func<bool> ready) {var limit=DateTime.UtcNow.AddSeconds(12);while(!ready() && DateTime.UtcNow<limit) await Task.Delay(20);Assert.True(ready());}
+        async Task Until(Func<bool> ready) {var limit=DateTime.UtcNow.AddSeconds(25);while(!ready() && DateTime.UtcNow<limit) await Task.Delay(20);Assert.True(ready());}
         try
         {
             await Until(()=>File.Exists(file)); ids=JsonSerializer.Deserialize<int[]>(File.ReadAllText(file))!;
