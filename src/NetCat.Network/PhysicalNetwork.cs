@@ -8,7 +8,12 @@ using NetCat.Engine;
 namespace NetCat.Network;
 public static class PhysicalNetwork
 {
-    public static NetworkInterface[] Adapters() => NetworkInterface.GetAllNetworkInterfaces().Where(n => n.OperationalStatus == OperationalStatus.Up && n.NetworkInterfaceType is NetworkInterfaceType.Ethernet or NetworkInterfaceType.Wireless80211 && !new[] { "vpn", "wintun", "tap-", "wireguard", "netcat", "tailscale", "hyper-v" }.Any(s => (n.Name + " " + n.Description).Contains(s, StringComparison.OrdinalIgnoreCase))).ToArray();
+    public static NetworkInterface[] Adapters()
+    {
+        var all = NetworkInterface.GetAllNetworkInterfaces().Where(n => n.OperationalStatus == OperationalStatus.Up && n.NetworkInterfaceType is NetworkInterfaceType.Ethernet or NetworkInterfaceType.Wireless80211 && !new[] { "vpn", "wintun", "tap-", "wireguard", "netcat", "tailscale" }.Any(s => (n.Name + " " + n.Description).Contains(s, StringComparison.OrdinalIgnoreCase))).ToArray();
+        var physical = all.Where(n => !(n.Name + " " + n.Description).Contains("hyper-v", StringComparison.OrdinalIgnoreCase) && !n.Name.StartsWith("vEthernet", StringComparison.OrdinalIgnoreCase)).ToArray();
+        return physical.Length > 0 ? physical : all;
+    }
 
     public static bool HasGlobalUnicastIpv6(IEnumerable<IPAddress> addresses, out string primaryAddress)
     {

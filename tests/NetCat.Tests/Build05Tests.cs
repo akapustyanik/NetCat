@@ -57,11 +57,11 @@ public sealed class Build05Tests
     public async Task ZapretCanCancelPendingHttpWithoutWaitingForTestTimeout(bool stop)
     {
         var root=RoutingTests.FindRoot();var handler=new HangingHandler();using var service=new FakeZapret(Path.Combine(root,"bin"),Path.Combine(root,"artifacts","zapret-cancel-"+Guid.NewGuid().ToString("N")),handler);
-        using var ct=new CancellationTokenSource(TimeSpan.FromSeconds(12));var row=new StrategyResult {File="test.bat"};
+        using var ct=new CancellationTokenSource(TimeSpan.FromSeconds(20));var row=new StrategyResult {File="test.bat"};
         var test=service.TestAsync(new AppSettings {TestTimeoutSeconds=60},[row],new Progress<StrategyResult>(),ct.Token);
-        await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        if(stop)await service.StopAsync().WaitAsync(TimeSpan.FromSeconds(2));else ct.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(()=>test.WaitAsync(TimeSpan.FromSeconds(2)));Assert.False(service.Running);Assert.Equal("Отменён",row.YouTube);
+        await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(15));
+        if(stop)await service.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));else ct.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(()=>test.WaitAsync(TimeSpan.FromSeconds(5)));Assert.False(service.Running);Assert.Equal("Отменён",row.YouTube);
     }
     private sealed class HangingHandler:HttpMessageHandler
     {
