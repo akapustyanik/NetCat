@@ -41,9 +41,12 @@ foreach($taskWheel in (Get-ChildItem $taskWheels -Filter '*.whl')) {
     $taskExpected=($taskMeta.urls | Where-Object filename -EQ $taskWheel.Name).digests.sha256
     $taskSha=(Get-FileHash -LiteralPath $taskWheel.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     if($taskSha -ne $taskExpected) { throw 'PyPI wheel hash mismatch' }
-    Expand-Archive -LiteralPath $taskWheel.FullName -DestinationPath $taskPackages -Force
+    $zipTemp = Join-Path $taskCache ($taskWheel.Name + '.zip')
+    Copy-Item -LiteralPath $taskWheel.FullName -Destination $zipTemp -Force
+    Expand-Archive -LiteralPath $zipTemp -DestinationPath $taskPackages -Force
+    Remove-Item -LiteralPath $zipTemp -Force
     $taskRecords+=@{file=$taskWheel.Name;sha256=$taskSha}
 }
 @{python='3.13.15';pythonSha256=(Get-FileHash $taskPython).Hash.ToLowerInvariant();sourceTree=$taskTree.sha;wheels=$taskRecords} | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $taskRuntime 'runtime.lock.json') -Encoding utf8
-& (Join-Path $taskRuntime 'NetCat.Telegram.exe') -c 'import proxy.tg_ws_proxy; import cryptography; print("Headless Telegram imports OK")'
+& (Join-Path $taskRuntime 'NetCat.Telegram.exe') -c "import proxy.tg_ws_proxy; import cryptography; print('Headless Telegram imports OK')"
 if($LASTEXITCODE -ne 0) { throw 'Headless import check failed' }
