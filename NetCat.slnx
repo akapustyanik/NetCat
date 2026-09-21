@@ -1,9 +1,0 @@
-<Solution>
-  <Folder Name="/src/">
-    <Project Path="src/NetCat.Core/NetCat.Core.csproj" />
-    <Project Path="src/NetCat.Engine/NetCat.Engine.csproj" />
-    <Project Path="src/NetCat.Network/NetCat.Network.csproj" />
-    <Project Path="src/NetCat.UI/NetCat.UI.csproj" />
-    <Project Path="src/NetCat.Updater/NetCat.Updater.csproj" />
-  </Folder>
-</Solution>

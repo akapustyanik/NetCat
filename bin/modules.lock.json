@@ -1,0 +1,70 @@
+[
+  {
+    "url": "https://github.com/SagerNet/sing-box/releases/download/v1.14.0/sing-box-1.14.0-windows-amd64.zip",
+    "asset": "sing-box-1.14.0-windows-amd64.zip",
+    "repo": "SagerNet/sing-box",
+    "verified": "GitHub release asset SHA-256",
+    "key": "sing-box",
+    "sha256": "3ffb56267da14e287be48bd10cf7e6505260125bad940b75101fbb4d5d58e5d6",
+    "version": "v1.14.0"
+  },
+  {
+    "url": "https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-windows-64.zip",
+    "asset": "Xray-windows-64.zip",
+    "repo": "XTLS/Xray-core",
+    "verified": "GitHub release asset SHA-256",
+    "key": "xray",
+    "sha256": "d004c39288ce9ada487c6f398c7c545f7d749e44bdfdd59dbc9f865afba4e1ad",
+    "version": "v26.3.27"
+  },
+  {
+    "url": "https://github.com/Flowseal/zapret-discord-youtube/releases/download/1.10.2/zapret-discord-youtube-1.10.2.zip",
+    "asset": "zapret-discord-youtube-1.10.2.zip",
+    "repo": "Flowseal/zapret-discord-youtube",
+    "verified": "GitHub release asset SHA-256",
+    "key": "zapret",
+    "sha256": "5eaac9fb2e4b1abd693487452a3ff3f4dfe9578a45f9ddddfa4bc1f5a6bb62d5",
+    "version": "1.10.2"
+  },
+  {
+    "url": "https://github.com/Flowseal/tg-ws-proxy/releases/download/v1.10.2/TgWsProxy_windows.exe",
+    "asset": "TgWsProxy_windows.exe",
+    "repo": "Flowseal/tg-ws-proxy",
+    "verified": "GitHub release asset SHA-256",
+    "key": "tg-ws-proxy",
+    "sha256": "17be7f17b2e19920935988822d66f14dd2b727372ff565a28ff64b757ff4d898",
+    "version": "v1.10.2"
+  },
+  {
+    "verified": "Authenticode: WireGuard",
+    "key": "wintun",
+    "url": "https://www.wintun.net/builds/wintun-0.14.1.zip",
+    "sha256": "07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51",
+    "version": "0.14.1"
+  },
+  {
+    "verified": "Authenticode: OpenVPN",
+    "key": "openvpn",
+    "url": "https://swupdate.openvpn.org/community/releases/OpenVPN-2.6.22-I001-amd64.msi",
+    "sha256": "1e1bb9a712990d1b2b961de7e8df3384964e4fb6f6776a100840f0d9a82ed507",
+    "version": "2.6.22"
+  },
+  {
+    "asset": "geoip.dat",
+    "repo": "Loyalsoldier/v2ray-rules-dat",
+    "key": "geoip",
+    "version": "202609122339",
+    "verified": "GitHub release asset SHA-256",
+    "url": "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/download/202609122339/geoip.dat",
+    "sha256": "45325fee1555c8bf04115100694ce8429b88c9bb3b3548abcfd236a1c8ea146f"
+  },
+  {
+    "asset": "geosite.dat",
+    "repo": "Loyalsoldier/v2ray-rules-dat",
+    "key": "geosite",
+    "version": "202609122339",
+    "verified": "GitHub release asset SHA-256",
+    "url": "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/download/202609122339/geosite.dat",
+    "sha256": "af08caedd53ac2bf0a0b70c4e7e2fb7f68c97eb9051bcc007e0a2311a152dd16"
+  }
+]
