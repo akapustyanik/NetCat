@@ -5,6 +5,11 @@ public static class SettingsValidation
 {
     public static void Validate(AppSettings s)
     {
+        ThemeColor.Parse(s.BaseColor); ThemeColor.Parse(s.AccentColor);
+        if (!double.IsFinite(s.PanelBrightness) || s.PanelBrightness is < -20 or > 20)
+            throw new FormatException("Яркость панелей должна быть от −20 до 20.");
+        if (s.TestIntervalSeconds < 1)
+            throw new FormatException("Интервал автопроверки должен быть не менее 1 секунды.");
         if(s.Profiles.Select(p=>p.Id).Distinct().Count()!=s.Profiles.Count || s.Subscriptions.Select(p=>p.Id).Distinct().Count()!=s.Subscriptions.Count || s.Rules.Select(p=>p.Id).Distinct().Count()!=s.Rules.Count) throw new FormatException("Повторяющийся идентификатор профиля, подписки или правила.");
         if(s.MainProfileId.HasValue && !s.Profiles.Any(p=>p.Id==s.MainProfileId && !p.IsOpenVpn)) throw new FormatException("Основной VPN-профиль отсутствует.");
         if(s.OpenVpnProfileId.HasValue && !s.Profiles.Any(p=>p.Id==s.OpenVpnProfileId && p.IsOpenVpn)) throw new FormatException("OpenVPN-профиль отсутствует.");
@@ -12,6 +17,11 @@ public static class SettingsValidation
         foreach(var dns in new[]{s.DirectDns,s.OpenVpnDns}) if(dns.Length>0 && !IPAddress.TryParse(dns,out _)) throw new FormatException("DNS должен быть IP-адресом сервера.");
         if(s.TelegramSocks && s.TelegramSocksHost is "localhost" or "127.0.0.1" && s.TelegramSocksPort==s.SocksPort) throw new FormatException("Telegram SOCKS не должен указывать на вход самого NetCat.");
         RuleValidation.Domains(s.LocalDomains); RuleValidation.Domains(s.OpenVpnDomains);
+        var directSet = RuleValidation.Domains(s.LocalDomains).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var ovpnSet = RuleValidation.Domains(s.OpenVpnDomains).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var overlaps = directSet.Intersect(ovpnSet, StringComparer.OrdinalIgnoreCase).ToArray();
+        if (overlaps.Length > 0)
+            throw new FormatException($"Домен «{overlaps[0]}» не может одновременно быть настроен напрямую и через OpenVPN.");
         foreach(var rule in s.Rules) RuleValidation.Validate(rule);
         foreach(var profile in s.Profiles)
         {

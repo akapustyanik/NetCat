@@ -13,8 +13,9 @@ public sealed class FailoverPolicy
         if (!samples.TryGetValue(id, out var history)) samples[id] = history = new();
         history.Enqueue((now,result)); while (history.Count > 20) history.Dequeue();
     }
-    public bool ShouldRecover(Guid active, int failures, DateTimeOffset now, TimeSpan freshness)
+    public bool ShouldRecover(Guid active, int failures, DateTimeOffset now, TimeSpan freshness, bool physicalNetworkAvailable = true)
     {
+        if (!physicalNetworkAvailable) return false;
         if (now-lastSwitch < TimeSpan.FromMinutes(2) || !samples.TryGetValue(active,out var history)) return false;
         var recent=history.Where(s=>now-s.At<=freshness).Reverse().ToArray();
         return recent.Take(Math.Max(2,failures)).Count(s=>!s.Result.Success) == Math.Max(2,failures);

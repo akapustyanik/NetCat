@@ -10,7 +10,7 @@ internal static class OwnedProcess
     internal sealed record Started(Process Process, StreamReader Output, StreamReader Error);
     // Atomic job assignment closes the Process.Start -> AssignProcessToJobObject race.
     // No user code runs, and no unowned suspended process exists, even if NetCat dies here.
-    internal static Started Start(SafeFileHandle job,string executable,IEnumerable<string> args,string? directory)
+    internal static Started Start(SafeFileHandle job,string executable,IEnumerable<string> args,string? directory, IDictionary<string, string>? environment = null, EventHandler? exited = null)
     {
         if(!Path.IsPathRooted(executable) && !File.Exists(executable))
             executable=(Environment.GetEnvironmentVariable("PATH") ?? "").Split(';').Select(p=>Path.Combine(p.Trim('"'),executable)).FirstOrDefault(File.Exists) ?? executable;
@@ -27,17 +27,37 @@ internal static class OwnedProcess
                 if(input.IsInvalid || !SetHandleInformation(outputRead,1,0) || !SetHandleInformation(errorRead,1,0)) throw new Win32Exception();
                 nuint size=0; InitializeProcThreadAttributeList(0,2,0,ref size);
                 var attributes=Marshal.AllocHGlobal(checked((int)size)); var jobs=Marshal.AllocHGlobal(IntPtr.Size); var handles=Marshal.AllocHGlobal(IntPtr.Size*3);
+                nint envBlock = nint.Zero;
                 bool initialized=false; ProcessInfo created=default; Process? process=null; StreamReader? stdout=null,stderr=null;
                 try
                 {
+                    if (environment != null && environment.Count > 0)
+                    {
+                        var merged = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                        foreach (System.Collections.DictionaryEntry de in Environment.GetEnvironmentVariables())
+                        {
+                            if (de.Key is string k && de.Value is string v) merged[k] = v;
+                        }
+                        foreach (var (k, v) in environment) merged[k] = v;
+                        var sb = new StringBuilder();
+                        foreach (var (k, v) in merged) sb.Append(k).Append('=').Append(v).Append('\0');
+                        sb.Append('\0');
+                        var chars = sb.ToString().ToCharArray();
+                        envBlock = Marshal.AllocHGlobal(chars.Length * sizeof(char));
+                        Marshal.Copy(chars, 0, envBlock, chars.Length);
+                    }
                     if(!InitializeProcThreadAttributeList(attributes,2,0,ref size)) throw new Win32Exception(); initialized=true;
                     Marshal.WriteIntPtr(jobs,job.DangerousGetHandle());
                     Marshal.WriteIntPtr(handles,input.DangerousGetHandle()); Marshal.WriteIntPtr(handles,IntPtr.Size,outputWrite.DangerousGetHandle()); Marshal.WriteIntPtr(handles,IntPtr.Size*2,errorWrite.DangerousGetHandle());
                     if(!UpdateProcThreadAttribute(attributes,0,0x2000D,jobs,(nuint)IntPtr.Size,0,0) || !UpdateProcThreadAttribute(attributes,0,0x20002,handles,(nuint)(IntPtr.Size*3),0,0)) throw new Win32Exception();
                     var startup=new StartupEx {Info=new Startup {Size=Marshal.SizeOf<StartupEx>(),Flags=0x100,Input=input.DangerousGetHandle(),Output=outputWrite.DangerousGetHandle(),Error=errorWrite.DangerousGetHandle()},Attributes=attributes};
                     var command=new StringBuilder(string.Join(" ",new[]{executable}.Concat(args).Select(Quote)));
-                    if(!CreateProcess(executable,command,0,0,true,0x08080004,0,directory ?? Path.GetDirectoryName(executable),ref startup,out created)) throw new Win32Exception();
-                    process=Process.GetProcessById(created.ProcessId); _=process.Handle; process.EnableRaisingEvents=true;
+                    uint flags = 0x08080004;
+                    if (envBlock != nint.Zero) flags |= 0x00000400; // CREATE_UNICODE_ENVIRONMENT
+                    if(!CreateProcess(executable,command,0,0,true,flags,envBlock,directory ?? Path.GetDirectoryName(executable),ref startup,out created)) throw new Win32Exception();
+                    process=Process.GetProcessById(created.ProcessId); _=process.Handle;
+                    if (exited != null) process.Exited += exited;
+                    process.EnableRaisingEvents=true;
                     // Duplicate read handles: local pipe handles are released on return.
                     stdout=Reader(outputRead); stderr=Reader(errorRead);
                     if(ResumeThread(created.Thread)==uint.MaxValue) throw new Win32Exception();
@@ -46,6 +66,7 @@ internal static class OwnedProcess
                 catch { if(created.Process!=0) TerminateProcess(created.Process,1); process?.Dispose(); stdout?.Dispose(); stderr?.Dispose(); throw; }
                 finally
                 {
+                    if (envBlock != nint.Zero) Marshal.FreeHGlobal(envBlock);
                     if(created.Thread!=0) CloseHandle(created.Thread); if(created.Process!=0) CloseHandle(created.Process);
                     if(initialized) DeleteProcThreadAttributeList(attributes);
                     Marshal.FreeHGlobal(attributes); Marshal.FreeHGlobal(jobs); Marshal.FreeHGlobal(handles);

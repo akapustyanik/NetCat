@@ -3,6 +3,12 @@ using System.Security.Cryptography.X509Certificates;
 namespace NetCat.Updater;
 public static class PublisherTrust
 {
+    public static IDisposable AcquireRestart(string current,string next)
+    {
+        NetCat.Engine.ModuleIntegrity.CheckPath(next);
+        var lease=new FileStream(next,FileMode.Open,FileAccess.Read,FileShare.Read);
+        try {RequireSamePublisher(current,next);return lease;} catch {lease.Dispose();throw;}
+    }
     [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] private struct FileInfo { public uint Size; [MarshalAs(UnmanagedType.LPWStr)] public string Path; public nint Handle,Subject; }
     [StructLayout(LayoutKind.Sequential)] private struct TrustData { public uint Size;public nint Policy,Sip;public uint Ui,Revocation,Choice;public nint File;public uint StateAction;public nint State,Url;public uint Flags,Context; }
     [DllImport("wintrust.dll",ExactSpelling=true)] private static extern int WinVerifyTrust(nint hwnd,ref Guid action,ref TrustData data);

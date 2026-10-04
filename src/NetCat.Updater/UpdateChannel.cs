@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -7,7 +7,7 @@ using Microsoft.Win32.SafeHandles;
 using NetCat.Core;
 
 namespace NetCat.Updater;
-public static class UpdateChannel
+public static partial class UpdateChannel
 {
     [DllImport("kernel32.dll", SetLastError=true)] private static extern bool GetNamedPipeServerProcessId(SafePipeHandle pipe, out uint pid);
     [DllImport("advapi32.dll", SetLastError=true)] private static extern bool OpenProcessToken(nint process, uint access, out SafeAccessTokenHandle token);
@@ -18,14 +18,14 @@ public static class UpdateChannel
     private static string Stage(string path) => UpdateCleanup.ValidateStage(path);
     public static async Task LaunchAsync(string jobPath)
     {
-        PublisherTrust.RequireSamePublisher(Environment.ProcessPath!,Environment.ProcessPath!);
         var stage=Stage(Path.GetDirectoryName(Path.GetFullPath(jobPath))!);
         if(Path.GetFileName(jobPath)!="job.json") throw new InvalidDataException("Недопустимое задание обновления.");
         var job=JsonSerializer.Deserialize<UpdateJob>(await File.ReadAllTextAsync(jobPath),JsonSettings.Options) ?? throw new InvalidDataException("Нет задания.");
         if(job.Root!=AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar) && Path.GetFullPath(job.Root).TrimEnd(Path.DirectorySeparatorChar)!=Path.GetFullPath(AppContext.BaseDirectory).TrimEnd(Path.DirectorySeparatorChar)) throw new InvalidDataException("Задание относится к другой копии NetCat.");
         if(job.Stage!=stage || job.ParentId!=Environment.ProcessId || job.ParentStart!=Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks) throw new InvalidDataException("Задание устарело.");
-        var helper=Path.Combine(stage,"NetCat.Update.exe"); PublisherTrust.RequireSamePublisher(Environment.ProcessPath!,helper);
-        UpdateAuthentication.HelperHash(Hash(Environment.ProcessPath!),Hash(helper));
+        var helper=Path.Combine(stage,"NetCat.Update.exe");
+        using var helperLease=new FileStream(helper,FileMode.Open,FileAccess.Read,FileShare.Read);
+        UpdateAuthentication.HelperHash(Hash(Environment.ProcessPath!),SHA256.HashData(helperLease));
         var name="NetCat.Update."+Guid.NewGuid().ToString("N");
         using var pipe=new NamedPipeServerStream(name,PipeDirection.InOut,1,PipeTransmissionMode.Byte,PipeOptions.Asynchronous|PipeOptions.CurrentUserOnly);
         using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(15));
@@ -43,7 +43,6 @@ public static class UpdateChannel
     {
         // No JSON file supplied on the command line is ever opened by this entry point.
         UpdateAuthentication.PipeName(pipeName);
-        PublisherTrust.RequireSamePublisher(Environment.ProcessPath!,Environment.ProcessPath!);
         var stage=Stage(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar));
         using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(15));
         using var pipe=new NamedPipeClientStream(".",pipeName,PipeDirection.InOut,PipeOptions.Asynchronous|PipeOptions.CurrentUserOnly);
@@ -53,7 +52,6 @@ public static class UpdateChannel
         if(!OpenProcessToken(parent.Handle,8,out var token)) throw new InvalidDataException("Не определены права отправителя.");
         using(token) if(!GetTokenInformation(token,20,out int elevated,sizeof(int),out _) || elevated==0) throw new InvalidDataException("Отправитель не является привилегированной копией NetCat.");
         var original=parent.MainModule?.FileName ?? throw new InvalidDataException("Нет пути отправителя.");
-        PublisherTrust.RequireSamePublisher(Environment.ProcessPath!,original);
         UpdateAuthentication.HelperHash(Hash(original),Hash(Environment.ProcessPath!));
         using var reader=new StreamReader(pipe,leaveOpen:true); using var writer=new StreamWriter(pipe,leaveOpen:true) {AutoFlush=true};
         var line=await reader.ReadLineAsync(deadline.Token) ?? throw new InvalidDataException("Пустое задание.");
@@ -61,6 +59,16 @@ public static class UpdateChannel
         var job=JsonSerializer.Deserialize<UpdateJob>(line) ?? throw new InvalidDataException("Пустое задание.");
         var root=Path.GetDirectoryName(original)!;
         UpdateAuthentication.Job(job,new(parent.Id,parent.StartTime.ToUniversalTime().Ticks,original,true,Hash(original)),stage,Hash(Environment.ProcessPath!));
+        if (job.RecoveryOnly)
+        {
+            var backup = ValidateRecoveryJob(job);
+            using (PublisherTrust.AcquireRestart(original, backup)) { }
+            await writer.WriteLineAsync("ready".AsMemory(), deadline.Token);
+            await ApplyRecoveryAsync(job with { Root=root, Stage=stage });
+            return;
+        }
+        await ReleaseTrust.VerifyStageAsync(job, deadline.Token);
+        PublisherTrust.RequireSamePublisher(original, PortableUpdate.SafePath(Path.Combine(stage,"payload"), "NetCat.exe"));
         await writer.WriteLineAsync("ready".AsMemory(),deadline.Token);
         await PortableUpdate.ApplyAuthenticatedJobAsync(job with {Root=root,Stage=stage});
     }

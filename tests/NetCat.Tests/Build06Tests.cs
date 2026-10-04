@@ -60,17 +60,17 @@ public sealed class Build06Tests
         Assert.Equal("ForceIPv4",config["outbounds"]![0]!["streamSettings"]!["sockopt"]!["domainStrategy"]!.ToString());
         Assert.Equal("dns-direct",config["routing"]!["rules"]![0]!["outboundTag"]!.ToString());
         Assert.Equal(Net.Address,config["outbounds"]![1]!["sendThrough"]!.ToString());
-        var file=Path.Combine(RoutingTests.FindRoot(),"artifacts","validation","xray06.json"); Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        var file=RoutingTests.TestArtifacts("validation","xray06.json"); Directory.CreateDirectory(Path.GetDirectoryName(file)!);
         await File.WriteAllTextAsync(file,config.ToJsonString());
         using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var result=await ProcessHost.RunAsync(Path.Combine(RoutingTests.FindRoot(),"bin/xray/xray.exe"),["run","-test","-c",file],timeout.Token);
+        var result=await ProcessHost.RunAsync(Path.Combine(RoutingTests.ModuleRoot, "xray/xray.exe"),["run","-test","-c",file],timeout.Token);
         Assert.True(result.Code==0,result.Output);
     }
     [Fact]
     public async Task SwitchingDoesNotEnableStoppedVpn()
     {
-        using var router=new RouterService(Path.Combine(RoutingTests.FindRoot(),"bin"),Path.Combine(RoutingTests.FindRoot(),"artifacts","switch-stopped"));
-        await router.SwitchProfileAsync(new AppSettings {Profiles=[Trojan()]});
+        using var router=new RouterService(RoutingTests.ModuleRoot,RoutingTests.TestArtifacts("switch-stopped"));
+        await router.EnsureStoppedAsync(CancellationToken.None);
         Assert.False(router.VpnRequested); Assert.False(router.Running);
     }
 }

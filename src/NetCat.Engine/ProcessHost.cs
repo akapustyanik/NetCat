@@ -11,13 +11,18 @@ public sealed class ProcessHost : IDisposable
     private SafeFileHandle job;
     private readonly object sync = new();
     private bool disposed, stopping;
+    private long generation;
     private Task readers = Task.CompletedTask;
+    private IDisposable? moduleLease;
+    private readonly IExecutableTrustPolicy? trustPolicy;
     private readonly System.Collections.Concurrent.ConcurrentQueue<string> output = new();
     public event Action<string>? Line;
+    public event Action<int, int>? Exited;
+    public Action<Exception>? ObserverError { get; set; }
     public bool Running { get { lock(sync) return process is { HasExited: false }; } }
     public int Id { get { lock(sync) return process?.Id ?? 0; } }
     public string LastOutput => string.Join(Environment.NewLine, output);
-    public ProcessHost() => job=NewJob();
+    public ProcessHost(IExecutableTrustPolicy? trustPolicy=null) {this.trustPolicy=trustPolicy;job=NewJob();}
     private static SafeFileHandle NewJob()
     {
         var job = CreateJobObject(IntPtr.Zero, null);
@@ -25,34 +30,65 @@ public sealed class ProcessHost : IDisposable
         if (job.IsInvalid || !SetInformationJobObject(job, 9, ref info, (uint)Marshal.SizeOf<JobInfo>())) { var error=new System.ComponentModel.Win32Exception(); job.Dispose(); throw error; }
         return job;
     }
-    public void Start(string executable, IEnumerable<string> args, string? directory = null, bool log = true)
+    public void Start(string executable, IEnumerable<string> args, string? directory = null, bool log = true, IDictionary<string, string>? environment = null)
     {
         lock(sync)
         {
             ObjectDisposedException.ThrowIf(disposed,this);
             if (Running || stopping) throw new InvalidOperationException("Процесс уже запущен или останавливается.");
+            var currentGeneration = ++generation;
             job.Dispose(); job=NewJob();
             output.Clear(); process?.Dispose(); process=null;
-            var started=OwnedProcess.Start(job,executable,args,directory); process=started.Process;
+            moduleLease?.Dispose(); moduleLease=trustPolicy==null?ModuleIntegrity.AcquireForExecutable(executable):trustPolicy.AcquireExecutable(executable);
+            OwnedProcess.Started started;
+            void OnProcessExited(object? sender, EventArgs _)
+            {
+                if (sender is not Process currentProc) return;
+                int pid = 0, exitCode = -1;
+                try { pid = currentProc.Id; exitCode = currentProc.ExitCode; } catch { }
+                lock (sync)
+                {
+                    if (stopping || disposed || generation != currentGeneration || !ReferenceEquals(process, currentProc)) return;
+                    // Serialize delivery with replacement. Recheck after each
+                    // observer because a callback can stop/restart this host.
+                    if (Exited is { } handlers)
+                        foreach (Action<int, int> handler in handlers.GetInvocationList())
+                        {
+                            if (stopping || disposed || generation != currentGeneration || !ReferenceEquals(process, currentProc)) break;
+                            try { handler(pid, exitCode); } catch (Exception error) { ReportObserverError(error); }
+                        }
+                }
+            }
+            try { started=OwnedProcess.Start(job,executable,args,directory,environment,OnProcessExited); process=started.Process; }
+            catch { moduleLease?.Dispose(); moduleLease=null; throw; }
             async Task Read(StreamReader reader)
             {
                 using(reader) while(await reader.ReadLineAsync().ConfigureAwait(false) is { } data)
-                { output.Enqueue(Redact(data)); while(output.Count>12) output.TryDequeue(out _); Line?.Invoke(log ? Redact(data) : data); }
+                {
+                    output.Enqueue(Redact(data)); while(output.Count>12) output.TryDequeue(out _);
+                    if (Line is { } handlers)
+                        foreach (Action<string> handler in handlers.GetInvocationList())
+                            try { handler(log ? Redact(data) : data); } catch (Exception error) { ReportObserverError(error); }
+                }
             }
             readers=Task.WhenAll(Task.Run(()=>Read(started.Output)),Task.Run(()=>Read(started.Error)));
         }
     }
+    private void ReportObserverError(Exception error)
+    {
+        try { ObserverError?.Invoke(error); } catch { }
+    }
     public async Task StopAsync()
     {
         Process? current;
-        lock(sync) { if(disposed)return; if(!TerminateJobObject(job,1)) throw new System.ComponentModel.Win32Exception(); current=process; stopping=true; }
+        lock(sync) { if(disposed)return; if(!TerminateJobObject(job,1)) throw new System.ComponentModel.Win32Exception(); current=process; stopping=true; generation++; }
         try { if(current!=null) await current.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10)); await readers.WaitAsync(TimeSpan.FromSeconds(10)); }
-        finally { lock(sync) { if(ReferenceEquals(process,current)) { current?.Dispose(); process=null; } stopping=false; } }
+        finally { lock(sync) { if(ReferenceEquals(process,current)) { current?.Dispose(); process=null; moduleLease?.Dispose();moduleLease=null; } stopping=false; } }
     }
-    public static async Task<(int Code, string Output)> RunAsync(string executable, IEnumerable<string> args, CancellationToken ct = default)
+    public static async Task<(int Code, string Output)> RunAsync(string executable, IEnumerable<string> args, CancellationToken ct = default, IDictionary<string, string>? environment = null, IExecutableTrustPolicy? trustPolicy=null)
     {
-        using var host=new ProcessHost(); var text=new System.Text.StringBuilder();
-        host.Line+=line=> {lock(text) text.AppendLine(line);}; host.Start(executable,args,log:false);
+        using var host=new ProcessHost(trustPolicy); var text=new System.Text.StringBuilder();
+        host.Line+=line=> {lock(text) text.AppendLine(line);}; host.Start(executable,args,log:false,environment:environment);
         try
         {
             await host.process!.WaitForExitAsync(ct); var code=host.process.ExitCode;
@@ -65,11 +101,11 @@ public sealed class ProcessHost : IDisposable
     public static string Redact(string text)
     {
         text = Regex.Replace(text, @"\x1B\[[0-?]*[ -/]*[@-~]", "");
-        text = Regex.Replace(text, @"(?i)(https?|tg|vless|vmess|trojan|ss|hysteria2|tuic)://[^\s""']+", "[адрес скрыт]");
+        text = Regex.Replace(text, @"(?i)(naive\+https|naive|https?|tg|vless|vmess|trojan|ss|hysteria2|tuic)://[^\s""']+", "[адрес скрыт]");
         if (Regex.IsMatch(text, "(?i)(password|secret|private.key|auth.token|uuid)")) return "[строка с параметрами авторизации скрыта]";
         return text;
     }
-    public void Dispose() { lock(sync) { if(disposed)return; disposed=true; job.Dispose(); process?.Dispose(); process=null; } }
+    public void Dispose() { lock(sync) { if(disposed)return; disposed=true; job.Dispose(); process?.Dispose(); process=null; moduleLease?.Dispose();moduleLease=null; } }
     [StructLayout(LayoutKind.Sequential)] private struct BasicLimits { public long PerProcessUserTimeLimit, PerJobUserTimeLimit; public uint LimitFlags; public UIntPtr MinimumWorkingSetSize, MaximumWorkingSetSize; public uint ActiveProcessLimit; public UIntPtr Affinity; public uint PriorityClass, SchedulingClass; }
     [StructLayout(LayoutKind.Sequential)] private struct IoCounters { public ulong ReadOperationCount, WriteOperationCount, OtherOperationCount, ReadTransferCount, WriteTransferCount, OtherTransferCount; }
     [StructLayout(LayoutKind.Sequential)] private struct JobInfo { public BasicLimits BasicLimitInformation; public IoCounters IoInfo; public UIntPtr ProcessMemoryLimit, JobMemoryLimit, PeakProcessMemoryUsed, PeakJobMemoryUsed; }

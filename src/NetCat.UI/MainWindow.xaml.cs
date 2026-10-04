@@ -22,34 +22,27 @@ public partial class MainWindow : Window
     public MainViewModel VM { get; }
     private readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromSeconds(1) };
     private TelegramService telegram => VM.Telegram;
-    private TrayIntegration? tray;
     private bool exiting, timerBusy;
-    private DateTime nextTest = DateTime.Now, nextSubscriptions = DateTime.Now.AddMinutes(1);
-    private readonly FailoverPolicy failover = new();
+    private readonly WindowPresentationSession? presentation;
+    private DateTime nextTest = DateTime.Now;
     private readonly CancellationTokenSource lifetime = new();
+    private readonly IUnelevatedShellLauncher journalShell;
+    private int journalActionRunning;
     private DateTime nextModuleCheck = DateTime.Now.AddHours(6);
-    private long previousReceive, previousSend;
-    private NetworkInterface? trafficAdapter;
-    private DateTime nextAdapterRefresh;
-    private long trafficRevision=-1, previousTrafficStamp;
-    private int adapterEnumerations, backgroundTicks;
-    private bool pingBusy;
-    private DateTime nextPing = DateTime.MinValue;
-    private int measuredLatencyPort;
-    private readonly SystemTunnelHealth tunnelHealth = new();
+    private int backgroundTicks;
     private readonly Queue<double> traffic = new();
-    public MainWindow(MainViewModel vm)
+    private sealed record ModuleVersionChoice(
+        string Version,
+        bool PinAfterInstall);
+    public MainWindow(MainViewModel vm, IUnelevatedShellLauncher? journalShell = null, WindowPresentationSession? presentation = null)
     {
-        InitializeComponent(); VM = vm; DataContext = vm;
-        VM.Router.Changed += () => failover.ObserveSession(VM.Router.SessionRevision);
+        this.presentation = presentation;
+        InitializeComponent(); VM = vm; this.journalShell = journalShell ?? new UnelevatedExplorerShellLauncher(); DataContext = vm;
         WindowFrame.Apply(this);
-        SourceInitialized += (_, _) => tray = new TrayIntegration(this, () => _ = ExitAsync(), () => new TrayCommand[] {
-            new("VPN", VM.Router.VpnRequested, VM.Idle, () => Vpn_Click(this,new RoutedEventArgs())),
-            new("OpenVPN", VM.Router.OpenVpn.Running, VM.Idle && (VM.OpenVpnProfile != null || VM.Router.OpenVpn.Running), () => OpenVpn_Click(this,new RoutedEventArgs())),
-            new("Zapret", VM.Zapret.Running, VM.Idle, () => ToggleZapret_Click(this,new RoutedEventArgs())),
-            new("Telegram · WS proxy", telegram.Running, VM.Idle, () => StartTelegram_Click(this,new RoutedEventArgs()))
-        });
-        Closing += WindowClosing; timer.Tick += TimerTick; timer.Start();
+        Closing += WindowClosing;
+        StateChanged += (_, _) => SaveCurrentPresentationState();
+        IsVisibleChanged += (_, _) => { if (IsVisible) ShowInTaskbar = true; SaveCurrentPresentationState(); };
+        timer.Tick += TimerTick; timer.Start();
         Loaded += async (_,_) =>
         {
             if (App.IsSmoke) return;
@@ -67,17 +60,16 @@ public partial class MainWindow : Window
             if (VM.State.CheckModuleUpdates) await VM.CheckUpdatesAsync(lifetime.Token);
         };
     }
-    private async void Vpn_Click(object sender, RoutedEventArgs e) => await VM.RunAsync(ct=>VM.SetVpnEnabledAsync(!VM.Router.VpnRequested,ct));
-    private async void OpenVpn_Click(object sender, RoutedEventArgs e) => await VM.RunAsync(ct=>VM.SetOpenVpnEnabledAsync(!VM.Router.OpenVpn.Running,ct));
+    private void Vpn_Click(object sender, RoutedEventArgs e) => VM.UserRequestedVpnChange(!VM.Router.VpnRequested);
+    private void OpenVpn_Click(object sender, RoutedEventArgs e) => VM.UserRequestedOpenVpnChange(!VM.DesiredState.OpenVpnEnabled);
     private async void Save_Click(object sender, RoutedEventArgs e) => await VM.RunAsync(_ => VM.SaveAsync());
     private async void Apply_Click(object sender, RoutedEventArgs e) => await VM.RunAsync(VM.ApplyRoutesAsync);
-    private void Cancel_Click(object sender, RoutedEventArgs e) { VM.WorkCancellation.Cancel(); VM.TestsCancellation.Cancel(); }
+    private void Cancel_Click(object sender, RoutedEventArgs e) => VM.CancelCurrentOperation();
     private void CancelTests_Click(object sender, RoutedEventArgs e) => VM.TestsCancellation.Cancel();
-    private async void StopAll_Click(object sender, RoutedEventArgs e) => await VM.RunAsync(_=>VM.StopComponentsAsync());
     private void ImportOvpn_Click(object sender, RoutedEventArgs e) => ImportFiles(true);
     private void ImportFiles(bool ovpn = false)
     {
-        var open = new OpenFileDialog { Filter = ovpn ? "OpenVPN|*.ovpn" : "Конфигурации|*.ovpn;*.json;*.txt;*.conf|Все файлы|*.*", Multiselect = true };
+        var open = new OpenFileDialog { Filter = ovpn ? "OpenVPN|*.ovpn" : "Конфигурации|*.ovpn;*.json;*.yaml;*.yml;*.txt;*.conf|Все файлы|*.*", Multiselect = true };
         if (open.ShowDialog(this) != true) return;
         _ = VM.RunAsync(async _ =>
         {
@@ -85,8 +77,9 @@ public partial class MainWindow : Window
             foreach (var f in open.FileNames)
             {
                 if (new FileInfo(f).Length > 8 * 1024 * 1024) throw new InvalidDataException("Конфигурация слишком большая.");
-                var raw = f.EndsWith(".ovpn", StringComparison.OrdinalIgnoreCase) ? OpenVpnConfiguration.ReadWithCertificates(f) : await File.ReadAllTextAsync(f);
-                var result = ProfileImporter.Parse(raw, System.IO.Path.GetFileNameWithoutExtension(f)); profiles.AddRange(result.Profiles); errors.AddRange(result.Errors);
+                if (f.EndsWith(".ovpn", StringComparison.OrdinalIgnoreCase)) { profiles.Add(OpenVpnBundle.Read(f).ToProfile(System.IO.Path.GetFileNameWithoutExtension(f))); continue; }
+                var raw = await File.ReadAllTextAsync(f);
+                var result = ProfileImporter.ParseForImport(raw, System.IO.Path.GetFileNameWithoutExtension(f)); profiles.AddRange(result.Profiles); errors.AddRange(result.Errors);
             }
             if (profiles.Count == 0) throw new InvalidDataException(string.Join(Environment.NewLine, errors));
             if (PreviewImport(profiles, errors)) await VM.ImportProfilesAsync(profiles);
@@ -98,6 +91,7 @@ public partial class MainWindow : Window
         var name = dialog.Text("Название группы / подписки", "Моя подписка");
         var text = dialog.Text("URL подписки, ссылки или sing-box JSON", "", true);
         var subscribe = dialog.Check("Сохранить URL как обновляемую подписку", true);
+        var insecure = dialog.Check("Дополнительно: разрешить HTTP и локальную сеть для этой подписки (небезопасно)", false);
         var file = new Button { Content = "Выбрать файлы (.ovpn, .json, .txt)", HorizontalAlignment = HorizontalAlignment.Left }; dialog.Insert(file);
         file.Click += (_, _) => { dialog.Close(); ImportFiles(); };
         dialog.Note("После чтения откроется список найденных профилей. Адрес подписки хранится зашифрованно для текущего пользователя Windows.");
@@ -107,10 +101,10 @@ public partial class MainWindow : Window
             var raw = text.Text.Trim(); Subscription? subscription = null;
             if (Uri.TryCreate(raw, UriKind.Absolute, out var url) && url.Scheme is "http" or "https")
             {
-                var source = raw; raw = await ReadSubscriptionAsync(source, CancellationToken.None);
-                if (subscribe.IsChecked == true) subscription = new Subscription { Name = name.Text, Url = source, UpdatedAt = DateTimeOffset.Now };
+                var source = raw; raw = await ReadSubscriptionAsync(source, CancellationToken.None, insecure.IsChecked == true);
+                if (subscribe.IsChecked == true) subscription = new Subscription { Name = name.Text, Url = source, AllowInsecureTransport = insecure.IsChecked == true, UpdatedAt = DateTimeOffset.Now };
             }
-            var result = ProfileImporter.Parse(raw, name.Text);
+            var result = ProfileImporter.ParseForImport(raw, name.Text);
             if (result.Profiles.Count == 0) throw new InvalidDataException(string.Join(Environment.NewLine, result.Errors.DefaultIfEmpty("Профили не найдены.")));
             if (!PreviewImport(result.Profiles, result.Errors, dialog)) return false;
             if (subscription != null) foreach (var p in result.Profiles) p.SubscriptionId = subscription.Id;
@@ -121,21 +115,14 @@ public partial class MainWindow : Window
     private bool PreviewImport(List<Profile> profiles, List<string> errors, Window? owner = null)
     {
         var dialog = new EditorDialog(owner ?? this, "Предпросмотр импорта"); dialog.Note($"Найдено профилей: {profiles.Count}. Ошибок: {errors.Count}.");
-        var choices = profiles.Select(p => (p, box: dialog.Check(p.ToString(), true))).ToArray();
+        var choices = profiles.Select(p => (p, box: dialog.Check(p.ToString() + (p.SecurityWarning.Length > 0 ? " — " + p.SecurityWarning : ""), true))).ToArray();
         foreach (var e in errors.Take(15)) dialog.Note(e);
         dialog.Accept.Content = "Импортировать выбранные";
         dialog.OnAccept = () => { profiles.RemoveAll(p => choices.First(c => c.p == p).box.IsChecked != true); if (profiles.Count == 0) throw new InvalidOperationException("Выберите хотя бы один профиль."); return Task.FromResult(true); };
         return dialog.ShowDialog() == true;
     }
-    private static async Task<string> ReadSubscriptionAsync(string url, CancellationToken ct)
-    {
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(25) }; client.DefaultRequestHeaders.UserAgent.ParseAdd("NetCat/0.5.0");
-        using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct); response.EnsureSuccessStatusCode();
-        if (response.Content.Headers.ContentLength > 8 * 1024 * 1024) throw new InvalidDataException("Подписка больше 8 МБ.");
-        await using var stream = await response.Content.ReadAsStreamAsync(ct); using var buffer = new MemoryStream(); var chunk = new byte[16384]; int read;
-        while ((read = await stream.ReadAsync(chunk, ct)) > 0) { if (buffer.Length + read > 8 * 1024 * 1024) throw new InvalidDataException("Подписка больше 8 МБ."); buffer.Write(chunk, 0, read); }
-        return Encoding.UTF8.GetString(buffer.ToArray());
-    }
+    private static Task<string> ReadSubscriptionAsync(string url, CancellationToken ct, bool allowInsecureTransport = false) =>
+        new SubscriptionClient().ReadAsync(url, allowInsecureTransport, ct);
     private void EditProfile_Click(object sender, RoutedEventArgs e)
     {
         if (VM.SelectedProfile is not { } original) { VM.Status = "Выберите профиль."; return; }
@@ -168,7 +155,7 @@ public partial class MainWindow : Window
     private void ProfileDetails_Click(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is not Profile profile) return;
-        ShowTestDetails(profile.Name,profile.ResultDetails);
+        ShowTestDetails(profile.Name,profile.ResultDetails + "\n\nПередача данных\n" + profile.TrafficDetails);
     }
     private void ShowTestDetails(string title,string details)
     {
@@ -182,23 +169,30 @@ public partial class MainWindow : Window
     }
     private async void TestProfile_Click(object sender, RoutedEventArgs e) { if (VM.SelectedProfile is { } p) await VM.RunTestsAsync(ct => VM.TestAsync([p], ct)); }
     private async void TestAll_Click(object sender, RoutedEventArgs e) => await VM.RunTestsAsync(ct => VM.TestAsync(VM.Profiles.Where(p => !p.IsOpenVpn).ToArray(), ct));
+    private async void TestTraffic_Click(object sender, RoutedEventArgs e) { if(VM.SelectedProfile is { } p) await VM.RunTestsAsync(ct => VM.TestTrafficAsync([p], ct)); }
+    private async void TestAllTraffic_Click(object sender, RoutedEventArgs e) => await VM.RunTestsAsync(ct => VM.TestTrafficAsync(VM.Profiles.Where(p => !p.IsOpenVpn).ToArray(), ct));
     private void Subscriptions_Click(object sender, RoutedEventArgs e)
     {
         if (VM.State.Subscriptions.Count == 0) { VM.Status = "Сначала импортируйте URL подписки."; return; }
         var d = new EditorDialog(this, "Подписки"); var choice = d.Choice("Подписка", VM.State.Subscriptions, VM.State.Subscriptions[0]); var interval = d.Text("Интервал обновления, часов (0 — вручную)", VM.State.Subscriptions[0].UpdateHours.ToString());
-        choice.SelectionChanged += (_, _) => interval.Text = ((Subscription)choice.SelectedItem).UpdateHours.ToString();
+        var insecure = d.Check("Дополнительно: разрешить HTTP и локальную сеть (небезопасно)", VM.State.Subscriptions[0].AllowInsecureTransport);
+        choice.SelectionChanged += (_, _) => { var selected=(Subscription)choice.SelectedItem; interval.Text=selected.UpdateHours.ToString(); insecure.IsChecked=selected.AllowInsecureTransport; };
         var update = new Button { Content = "Обновить выбранную сейчас" }; d.Insert(update);
-        update.Click += async (_, _) => { if(VM.Busy) { d.Error.Text="Дождитесь текущей операции."; return; } try { VM.Busy=true; update.IsEnabled = false; await RefreshSubscriptionAsync((Subscription)choice.SelectedItem, CancellationToken.None); d.Error.Text = "Подписка обновлена."; } catch (Exception ex) { d.Error.Text = ProcessHost.Redact(ex.Message); } finally { VM.Busy=false; update.IsEnabled = true; } };
-        d.Note("URL не показывается. Локальные имена и участие в автосмене сохраняются при совпадении сервера, транспорта и учётных данных. Рабочий профиль не удаляется автоматически.");
-        d.OnAccept = async () => { var id=((Subscription)choice.SelectedItem).Id;var hours=int.Parse(interval.Text); await VM.UpdateSettingsAsync(next=>next.Subscriptions.Single(p=>p.Id==id).UpdateHours=hours); return true; }; d.ShowDialog();
+        update.Click += async (_, _) => { if(VM.Busy) { d.Error.Text="Дождитесь текущей операции."; return; } try { VM.Busy=true; update.IsEnabled = false; d.Error.Text = await RefreshSubscriptionAsync((Subscription)choice.SelectedItem, CancellationToken.None, interactive:true); } catch (Exception ex) { d.Error.Text = ProcessHost.Redact(ex.Message); } finally { VM.Busy=false; update.IsEnabled = true; } };
+        d.Note("Изменения небезопасного режима сначала сохраните кнопкой принятия, затем откройте подписки и обновите. URL не показывается. Локальные имена и участие в автосмене сохраняются. Манифест сохраняет ID даже при смене параметров. Полный корректный манифест удаляет отсутствующие профили; выбранный профиль сохраняется с отметкой до смены выбора. При ошибках удаление запрещено.");
+        d.OnAccept = async () => { var id=((Subscription)choice.SelectedItem).Id;if (!int.TryParse(interval.Text, out var hours) || hours is < 0 or > 8760) throw new InvalidDataException("Укажите интервал от 0 до 8760 часов."); await VM.UpdateSettingsAsync(next=>{var selected=next.Subscriptions.Single(p=>p.Id==id);selected.UpdateHours=hours;selected.AllowInsecureTransport=insecure.IsChecked==true;}); return true; }; d.ShowDialog();
     }
-    private async Task RefreshSubscriptionAsync(Subscription sub, CancellationToken ct)
+    private async Task<string> RefreshSubscriptionAsync(Subscription sub, CancellationToken ct, bool interactive=false)
     {
         var revision=VM.SettingsRevision;
-        var result=ProfileImporter.Parse(await ReadSubscriptionAsync(sub.Url,ct),sub.Name);
-        if(result.Profiles.Count==0 || result.Errors.Count>0) throw new InvalidDataException("Подписка содержит ошибки; прежние профили сохранены.");
-        await VM.UpdateSubscriptionAsync(sub.Id,result.Profiles,revision,ct);
-        VM.WriteLog("Обновлена подписка: "+sub.Name);
+        var result=ProfileImporter.ParseForImport(await ReadSubscriptionAsync(sub.Url,ct,sub.AllowInsecureTransport),sub.Name);
+        try { return await VM.RefreshSubscriptionAsync(sub.Id,ct,approvedDocument:result,approvedRevision:revision); }
+        catch (SubscriptionSecurityApprovalRequiredException) when (interactive)
+        {
+            var names=string.Join(Environment.NewLine,result.Profiles.Where(ProfileSecurity.CertificateValidationDisabled).Select(p=>p.Name+": проверка TLS-сертификата отключена"));
+            if(MessageBox.Show(this,names+Environment.NewLine+"Применить именно эти небезопасные изменения?", "Изменение безопасности подписки",MessageBoxButton.YesNo,MessageBoxImage.Warning,MessageBoxResult.No)!=MessageBoxResult.Yes) throw;
+            return await VM.RefreshSubscriptionAsync(sub.Id,ct,approveSecurityChanges:true,approvedDocument:result,approvedRevision:revision);
+        }
     }
     private void AddRule_Click(object sender,RoutedEventArgs e) => EditRule(null);
     private async void StandardPreset_Click(object sender, RoutedEventArgs e) => await VM.RunAsync(ct =>
@@ -277,24 +271,306 @@ public partial class MainWindow : Window
     private async void StartZapret_Click(object sender,RoutedEventArgs e) => await VM.RunAsync(ct=>
     {
         var selected=VM.SelectedStrategy ?? throw new InvalidOperationException("Выберите стратегию.");
-        return VM.ApplyZapretAsync(true,selected.File,ct);
+        return VM.UserRequestedZapretStrategyAsync(selected.File, enableZapret: true, ct);
     });
     private async void MakeZapretActive_Click(object sender,RoutedEventArgs e) => await VM.RunAsync(async ct=>
     {
         var file=VM.SelectedStrategy?.File ?? throw new InvalidOperationException("Выберите конфигурацию Zapret.");
-        await VM.UpdateSettingsAsync(next=>{next.ZapretStrategy=System.IO.Path.GetFileName(file);next.ApplyBestZapret=false;},ct:ct);
+        await VM.UserRequestedZapretStrategyAsync(file, enableZapret: null, ct);
         AutoBestZapret.IsChecked=false;
     });
-    private async void ToggleZapret_Click(object sender,RoutedEventArgs e) => await VM.RunAsync(ct=>
-    {
-        var file=VM.State.ZapretStrategy.Length>0 ? VM.State.ZapretStrategy : VM.Strategies.FirstOrDefault()?.File;
-        if(!VM.Zapret.Running && file==null) throw new InvalidOperationException("Нет конфигураций Zapret.");
-        return VM.ApplyZapretAsync(!VM.Zapret.Running,file,ct);
-    });
-    private async void StopZapret_Click(object sender,RoutedEventArgs e) => await VM.RunAsync(ct=>VM.ApplyZapretAsync(false,null,ct));
+    private void ToggleZapret_Click(object sender, RoutedEventArgs e) => VM.UserRequestedZapretChange(!VM.Zapret.Running);
+    private void StopZapret_Click(object sender, RoutedEventArgs e) => VM.UserRequestedZapretChange(false);
     private async void TestZapret_Click(object sender,RoutedEventArgs e) {if(VM.SelectedStrategy is {} selected)await TestStrategies([selected]);}
-    private async void AutoZapret_Click(object sender,RoutedEventArgs e) => await TestStrategies(VM.Strategies.ToArray());
-    private Task TestStrategies(StrategyResult[] items) => VM.RunTestsAsync(ct=>VM.TestZapretAsync(items,new Progress<StrategyResult>(r=>VM.TestStatus="Zapret: "+r.Name),ct));
+    private async void AutoZapret_Click(object sender,RoutedEventArgs e) => await TestStrategies(VM.Strategies.ToArray(),autoSelect:true);
+    private async void TestAllZapret_Click(object sender,RoutedEventArgs e) => await TestStrategies(VM.Strategies.ToArray());
+    private Task TestStrategies(StrategyResult[] items,bool autoSelect=false) => VM.RunTestsAsync(ct=>VM.TestZapretAsync(items,new Progress<StrategyResult>(r=>VM.TestStatus="Zapret: "+r.Name),ct,status=>VM.TestStatus=status,autoSelect));
+    private ModuleVersionChoice? ShowVersionPicker(
+        ModuleRow module,
+        IReadOnlyList<string> versions)
+    {
+        var initial =
+            versions.FirstOrDefault()
+            ?? "";
+
+        var dialog =
+            new EditorDialog(
+                this,
+                $"Версия {module.DisplayName}",
+                600)
+            {
+                Height = 520,
+                MinHeight = 420,
+                ShowInTaskbar = false
+            };
+
+        dialog.Note(
+            $"Установлена: {module.Installed}");
+
+        var selector =
+            dialog.Choice(
+                "Версия из официальных releases",
+                versions,
+                initial);
+
+        selector.MinWidth =
+            470;
+
+        if(versions.Count > 0)
+            selector.SelectedIndex = 0;
+
+        TextBox? exact =
+            null;
+
+        dialog.Advanced(
+            () =>
+            {
+                exact =
+                    dialog.Text(
+                        "Точный тег / номер версии",
+                        "");
+
+                dialog.Note(
+                    "Заполняйте это поле только если нужного release нет в видимой части списка. Если поле заполнено, оно имеет приоритет.");
+            });
+
+        var pin =
+            dialog.Check(
+                "Закрепить выбранную версию после установки",
+                module.Pinned);
+
+        dialog.Note(
+            "NetCat хранит текущую и одну предыдущую версию. Старый release при необходимости скачивается заново.");
+
+        dialog.Accept.Content =
+            "Установить";
+
+        ModuleVersionChoice? result =
+            null;
+
+        dialog.OnAccept =
+            () =>
+            {
+                var manual =
+                    exact?.Text.Trim()
+                    ?? "";
+
+                var selected =
+                    selector.SelectedItem as string
+                    ?? "";
+
+                var version =
+                    !string.IsNullOrWhiteSpace(manual)
+                        ? manual
+                        : selected;
+
+                if(string.IsNullOrWhiteSpace(version))
+                {
+                    dialog.Error.Text =
+                        "Выберите версию из списка или укажите точный тег.";
+
+                    return Task.FromResult(false);
+                }
+
+                dialog.Error.Text = "";
+
+                result =
+                    new ModuleVersionChoice(
+                        version,
+                        pin.IsChecked == true);
+
+                return Task.FromResult(true);
+            };
+
+        return
+            dialog.ShowDialog() == true
+                ? result
+                : null;
+    }
+
+
+    private bool ConfirmForcedCoreInstall(
+        ModuleRow module,
+        ModuleRelease candidate)
+    {
+        var dialog =
+            new EditorDialog(
+                this,
+                "Принудительная установка VPN-core",
+                640)
+            {
+                Height = 500,
+                MinHeight = 420,
+                ShowInTaskbar = false
+            };
+
+        dialog.Note(
+            $"{module.DisplayName} {candidate.Version} получен из официального upstream.");
+
+        var warning =
+            new TextBlock
+            {
+                Text =
+                    "Для этой версии нет подписанного compatibility-пакета NetCat.",
+
+                TextWrapping =
+                    TextWrapping.Wrap,
+
+                FontWeight =
+                    FontWeights.SemiBold,
+
+                Margin =
+                    new Thickness(0,8,0,10)
+            };
+
+        warning.SetResourceReference(
+            TextBlock.ForegroundProperty,
+            "DangerBrush");
+
+        dialog.Insert(warning);
+
+        dialog.Note(
+            "Перед заменой NetCat проверит SHA-256 upstream-архива, состав staging runtime и совместимость с генерируемой конфигурацией.");
+
+        dialog.Note(
+            "Текущая версия останется единственной предыдущей версией для отката.");
+
+        dialog.Accept.Content =
+            "Установить принудительно";
+
+        dialog.Accept.MinWidth =
+            190;
+
+        return
+            dialog.ShowDialog() == true;
+    }
+
+    private async void SelectModuleVersion_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if(ModulesGrid.SelectedItem is not ModuleRow module ||
+           !module.SupportsVersionSelection)
+        {
+            return;
+        }
+
+        await VM.RunAsync(
+            async ct =>
+            {
+                VM.UpdateStatus =
+                    $"Получаю список версий {module.DisplayName}…";
+
+                var versions =
+                    await VM.Updater.ListVersionsAsync(
+                        module.Key,
+                        200,
+                        ct);
+
+                var choice =
+                    ShowVersionPicker(
+                        module,
+                        versions);
+
+                if(choice == null)
+                {
+                    VM.UpdateStatus =
+                        "Выбор версии отменён.";
+
+                    return;
+                }
+
+                VM.UpdateStatus =
+                    $"Проверяю {module.DisplayName} {choice.Version}…";
+
+                var candidate =
+                    await VM.Updater.CheckVersionAsync(
+                        module.Key,
+                        choice.Version,
+                        ct);
+
+                var force =
+                    ModuleUpdater.RequiresForceUnreviewed(
+                        candidate);
+
+                if(force &&
+                   !ConfirmForcedCoreInstall(
+                       module,
+                       candidate))
+                {
+                    VM.UpdateStatus =
+                        "Принудительная установка отменена.";
+
+                    return;
+                }
+
+                VM.UpdateStatus =
+                    $"Скачиваю и проверяю {module.DisplayName} {candidate.Version}…";
+
+                var release =
+                    await VM.Updater.PrepareSpecificReleaseAsync(
+                        candidate,
+                        VM.State,
+                        ct,
+                        forceUnreviewed:force);
+
+                VM.UpdateStatus =
+                    $"Устанавливаю {module.DisplayName} {release.Version}…";
+
+                await VM.InstallPreparedModuleAsync(
+                    release,
+                    ct);
+
+                if(choice.PinAfterInstall)
+                    VM.State.PinnedModules.Add(module.Key);
+                else
+                    VM.State.PinnedModules.Remove(module.Key);
+
+                await VM.SaveAsync();
+
+                VM.WriteLog(
+                    $"MODULE_VERSION_SELECTED module={module.Key} version={release.Version} force={force} pinned={choice.PinAfterInstall}");
+
+                VM.UpdateStatus =
+                    $"{module.DisplayName} {release.Version} установлен.";
+
+                await VM.CheckUpdatesAsync(ct);
+            });
+    }
+
+    private void OpenModuleGitHub_Click(object sender, RoutedEventArgs e)
+    {
+        const string url =
+            "https://github.com/akapustyanik/NetCat";
+
+        try
+        {
+            ExplorerDesktopShell.Open(url);
+
+            VM.UpdateStatus =
+                "Открыт GitHub NetCat.";
+
+            VM.WriteLog(
+                "UI_ACTION page=modules action=open-github result=ok");
+        }
+        catch(Exception ex)
+        {
+            var copied =
+                JournalActionFeedback.TryCopy(
+                    url,
+                    Clipboard.SetText);
+
+            VM.UpdateStatus =
+                copied
+                    ? "Не удалось открыть браузер. Ссылка на GitHub скопирована."
+                    : "Не удалось открыть GitHub: " +
+                      ProcessHost.Redact(ex.Message);
+
+            VM.WriteLog(
+                "UI_ACTION page=modules action=open-github result=" +
+                (copied ? "copied" : "failed"));
+        }
+    }
     private async void CheckModule_Click(object sender, RoutedEventArgs e) => await VM.CheckUpdatesAsync(lifetime.Token);
     private void RequireStopped() { if (VM.Router.Running || VM.Zapret.Running || telegram.Running || VM.TestsBusy) throw new InvalidOperationException("Перед установкой остановите подключения и тесты. Проверять обновления можно в любое время."); }
     private string? pendingNetcatUpdate;
@@ -314,7 +590,7 @@ public partial class MainWindow : Window
             }
             catch(Exception ex) when(ex is not OperationCanceledException) { errors.Add(module.DisplayName); VM.WriteLog(module.Key+": "+ex.Message); }
         }
-        VM.UpdateStatus="Скачанные файлы готовы. Остановите подключения и нажмите «Установить скачанное».";
+        VM.UpdateStatus="Скачанные файлы готовы. При установке нужные компоненты будут перезапущены автоматически.";
         if(errors.Count>0) VM.UpdateStatus+=" Не удалось скачать: "+string.Join(", ",errors);
     });
     private async void InstallDownloaded_Click(object sender, RoutedEventArgs e)
@@ -322,34 +598,201 @@ public partial class MainWindow : Window
         string? launch=null;
         await VM.RunAsync(async ct =>
         {
-            RequireStopped(); var errors=new List<string>(); int installed=0;
+            var errors=new List<string>(); int installed=0;
             foreach(var module in VM.Modules.Where(m=>m.Selected&&m.Available&&!m.Pinned).ToArray())
             {
                 try
                 {
-                    if(module.Key=="netcat") { if(pendingNetcatUpdate!=null) launch=pendingNetcatUpdate; continue; }
+                    if(module.Key=="netcat") { RequireStopped(); if(pendingNetcatUpdate!=null) launch=pendingNetcatUpdate; continue; }
                     if(!VM.Updater.HasPrepared(module.Check.Release!)) continue;
-                    await VM.Updater.InstallPreparedAsync(module.Check.Release!,VM.State,ct); installed++; VM.WriteLog("Обновлён модуль "+module.DisplayName);
+                    await VM.InstallPreparedModuleAsync(module.Check.Release!,ct); installed++; VM.WriteLog("Обновлён модуль "+module.DisplayName);
                 }
                 catch(Exception ex) when(ex is not OperationCanceledException) { errors.Add(module.DisplayName); VM.WriteLog(ex.Message); }
             }
-            var rows=VM.Modules.ToArray(); VM.Modules.Clear(); foreach(var row in rows) VM.Modules.Add(new ModuleRow(new ModuleCheck(row.Key,VM.Updater.InstalledVersion(row.Key),row.Check.Release),row.Pinned));
+            var rows =
+                VM.Modules.ToArray();
+
+            VM.Modules.Clear();
+
+            foreach(var row in rows)
+            {
+                VM.Modules.Add(
+                    VM.CreateModuleRow(
+                        new ModuleCheck(
+                            row.Key,
+                            VM.Updater.InstalledVersion(row.Key),
+                            row.Check.Release)));
+            }
             VM.Refresh(); VM.UpdateStatus=installed>0 ? $"Установлено компонентов: {installed}." : launch!=null ? "NetCat готов к перезапуску." : "Нет выбранных скачанных обновлений.";
             if(errors.Count>0) VM.UpdateStatus+=" Ошибки: "+string.Join(", ",errors);
         });
         if(launch!=null && !VM.WorkCancellation.IsCancellationRequested)
         { try { await PortableUpdate.LaunchAsync(launch); await ExitAsync(); } catch(Exception ex) { VM.Status="Не удалось запустить обновление: "+ex.Message; } }
     }
-    private async void RollbackModule_Click(object sender, RoutedEventArgs e) { if(ModulesGrid.SelectedItem is ModuleRow module) await VM.RunAsync(async ct=> { RequireStopped(); VM.Updater.Rollback(module.Key); VM.Refresh(); await VM.CheckUpdatesAsync(ct); }); }
-    private async void PinModule_Click(object sender, RoutedEventArgs e) { if(ModulesGrid.SelectedItem is ModuleRow module) await VM.RunAsync(async ct=> { if(!VM.State.PinnedModules.Add(module.Key)) VM.State.PinnedModules.Remove(module.Key); await VM.SaveAsync(); await VM.CheckUpdatesAsync(ct); }); }
-    private async void StartTelegram_Click(object sender, RoutedEventArgs e) => await VM.RunAsync(ct=>VM.SetTelegramEnabledAsync(!telegram.Running,ct));
+    private async void RollbackModule_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if(ModulesGrid.SelectedItem is not ModuleRow module ||
+           !module.CanRollback)
+        {
+            return;
+        }
+
+        var rollbackVersion =
+            module.PreviousVersion;
+
+        var confirm =
+            MessageBox.Show(
+                this,
+                $"Откатить {module.DisplayName} с {module.Installed} на {rollbackVersion}?" +
+                "\n\nNetCat временно остановит только связанный компонент и автоматически запустит его снова." +
+                "\n\nЕсли откат не сможет нормально запустить компонент, NetCat попытается автоматически вернуть исходную версию.",
+                "Откат компонента",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question,
+                MessageBoxResult.No);
+
+        if(confirm != MessageBoxResult.Yes)
+            return;
+
+        await VM.RunAsync(
+            async ct =>
+            {
+                VM.UpdateStatus =
+                    $"Откатываю {module.DisplayName} на {rollbackVersion}…";
+
+                await VM.RollbackModuleAsync(
+                    module.Key,
+                    ct);
+
+                VM.Refresh();
+
+                VM.UpdateStatus =
+                    $"{module.DisplayName}: откат выполнен; компонент перезапущен автоматически.";
+
+                await VM.CheckUpdatesAsync(
+                    ct);
+            });
+    }
+    private async void PinModule_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        if(ModulesGrid.SelectedItem is not ModuleRow module)
+            return;
+
+        await VM.RunAsync(
+            async ct =>
+            {
+                var pinned =
+                    !VM.State.PinnedModules.Contains(
+                        module.Key);
+
+                if(pinned)
+                    VM.State.PinnedModules.Add(module.Key);
+                else
+                    VM.State.PinnedModules.Remove(module.Key);
+
+                await VM.SaveAsync();
+
+                VM.UpdateStatus =
+                    pinned
+                        ? $"{module.DisplayName} {VM.Updater.InstalledVersion(module.Key)} закреплён."
+                        : $"{module.DisplayName}: закрепление снято.";
+
+                await VM.CheckUpdatesAsync(ct);
+            });
+    }
+    private async void StartTelegram_Click(
+        object sender,
+        RoutedEventArgs e)
+    {
+        var enable =
+            !telegram.Running;
+
+        await VM.RunAsync(
+            ct =>
+                VM.SetTelegramEnabledAsync(
+                    enable,
+                    ct));
+    }
     private async void StopTelegram_Click(object sender, RoutedEventArgs e) => await VM.RunAsync(ct=>VM.SetTelegramEnabledAsync(false,ct));
     private void TelegramLink_Click(object sender, RoutedEventArgs e) { if(telegram.Running) { Clipboard.SetText(telegram.Link); VM.Status="Ссылка подключения скопирована. Откройте её в Telegram."; } }
-    private void OpenTelegram_Click(object sender, RoutedEventArgs e) { if(telegram.Running) Process.Start(new ProcessStartInfo(telegram.Link) { UseShellExecute=true }); }
+    private void OpenTelegram_Click(object sender, RoutedEventArgs e) { if(telegram.Running) OpenTelegramProxy(); }
+    private void OpenTelegramProxy()
+    {
+        var result = journalShell.OpenTelegramProxy(telegram.Link, telegram.Port, Clipboard.SetText, out var message);
+        VM.Status = message;
+        VM.WriteLog("UI_ACTION page=telegram action=open-proxy result=" + JournalResult(result));
+    }
     private void ModulesPage_Click(object sender,RoutedEventArgs e) => Pages.SelectedIndex=4;
     private void RoutingPage_Click(object sender,RoutedEventArgs e) => Pages.SelectedIndex=2;
     private void ZapretPage_Click(object sender,RoutedEventArgs e) => Pages.SelectedIndex=3;
-    private void OpenModules_Click(object sender, RoutedEventArgs e) => Process.Start(new ProcessStartInfo(VM.Bin) { UseShellExecute = true });
+    private void OpenModules_Click(object sender, RoutedEventArgs e) => OpenExternal(VM.Bin);
+    private bool OpenExternal(
+        string target,
+        string? journalAction = null)
+    {
+        if(journalAction != null)
+        {
+            VM.WriteLog(
+                $"UI_ACTION page=log action={journalAction} begin");
+        }
+
+        try
+        {
+            var canonical =
+                System.IO.Path.GetFullPath(target);
+
+            var allowed =
+                System.IO.Path.GetFullPath(VM.Bin);
+
+            if(!string.Equals(
+                   canonical,
+                   allowed,
+                   StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    "Открытие внешнего пути не разрешено.");
+            }
+
+            if(!Directory.Exists(canonical))
+            {
+                throw new DirectoryNotFoundException(
+                    "Папка модулей не найдена.");
+            }
+
+            ExplorerDesktopShell.Open(
+                canonical);
+
+            VM.Status =
+                "Папка модулей открыта в Проводнике.";
+
+            if(journalAction != null)
+            {
+                VM.WriteLog(
+                    $"UI_ACTION page=log action={journalAction} result=ok method=user-shell");
+            }
+
+            return true;
+        }
+        catch(Exception ex)
+        {
+            VM.Status =
+                "Не удалось открыть: " +
+                ProcessHost.Redact(
+                    ex.Message);
+
+            if(journalAction != null)
+            {
+                VM.WriteLog(
+                    $"UI_ACTION page=log action={journalAction} result=failed");
+            }
+
+            return false;
+        }
+    }
     private void BaseColor_Click(object sender, RoutedEventArgs e) => PickColor(true);
     private void AccentColor_Click(object sender, RoutedEventArgs e) => PickColor(false);
     private void PickColor(bool primary)
@@ -359,46 +802,116 @@ public partial class MainWindow : Window
     }
     private async void Light_Click(object sender, RoutedEventArgs e) { VM.State.BaseColor = "#F4F6F8"; await VM.RunAsync(_=>VM.SaveAsync()); }
     private async void Dark_Click(object sender, RoutedEventArgs e) { VM.State.BaseColor = "#151A22"; await VM.RunAsync(_=>VM.SaveAsync()); }
+    private void AppearancePreview_Changed(object sender, RoutedEventArgs e)
+    {
+        if (IsLoaded) Theme.Apply(VM.State);
+    }
+    private async void ResetAppearance_Click(object sender, RoutedEventArgs e)
+    {
+        var defaults = new AppSettings();
+        VM.State.BaseColor = defaults.BaseColor;
+        VM.State.AccentColor = defaults.AccentColor;
+        VM.State.PanelBrightness = defaults.PanelBrightness;
+        VM.State.HighContrastText = defaults.HighContrastText;
+        await VM.RunAsync(_ => VM.SaveAsync());
+    }
+    private AutostartService Startup => new(new WindowsStartupTasks(msg => VM.WriteLog(msg), userFacingJournal: true), Environment.ProcessPath!, System.Security.Principal.WindowsIdentity.GetCurrent().User!.Value);
     private async Task RefreshAutostartAsync()
     {
         AutostartSwitch.IsEnabled = false;
         try
         {
-            var result = await PhysicalNetwork.PowerShell("$t=Get-ScheduledTask -TaskName 'NetCat_AutoStart' -ErrorAction SilentlyContinue; if($t -and $t.State -ne 'Disabled') { 'enabled' } else { 'disabled' }");
-            if(result.Code != 0) throw new IOException("Не удалось проверить автозапуск.");
-            AutostartSwitch.IsChecked = result.Output.Trim() == "enabled";
-            AutostartStatus.Text = AutostartSwitch.IsChecked == true ? "Автозапуск включён" : "Автозапуск выключен";
+            var startup = Startup;
+            var registered = await Task.Run(() => startup.RegisteredTask);
+            AutostartSwitch.IsChecked = await Task.Run(() => startup.Enabled);
+            AutostartStatus.Text = registered == null ? "Автозапуск выключен" :
+                AutostartSwitch.IsChecked == true ? "Автозапуск: " + registered.Executable :
+                "Автозапуск другой копии: " + registered.Executable + ". Включите переключатель, чтобы выбрать эту копию.";
         }
-        catch(Exception ex) { AutostartStatus.Text = ex.Message; }
+        catch (Exception ex) { AutostartSwitch.IsChecked = false; AutostartStatus.Text = "Автозапуск: " + ex.Message; VM.WriteLog(AutostartStatus.Text); }
         finally { AutostartSwitch.IsEnabled = true; }
     }
     private async void Autostart_Click(object sender, RoutedEventArgs e)
     {
-        if(VM.Busy) { await RefreshAutostartAsync(); return; }
         bool enabled = AutostartSwitch.IsChecked == true;
-        await VM.RunAsync(async _ => { try { await Autostart(enabled); } finally { await RefreshAutostartAsync(); } });
+        if (VM.Busy) { await RefreshAutostartAsync(); return; }
+        await VM.RunAsync(async _ =>
+        {
+            AutostartSwitch.IsEnabled = false;
+            try
+            {
+                var startup = Startup;
+                await Task.Run(() => startup.SetAsync(enabled, value =>
+                    Dispatcher.InvokeAsync(() => VM.UpdateSettingsAsync(s => s.Autostart = value)).Task.Unwrap()));
+                AutostartStatus.Text = enabled ? "Автозапуск включён" : "Автозапуск выключен";
+            }
+            finally
+            {
+                await RefreshAutostartAsync();
+            }
+        });
+    }
+    private void OpenDiagnosticLog_Click(object sender, RoutedEventArgs e)
+    {
+        VM.WriteLog("UI_ACTION page=log action=open-log begin");
+        try
+        {
+            var file = System.IO.Path.Combine(VM.Store.Root, "diagnostic.log");
+            if (!File.Exists(file)) File.WriteAllText(file, "");
+            var result = journalShell.OpenFile(file, VM.Store.Root, Clipboard.SetText, out var message);
+            VM.JournalActionStatus = message;
+            VM.WriteLog($"UI_ACTION page=log action=open-log result={JournalResult(result)}");
+        }
+        catch (Exception ex)
+        {
+            VM.JournalActionStatus = "Не удалось открыть журнал: " + ProcessHost.Redact(ex.Message);
+            VM.WriteLog("UI_ACTION page=log action=open-log result=failed");
+        }
+    }
+    private void OpenLogFolder_Click(object sender, RoutedEventArgs e)
+    {
+        VM.WriteLog("UI_ACTION page=log action=open-folder begin");
+        try
+        {
+            Directory.CreateDirectory(VM.Store.Root);
+            var result = journalShell.OpenFolder(VM.Store.Root, VM.Store.Root, Clipboard.SetText, out var message);
+            VM.JournalActionStatus = message;
+            VM.WriteLog($"UI_ACTION page=log action=open-folder result={JournalResult(result)}");
+        }
+        catch (Exception ex)
+        {
+            VM.JournalActionStatus = "Не удалось открыть папку журнала: " + ProcessHost.Redact(ex.Message);
+            VM.WriteLog("UI_ACTION page=log action=open-folder result=failed");
+        }
     }
     private async void ApplyTelegramPort_Click(object sender, RoutedEventArgs e) => await VM.RunAsync(async ct =>
     {
         await VM.SaveAsync();
         VM.WriteLog("Порт Telegram применён. Подключите Telegram по новой ссылке.");
     });
-    private static async Task Autostart(bool enabled)
+    private async Task RunJournalActionAsync(string action, Func<CancellationToken, Task> work)
     {
-        var exe = System.IO.Path.Combine(AppContext.BaseDirectory, "NetCat.exe");
-        var script = enabled ? $"$a=New-ScheduledTaskAction -Execute {PhysicalNetwork.Literal(exe)}; $t=New-ScheduledTaskTrigger -AtLogOn -User ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name); $p=New-ScheduledTaskPrincipal -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Highest; Register-ScheduledTask -TaskName 'NetCat_AutoStart' -Action $a -Trigger $t -Principal $p -Force | Out-Null" : "Unregister-ScheduledTask -TaskName 'NetCat_AutoStart' -Confirm:$false -ErrorAction SilentlyContinue";
-        var result = await PhysicalNetwork.PowerShell(script); if (result.Code != 0) throw new IOException("Не удалось изменить задачу автозапуска: " + ProcessHost.Redact(result.Output));
+        if (Interlocked.CompareExchange(ref journalActionRunning, 1, 0) != 0) return;
+        VM.WriteLog($"UI_ACTION page=log action={action} begin");
+        try
+        {
+            await VM.RunAsync(work);
+            VM.JournalActionStatus = VM.Status;
+            VM.WriteLog($"UI_ACTION page=log action={action} result={(VM.Status == "Готово" ? "ok" : "failed")}");
+        }
+        finally { Interlocked.Exchange(ref journalActionRunning, 0); }
     }
-    private async void NetworkInfo_Click(object sender, RoutedEventArgs e) => await VM.RunAsync(_ => { var n = PhysicalNetwork.Capture(VM.State.PhysicalInterface); VM.WriteLog($"Физический адаптер: {n.Name}; DNS: {n.Dns}; суффиксы: {string.Join(", ", n.Suffixes)}. Корпоративные прямые домены используют этот DNS."); return Task.CompletedTask; });
+    private static string JournalResult(ShellHandoffResult result) => result switch { ShellHandoffResult.OpenedUnelevatedShell => "ok method=unelevated-shell", ShellHandoffResult.FallbackCopied => "fallback-copied", _ => "failed" };
+    private async void StopAll_Click(object sender, RoutedEventArgs e) => await RunJournalActionAsync("stop-all", _ => VM.StopComponentsAsync());
+    private async void RetryNetwork_Click(object sender, RoutedEventArgs e) => await RunJournalActionAsync("retry-network", VM.RetryNetworkAsync);
+    private async void NetworkInfo_Click(object sender, RoutedEventArgs e) => await RunJournalActionAsync("check-physical-dns", _ => { var n = PhysicalNetwork.Capture(VM.State.PhysicalInterface); VM.WriteLog($"Физический адаптер: {n.Name}; DNS: {n.Dns}; суффиксы: {string.Join(", ", n.Suffixes)}. Прямые локальные домены используют этот DNS."); return Task.CompletedTask; });
     private async void TimerTick(object? sender, EventArgs e)
     {
         backgroundTicks++;
-        UpdateTraffic(); _ = UpdatePingAsync(); VM.PollRuntimeState(); if (timerBusy || VM.Busy || exiting) return;
+        UpdateTraffic(); UpdatePingDisplay(); VM.PollRuntimeState(); if (timerBusy || VM.Busy || exiting) return;
         timerBusy = true;
         try
         {
-            if (!VM.TestsBusy && VM.Router.ZapretAvailable != VM.Zapret.Running)
-                await VM.RunAsync(async ct => { await VM.UpdateSettingsAsync(_=>{},true,ct:ct); VM.WriteLog("Маршрут сервисов обновлён по состоянию Zapret."); });
             if (!App.IsSmoke && VM.State.AutoTest && !VM.Recovering && !VM.TestsBusy && DateTime.Now >= nextTest)
             {
                 await VM.RunTestsAsync(async ct =>
@@ -415,12 +928,7 @@ public partial class MainWindow : Window
                     }
 
                 });
-                nextTest = DateTime.Now.AddSeconds(Math.Max(15, VM.State.TestIntervalSeconds));
-            }
-            if (DateTime.Now >= nextSubscriptions && !VM.Busy)
-            {
-                nextSubscriptions = DateTime.Now.AddMinutes(5);
-                foreach (var sub in VM.State.Subscriptions.Where(s => s.UpdateHours > 0 && (!s.UpdatedAt.HasValue || DateTimeOffset.Now - s.UpdatedAt.Value >= TimeSpan.FromHours(s.UpdateHours))).ToArray()) await VM.RunAsync(ct => RefreshSubscriptionAsync(sub, ct));
+                nextTest = DateTime.Now.AddSeconds(Math.Max(1, VM.State.TestIntervalSeconds));
             }
             if(!App.IsSmoke && VM.State.CheckModuleUpdates && DateTime.Now>=nextModuleCheck)
             { nextModuleCheck=DateTime.Now.AddHours(6); await VM.CheckUpdatesAsync(lifetime.Token); }
@@ -428,115 +936,97 @@ public partial class MainWindow : Window
         catch (Exception ex) { VM.WriteLog(ex.Message); }
         finally { timerBusy = false; }
     }
-    private async Task RecoverConnectionAsync(Guid activeId, long revision)
-    {
-        if (VM.Recovering || !VM.Router.VpnRequested) return;
-        VM.Recovering = true; VM.NotifyState();
-        using var probes = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
-        bool Current() => VM.State.AutoSwitch && VM.Router.VpnRequested && VM.Router.SessionRevision == revision && VM.State.MainProfileId == activeId && !VM.Busy;
-        try
-        {
-            var settings = JsonSettings.Clone(VM.State); settings.TestTimeoutSeconds = Math.Min(4, settings.TestTimeoutSeconds);
-            var candidates = new Queue<Profile>(settings.Profiles.Where(p => p.Candidate && !p.IsOpenVpn && p.Id != activeId));
-            var pending = new List<Task<Profile?>>();
-            async Task<Profile?> Probe(Profile profile)
-            {
-                for (int sample = 0; sample < 2; sample++)
-                {
-                    if (!Current()) return null;
-                    var result = await VM.Router.TestProfileAsync(profile, settings, probes.Token);
-                    VM.Profiles.FirstOrDefault(p => p.Id == profile.Id)?.SetTestResult(result);
-                    if (!result.Success) return null;
-                }
-                return profile;
-            }
-            Profile? winner = null;
-            try
-            {
-                while (Current() && (candidates.Count > 0 || pending.Count > 0))
-                {
-                    while (pending.Count < 2 && candidates.TryDequeue(out var candidate)) pending.Add(Probe(candidate));
-                    var completed = await Task.WhenAny(pending); pending.Remove(completed);
-                    winner = await completed; if (winner != null) break;
-                }
-            }
-            finally { probes.Cancel(); try { await Task.WhenAll(pending); } catch (OperationCanceledException) { } }
-            if (winner == null || !Current()) return;
-            await VM.CommitFailoverAsync(activeId,winner.Id,revision,lifetime.Token);
-            if(VM.Router.ActiveProfileId==winner.Id) {failover.Switched(DateTimeOffset.UtcNow);VM.WriteLog("Автосмена: "+winner.Name);}
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex) { VM.WriteLog("Автосмена: " + ex.Message); }
-        finally { VM.Recovering = false; VM.NotifyState(); }
-    }
     private void UpdateTraffic()
     {
-        if(!IsVisible || WindowState==WindowState.Minimized || Pages.SelectedIndex!=0)
-        { previousReceive=previousSend=previousTrafficStamp=0; return; }
-        try
-        {
-            if(!VM.Router.Running || !VM.Router.TunActive) { previousReceive=previousSend=previousTrafficStamp=0; trafficAdapter=null; DownloadValue.Text=UploadValue.Text="— Мбит/с"; return; }
-            if(trafficRevision!=VM.Router.SessionRevision || DateTime.UtcNow>=nextAdapterRefresh)
-            {
-                adapterEnumerations++; trafficAdapter=NetworkInterface.GetAllNetworkInterfaces().FirstOrDefault(n=>n.Name=="NetCat-TUN");
-                trafficRevision=VM.Router.SessionRevision; nextAdapterRefresh=DateTime.UtcNow.AddSeconds(30); previousReceive=previousSend=previousTrafficStamp=0;
-            }
-            if(trafficAdapter==null) return;
-            var stats=trafficAdapter.GetIPStatistics(); var now=Stopwatch.GetTimestamp();
-            var seconds=previousTrafficStamp==0?0:Stopwatch.GetElapsedTime(previousTrafficStamp,now).TotalSeconds;
-            var down=seconds==0?0:Math.Max(0,stats.BytesReceived-previousReceive)*8d/1_000_000/seconds;
-            var up=seconds==0?0:Math.Max(0,stats.BytesSent-previousSend)*8d/1_000_000/seconds;
-            previousReceive=stats.BytesReceived; previousSend=stats.BytesSent; previousTrafficStamp=now;
-            TrafficText.Text = $"TUN   ↓ {down:F2} Мбит/с     ↑ {up:F2} Мбит/с     Последние 60 секунд"; traffic.Enqueue(down); while (traffic.Count > 60) traffic.Dequeue();
-            DownloadValue.Text=$"{down:F2} Мбит/с"; UploadValue.Text=$"{up:F2} Мбит/с";
-            if(!TrafficCanvas.IsVisible || TrafficCanvas.ActualWidth<=0 || TrafficCanvas.ActualHeight<=0) return;
-            TrafficCanvas.Children.Clear(); var values = traffic.ToArray(); var max = Math.Max(1, values.Max()); var line = new Polyline { StrokeThickness = 2 }; line.SetResourceReference(Shape.StrokeProperty, "AccentBrush");
-            for (int i = 0; i < values.Length; i++) line.Points.Add(new Point(i * Math.Max(1, TrafficCanvas.ActualWidth) / 59, 65 - values[i] / max * 60)); TrafficCanvas.Children.Add(line);
-        }
-        catch (NetworkInformationException) { trafficAdapter=null; nextAdapterRefresh=DateTime.MinValue; }
+        // Traffic is sampled by the application lifetime service.
+        if (!IsVisible || WindowState == WindowState.Minimized || Pages.SelectedIndex != 0) return;
+
+        var snap = VM.TrafficMonitor.CurrentSnapshot;
+        var down = snap.DownloadMbps;
+        var up = snap.UploadMbps;
+
+        DownloadValue.Text = snap.HasBaseline ? $"{down:F2} Мбит/с" : "— Мбит/с";
+        UploadValue.Text = snap.HasBaseline ? $"{up:F2} Мбит/с" : "— Мбит/с";
+
+        var ifaceLabel = string.IsNullOrEmpty(snap.InterfaceName) ? "СЕТЬ" : snap.InterfaceName;
+        TrafficText.Text = $"{ifaceLabel}   ↓ {down:F2} Мбит/с     ↑ {up:F2} Мбит/с     Последние 60 секунд";
+
+        traffic.Enqueue(down);
+        while (traffic.Count > 60) traffic.Dequeue();
+
+        if (!TrafficCanvas.IsVisible || TrafficCanvas.ActualWidth <= 0 || TrafficCanvas.ActualHeight <= 0) return;
+        TrafficCanvas.Children.Clear();
+        var values = traffic.ToArray();
+        var max = Math.Max(1, values.Max());
+        var line = new Polyline { StrokeThickness = 2 };
+        line.SetResourceReference(Shape.StrokeProperty, "AccentBrush");
+        for (int i = 0; i < values.Length; i++)
+            line.Points.Add(new Point(i * Math.Max(1, TrafficCanvas.ActualWidth) / 59, 65 - values[i] / max * 60));
+        TrafficCanvas.Children.Add(line);
     }
-    private async Task UpdatePingAsync()
+    private void UpdatePingDisplay()
     {
         if (App.IsSmoke || exiting) return;
-        if (!VM.Router.VpnRunning || VM.Router.LatencyPort == 0) { PingValue.Text = "— мс"; nextPing = DateTime.MinValue; measuredLatencyPort = 0; return; }
-        if (measuredLatencyPort != VM.Router.LatencyPort) { nextPing = DateTime.MinValue; PingValue.Text = "… мс"; }
-        if (pingBusy || DateTime.UtcNow < nextPing || VM.Busy) return;
-        pingBusy = true; nextPing = DateTime.UtcNow.AddSeconds(VM.State.AutoSwitch ? 5 : 10);
-        var revision = VM.Router.SessionRevision; var port = VM.Router.LatencyPort; measuredLatencyPort = port;
-        try
+        if (!VM.Router.VpnRunning || VM.Router.LatencyPort == 0 || VM.InNetworkTransition)
         {
-            var result = await ConnectionLatency.MeasureAsync(port, VM.State.TestUrl, lifetime.Token, VM.State.AutoSwitch ? 4 : VM.State.TestTimeoutSeconds);
-            if (VM.Router.SessionRevision == revision && VM.Router.ActiveProfileId is Guid activeId)
-            {
-                failover.Record(activeId, result, DateTimeOffset.UtcNow);
-                if (!result.Success && VM.State.AutoSwitch && !VM.TestsBusy && !VM.Busy && failover.ShouldRecover(activeId, VM.State.FailureThreshold, DateTimeOffset.UtcNow, TimeSpan.FromMinutes(2)))
-                { await RecoverConnectionAsync(activeId, revision); if (VM.Router.SessionRevision != revision) return; }
-            }
-            DelayResult? system = VM.Router.TunActive && (result.Success || !VM.State.AutoSwitch) ? await tunnelHealth.CheckAsync(VM.Router.HealthSourcePort,lifetime.Token) : null;
-            if (!exiting && VM.Router.VpnRunning && VM.Router.LatencyPort == port && VM.Router.SessionRevision == revision)
-            {
-                VM.SetHealth(result,system);
-                PingValue.Text = result.Success ? $"{result.Milliseconds} мс" : "Нет ответа";
-                PingValue.ToolTip = result.Success ? "HTTP-задержка через подключённый VPN. Обновляется каждые 10 секунд." : "Проверка через подключённый VPN: " + result.Error;
-            }
+            PingValue.Text = VM.InNetworkTransition ? "… перестройка" : "— мс";
+            return;
         }
-        catch (OperationCanceledException) { }
-        finally { pingBusy = false; }
+
+        if (VM.HealthMonitor?.LastHealthResult is { } result)
+        {
+            PingValue.Text = result.Success ? $"{result.Milliseconds} мс" : "Нет ответа";
+            PingValue.ToolTip = result.Success ? $"HTTP-задержка через подключённый VPN. Интервал между проверками: {Math.Max(1, VM.State.TestIntervalSeconds)} с после завершения предыдущей." : "Проверка через подключённый VPN: " + result.Error;
+        }
+        else
+        {
+            PingValue.Text = "… мс";
+        }
+    }
+    private void SaveCurrentPresentationState()
+    {
+        if (App.IsSmoke || exiting || presentation?.SessionEnding == true || !IsLoaded) return;
+        var state = !IsVisible || !ShowInTaskbar ? WindowPresentationState.HiddenToTray :
+                    WindowState == WindowState.Maximized ? WindowPresentationState.VisibleMaximized :
+                    WindowPresentationState.VisibleNormal;
+        if (presentation != null) presentation.SaveActualState(state);
+        else VM.Store.SavePresentationState(state);
     }
     private void WindowClosing(object? sender, CancelEventArgs e)
     {
-        if (exiting) return; e.Cancel = true; if (VM.State.MinimizeToTray) Hide(); else _ = ExitAsync();
+        if (exiting || presentation?.SessionEnding == true) return; e.Cancel = true;
+        if (VM.State.MinimizeToTray)
+        {
+            presentation?.UserRequestedHide();
+            if (presentation is { TrayAvailable: false })
+            {
+                // A transient shell failure must neither strand the window nor change user settings.
+                ShowInTaskbar = true;
+                if (!IsVisible) Show();
+                if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+                Activate();
+                VM.Status = "Значок NetCat в трее недоступен. Окно оставлено открытым для управления.";
+                return;
+            }
+            ShowInTaskbar = false;
+            Hide();
+            if (presentation == null) VM.Store.SavePresentationState(WindowPresentationState.HiddenToTray);
+        }
+        else _ = ExitAsync();
     }
     public async Task ExitAsync()
     {
-        if (exiting) return; exiting = true; timer.Stop(); lifetime.Cancel(); VM.WorkCancellation.Cancel(); VM.TestsCancellation.Cancel();
+        if (exiting) return;
+        SaveCurrentPresentationState();
+        exiting = true; timer.Stop(); lifetime.Cancel(); VM.WorkCancellation.Cancel(); VM.TestsCancellation.Cancel();
+        VM.FlushDesiredState();
+        var exitCode = 0;
         try { for (int i = 0; i < 100 && (VM.Busy||VM.TestsBusy); i++) await Task.Delay(100); await VM.StopForExitAsync(); }
-        catch (Exception ex) { VM.WriteLog("Завершение: " + ex.Message); }
+        catch (Exception ex) { exitCode = 1; VM.WriteLog("Завершение: " + ex.Message); if (App.IsSmoke) Console.Error.WriteLine(ex); }
         finally
         {
-            foreach(var cleanup in new Action[]{VM.Dispose,()=>tray?.Dispose(),tunnelHealth.Dispose})
-                try {cleanup();}catch(Exception ex){VM.WriteLog("Очистка при завершении: "+ex.Message);}
-            try {Close();}finally{Application.Current.Shutdown();}
+            try { VM.Dispose(); } catch (Exception ex) { VM.WriteLog("Очистка при завершении: " + ex.Message); }
+            try {Close();}finally{Application.Current.Shutdown(exitCode);}
         }
     }
     public async Task CaptureScreensAsync(string destination)
@@ -546,9 +1036,9 @@ public partial class MainWindow : Window
         await LiveRulesSmoke.VerifyAsync(VM,destination);
         await StateSmoke.VerifyAsync(destination,VM.Bin);
         await TransactionSmoke.VerifyAsync(destination,VM.Bin);
-        var children=TrafficCanvas.Children.Count; var enumerations=adapterEnumerations; var ticks=backgroundTicks;
+        var children=TrafficCanvas.Children.Count; var ticks=backgroundTicks;
         Hide(); await Task.Delay(2200);
-        if(TrafficCanvas.Children.Count!=children || adapterEnumerations!=enumerations || backgroundTicks<=ticks) throw new InvalidOperationException("Фоновый таймер рисует скрытый график или остановил обслуживание.");
+        if(TrafficCanvas.Children.Count!=children || backgroundTicks<=ticks) throw new InvalidOperationException("Фоновый таймер рисует скрытый график или остановил обслуживание.");
         Show();
         await File.WriteAllTextAsync(System.IO.Path.Combine(destination,"hidden-timer-check.txt"),"Hidden window: canvas and adapter enumeration unchanged; background timer continues.");
         for (int i = 0; i < Pages.Items.Count; i++)
@@ -610,5 +1100,15 @@ public partial class MainWindow : Window
         using(var output=File.Create(System.IO.Path.Combine(destination,"tray-menu.png"))) trayPng.Save(output);
         ((MenuItem)trayMenu.Items[2]).RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent)); trayMenu.IsOpen=false;
         if(trayActions!=1) throw new InvalidOperationException("Tray action was not dispatched exactly once.");
+        VM.RestoreSmokeDraft();
+        // A real WPF dispatcher stress test: producers must not queue one dispatcher operation per line.
+        var started = Stopwatch.StartNew();
+        await Task.Run(() => Parallel.For(0, 10000, n => VM.WriteLog("Synthetic network error " + n)));
+        HeaderSmoke.ClickTab(this, Pages, 6);
+        await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Input);
+        if (started.Elapsed > TimeSpan.FromSeconds(5)) throw new InvalidOperationException("UI blocked during log flood.");
+        await Task.Delay(500);
+        if (VM.Logs.Count > 2000) throw new InvalidOperationException("Unbounded log UI.");
+        await File.WriteAllTextAsync(System.IO.Path.Combine(destination,"log-stress-check.txt"), $"10000 lines; UI input dispatched after {started.ElapsedMilliseconds} ms; retained {VM.Logs.Count}; {VM.LogMetrics}");
     }
 }

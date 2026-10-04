@@ -11,8 +11,8 @@ public sealed class PortStartupTests
     public async Task OccupiedInternalPortRetriesAndLeavesNoPartialCore(bool alwaysOccupied)
     {
         using var occupied=new TcpListener(IPAddress.Loopback,0);occupied.Start();var port=((IPEndPoint)occupied.LocalEndpoint).Port;int allocations=0;
-        var started=new List<int>();var root=Path.Combine(RoutingTests.FindRoot(),"artifacts","ports-"+Guid.NewGuid().ToString("N"));
-        using var router=new RouterService(Path.Combine(RoutingTests.FindRoot(),"bin"),root)
+        var started=new List<int>();var root=RoutingTests.TestArtifacts("ports-"+Guid.NewGuid().ToString("N"));
+        using var router=new RouterService(RoutingTests.ModuleRoot,root)
         {
             AllocatePort=()=>++allocations==1 || alwaysOccupied?port:OpenVpnService.FreePort(),
             StartProcessOverride=(host,exe,args)=>{host.Start(exe,args);started.Add(host.Id);}
@@ -38,7 +38,7 @@ public sealed class PortStartupTests
     {
         using var occupied=new TcpListener(IPAddress.Loopback,0);occupied.Start();var port=((IPEndPoint)occupied.LocalEndpoint).Port;int allocations=0;
         var root=Path.Combine(Path.GetTempPath(),"NetCat-XrayPort-"+Guid.NewGuid());
-        using(var router=new RouterService(Path.Combine(RoutingTests.FindRoot(),"bin"),root){AllocateTcpUdpPort=()=>++allocations==1?port:OpenVpnService.FreeTcpUdpPort()})
+        using(var router=new RouterService(RoutingTests.ModuleRoot,root){AllocateTcpUdpPort=()=>++allocations==1?port:OpenVpnService.FreeTcpUdpPort()})
         {
             var p=ProfileImporter.ParseLink("trojan://test@192.0.2.1:443?security=tls#port");var s=new AppSettings {Tun=false,Profiles=[p],MainProfileId=p.Id,SocksPort=OpenVpnService.FreePort()};
             await router.SetVpnAsync(s,true);Assert.True(router.VpnRunning);Assert.Equal(2,allocations);await router.StopAllAsync();
@@ -50,7 +50,7 @@ public sealed class PortStartupTests
     {
         using var occupied=new TcpListener(IPAddress.Loopback,0);occupied.Start();var port=((IPEndPoint)occupied.LocalEndpoint).Port;int allocations=0;
         var root=Path.Combine(Path.GetTempPath(),"NetCat-ProbePort-"+Guid.NewGuid());
-        using var router=new RouterService(Path.Combine(RoutingTests.FindRoot(),"bin"),root){AllocatePort=()=>{allocations++;return port;}};
+        using var router=new RouterService(RoutingTests.ModuleRoot,root){AllocatePort=()=>{allocations++;return port;}};
         var result=await router.TestProfileAsync(ProfileImporter.ParseLink("socks://192.0.2.1:1080"),new(){Tun=false},CancellationToken.None);
         Assert.False(result.Success);Assert.Equal(3,allocations);Assert.False(router.Running);Assert.Null(router.ActiveProfileId);
         if(Directory.Exists(root))Directory.Delete(root,true);
@@ -60,7 +60,12 @@ public sealed class PortStartupTests
     {
         using var occupied=new TcpListener(IPAddress.Loopback,0);occupied.Start();var port=((IPEndPoint)occupied.LocalEndpoint).Port;int allocations=0;
         var root=Path.Combine(Path.GetTempPath(),"NetCat-ManagementPort-"+Guid.NewGuid());
-        using var service=new OpenVpnService("unused-no-driver-or-executable",root){AllocateManagementPort=()=>{allocations++;return port;}};
+        using var service=new OpenVpnService("unused-no-driver-or-executable",root)
+        {
+            AllocateManagementPort=()=>{allocations++;return port;},
+            StartProcessOverride=_=>throw new InvalidOperationException("Collision must prevent executable launch"),
+            CreateAdapterOverride=()=>throw new InvalidOperationException("Collision must prevent adapter creation")
+        };
         await Assert.ThrowsAsync<PortCollisionException>(()=>service.StartAsync(new Profile{Protocol="openvpn",OpenVpnConfig="client\ndev tun\nremote 192.0.2.1 1194\n"},"",CancellationToken.None));
         Assert.Equal(3,allocations);Assert.False(service.Running);Assert.Null(service.ActiveProfileId);Assert.Null(service.Link);
         Assert.False(File.Exists(Path.Combine(root,"management.pass")));Directory.Delete(root,true);

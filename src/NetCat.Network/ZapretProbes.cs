@@ -7,9 +7,24 @@ using NetCat.Engine;
 namespace NetCat.Network;
 
 public sealed record ServiceProbe(string Service,string Name,string Url,bool Gateway=false);
-public sealed record ProbeOutcome(string Service,string Name,bool Success,int Milliseconds,string Detail);
+public sealed record ProbeOutcome(string Service,string Name,bool Success,int Milliseconds,string Detail)
+{
+    public string DnsClass { get; init; } = "unknown";
+    public string TcpClass { get; init; } = "unknown";
+    public string TlsClass { get; init; } = "unknown";
+    public int? HttpStatus { get; init; }
+    public string FailureClass { get; init; } = "none";
+}
 public static class ZapretProbes
 {
+    public static System.Text.Json.Nodes.JsonObject BuildPhysicalConfig(AppSettings settings,NetworkSnapshot physical,int port)
+    {
+        var config=SingBoxConfig.Build(new AppSettings {Fallback=RouteTarget.Direct,DirectDns=settings.DirectDns},physical,null,null,false,port);
+        config["route"]!["rules"]=new System.Text.Json.Nodes.JsonArray();
+        return config;
+    }
+    public static bool SamePhysicalPath(NetworkSnapshot before,NetworkSnapshot? after)=>after!=null&&
+        before.Index==after.Index&&before.Name==after.Name&&before.Address==after.Address&&before.DefaultRoute==after.DefaultRoute&&before.Dns==after.Dns;
     public static IReadOnlyList<ServiceProbe> Defaults {get;} = Array.AsReadOnly(new[] {
         new ServiceProbe("YouTube","HTTPS","https://www.youtube.com/"),
         new ServiceProbe("YouTube","HTTPS · Player API","https://www.youtube.com/iframe_api"),
@@ -19,14 +34,23 @@ public static class ZapretProbes
     public static async Task<List<ProbeOutcome>> RunAsync(HttpClient client,IEnumerable<ServiceProbe> probes,CancellationToken ct,
         Func<Uri,CancellationToken,Task>? webSocket=null)
     {
+        // Independent HTTPS targets share only the read-only proxy client. Run them
+        // together; a strategy still owns winws exclusively until all probes finish.
+        var tasks=probes.Select(probe=>RunOneAsync(probe,client,ct,webSocket)).ToArray();
+        var groups=await Task.WhenAll(tasks);
+        return groups.SelectMany(group=>group).ToList();
+    }
+
+    private static async Task<List<ProbeOutcome>> RunOneAsync(ServiceProbe probe,HttpClient client,CancellationToken ct,
+        Func<Uri,CancellationToken,Task>? webSocket)
+    {
         var outcomes=new List<ProbeOutcome>();
-        foreach(var probe in probes)
         {
-            ct.ThrowIfCancellationRequested();var watch=Stopwatch.StartNew();Uri? gateway=null;
+            ct.ThrowIfCancellationRequested();var watch=Stopwatch.StartNew();Uri? gateway=null; int? status=null;
             using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);deadline.CancelAfter(client.Timeout==Timeout.InfiniteTimeSpan?TimeSpan.FromSeconds(20):client.Timeout);
             try
             {
-                using var response=await client.GetAsync(probe.Url,HttpCompletionOption.ResponseHeadersRead,deadline.Token);response.EnsureSuccessStatusCode();
+                using var response=await client.GetAsync(probe.Url,HttpCompletionOption.ResponseHeadersRead,deadline.Token);status=(int)response.StatusCode;response.EnsureSuccessStatusCode();
                 if(probe.Gateway)
                 {
                     await using var body=await response.Content.ReadAsStreamAsync(deadline.Token);using var buffer=new MemoryStream();var chunk=new byte[4096];int read;
@@ -36,16 +60,21 @@ public static class ZapretProbes
                     var url=urlProperty.GetString();
                     if(!Uri.TryCreate(url,UriKind.Absolute,out gateway) || gateway.Scheme!="wss" || gateway.Host!="gateway.discord.gg" || !gateway.IsDefaultPort || gateway.UserInfo.Length>0) throw new InvalidDataException("Некорректный адрес Discord Gateway.");
                 }
-                outcomes.Add(new(probe.Service,probe.Name,true,(int)watch.ElapsedMilliseconds,"HTTP "+(int)response.StatusCode));
+                outcomes.Add(new(probe.Service,probe.Name,true,(int)watch.ElapsedMilliseconds,"HTTP "+(int)response.StatusCode){DnsClass="resolved-via-proxy",TcpClass="connected",TlsClass=new Uri(probe.Url).Scheme=="https"?"verified":"not-applicable",HttpStatus=status});
             }
             catch(Exception ex) when(ex is HttpRequestException or InvalidDataException or JsonException or KeyNotFoundException || ex is OperationCanceledException && !ct.IsCancellationRequested)
-            {outcomes.Add(new(probe.Service,probe.Name,false,0,ProcessHost.Redact(ex.Message)));continue;}
+            {
+                var category=ex is OperationCanceledException?"timeout":ex is HttpRequestException h?h.HttpRequestError.ToString():"invalid-response";
+                outcomes.Add(new(probe.Service,probe.Name,false,(int)watch.ElapsedMilliseconds,ProcessHost.Redact(ex.Message)){
+                    HttpStatus=status,FailureClass=category,DnsClass=status.HasValue?"resolved-via-proxy":"unknown",
+                    TcpClass=status.HasValue?"connected":"unknown",TlsClass=status.HasValue&&new Uri(probe.Url).Scheme=="https"?"verified":"unknown"});return outcomes;
+            }
             if(gateway!=null && webSocket!=null)
             {
                 watch.Restart();
-                try {await webSocket(gateway,ct);outcomes.Add(new(probe.Service,"WebSocket · Hello",true,(int)watch.ElapsedMilliseconds,"Получен Gateway Hello"));}
+                try {await webSocket(gateway,ct);outcomes.Add(new(probe.Service,"WebSocket · Hello",true,(int)watch.ElapsedMilliseconds,"Получен Gateway Hello"){DnsClass="resolved-via-proxy",TcpClass="connected",TlsClass="verified",HttpStatus=101});}
                 catch(Exception ex) when(ex is WebSocketException or HttpRequestException or InvalidDataException || ex is OperationCanceledException && !ct.IsCancellationRequested)
-                {outcomes.Add(new(probe.Service,"WebSocket · Hello",false,0,ProcessHost.Redact(ex.Message)));}
+                {outcomes.Add(new(probe.Service,"WebSocket · Hello",false,(int)watch.ElapsedMilliseconds,ProcessHost.Redact(ex.Message)){FailureClass=ex is OperationCanceledException?"timeout":"websocket"});}
             }
         }
         return outcomes;
@@ -73,7 +102,7 @@ public static class ZapretProbes
         var rows=outcomes.Where(p=>p.Service==service).ToArray();
         if(rows.Length==0)return "Через VPN";
         var text=string.Join("\n",rows.Select(p=>p.Name+": "+(p.Success?$"доступен · {p.Milliseconds} мс":"нет ответа")));
-        if(service=="Discord")text+="\nVoice UDP: не проверялось";
+        if(service=="Discord")text+="\nVoice UDP: автоматически не проверяется";
         return text;
     }
 }

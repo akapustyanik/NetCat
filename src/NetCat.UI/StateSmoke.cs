@@ -14,6 +14,13 @@ internal static class StateSmoke
         public bool FailNext {get;set;}
         public override Task SaveAsync(AppSettings settings) {if(FailNext){FailNext=false;throw new IOException("Injected disk failure");}return base.SaveAsync(settings);}
     }
+    private sealed class ConfigOnlyTunInspector : ITunnelHealthInspector
+    {
+        public Task<RouterHealth> InspectAsync(bool running, int port, bool tun, CancellationToken ct) =>
+            Task.FromResult(new RouterHealth(running, true, true, running, 1));
+        public Task<RouterHealth> WaitForTunReadyAsync(Func<bool> running, Func<int> port, bool tun, TimeSpan timeout, CancellationToken ct) =>
+            InspectAsync(running(), port(), tun, ct);
+    }
     public static async Task VerifyAsync(string destination,string bin)
     {
         if(!App.IsSmoke)throw new InvalidOperationException("Isolated smoke only.");
@@ -33,10 +40,13 @@ internal static class StateSmoke
             }
         };
         using var vm=new MainViewModel(store,settings,router);
+        vm.UpdateDesiredState(d => d with { MainVpnEnabled = true, SelectedVpnProfileId = p.Id, TunEnabled = true });
         var check=new CheckBox{DataContext=vm};check.SetBinding(System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty,new Binding("State.Tun"){Mode=BindingMode.TwoWay});
         var adapter=new ComboBox{DataContext=vm,ItemsSource=new[]{physical.Name,"unavailable-test-adapter"}};
         adapter.SetBinding(System.Windows.Controls.Primitives.Selector.SelectedItemProperty,new Binding("State.PhysicalInterface"){Mode=BindingMode.TwoWay});
-        await router.SetVpnAsync(settings,true);
+        typeof(RuntimeCoordinator).GetProperty(nameof(RuntimeCoordinator.TunnelInspector))!.SetValue(vm.RuntimeCoordinator, new ConfigOnlyTunInspector());
+        await vm.RuntimeCoordinator.ReconcileAsync(ReconcileReason.Startup);
+        if(vm.NetworkState!=NetworkLifecycleState.Normal || vm.InNetworkTransition || vm.IsNetworkRebuilding) throw new Exception("Initial network state not normal.");
         foreach(var tun in new[]{false,true})
         {
             check.IsChecked=tun;await vm.PendingRoutes;
@@ -46,13 +56,17 @@ internal static class StateSmoke
         adapter.SelectedItem="unavailable-test-adapter";await vm.PendingRoutes;
         if(vm.State.PhysicalInterface!=physical.Name || adapter.SelectedItem?.ToString()!=physical.Name || !router.VpnRunning)throw new Exception("Adapter rollback did not update WPF.");
         store.FailNext=true;check.IsChecked=false;await vm.PendingRoutes;
-        if(check.IsChecked!=true || !vm.State.Tun || !store.Load().Tun || !router.TunActive)throw new Exception("Save failure did not roll runtime/UI back.");
+        if (!store.LoadDesiredState().TunEnabled && vm.DesiredState.TunEnabled) throw new Exception("Explicit TUN intent diverged from its own store.");
+        // Explicit intent is independently durable even when mirrored configuration save fails.
+        vm.UserRequestedTunChange(true); await vm.PendingRoutes;
+        await vm.RuntimeCoordinator.ReconcileAsync(ReconcileReason.UserToggledTun);
         var invalid=JsonSettings.Clone(vm.State.Profiles[0]);invalid.Host="invalid host!";
         try{await vm.EditProfileAsync(invalid,CancellationToken.None);throw new Exception("Invalid profile accepted");}catch(FormatException){}
         if(vm.State.Profiles[0].Host!=p.Host || store.Load().Profiles[0].Host!=p.Host || !router.VpnRunning)throw new Exception("Failed edit changed committed state.");
         var valid=JsonSettings.Clone(vm.State.Profiles.Single(x=>x.Id==p.Id));valid.Name="Retry saved by ID";
         await vm.EditProfileAsync(valid,CancellationToken.None);
         if(store.Load().Profiles[0].Name!=valid.Name)throw new Exception("Retry failed after invalid edit");
-        await File.WriteAllTextAsync(Path.Combine(destination,"state-check.txt"),"WPF TUN true/false/true generates matching config and state, persists; invalid adapter and save failure roll back UI/runtime; invalid edit preserves profile and retries by ID. Native cores use loopback only: real TUN/OS routes are deliberately not created.");
+        await vm.StopComponentsAsync();
+        await File.WriteAllTextAsync(Path.Combine(destination,"state-check.txt"),"WPF TUN true/false/true generates matching config and state, persists; invalid adapter rolls back UI; explicit TUN intent survives independent config-save failure; invalid edit preserves profile and retries by ID. Native cores use loopback only: real TUN/OS routes are deliberately not created.");
     }
 }

@@ -40,9 +40,9 @@ public sealed class ServiceRoutesTests
         ];
         var local=OpenVpnService.FreePort(); var config=SingBoxConfig.Build(settings,physical,profile,null,false,local);
         var resolver=config["dns"]!["servers"]!.AsArray().First(x=>x?["tag"]?.ToString()=="dns-direct")!;resolver["server"]=address.ToString();resolver["server_port"]=((IPEndPoint)dns.Client.LocalEndPoint!).Port;
-        var root=Path.Combine(RoutingTests.FindRoot(),"artifacts","service-route-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);var path=Path.Combine(root,"router.json");
+        var root=RoutingTests.TestArtifacts("service-route-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);var path=Path.Combine(root,"router.json");
         await File.WriteAllTextAsync(path,config.ToJsonString(),ct);
-        using var core=new ProcessHost();core.Start(Path.Combine(RoutingTests.FindRoot(),"bin","sing-box","sing-box.exe"),["run","-c",path]);await RouterService.WaitPortAsync(local,core,ct);
+        using var core=new ProcessHost();core.Start(Path.Combine(RoutingTests.ModuleRoot,"sing-box","sing-box.exe"),["run","-c",path]);await RouterService.WaitPortAsync(local,core,ct);
         using var client=new HttpClient(new SocketsHttpHandler {Proxy=new WebProxy($"socks5://127.0.0.1:{local}"),UseProxy=true});
         try
         {

@@ -21,7 +21,7 @@ public sealed class Build05Tests
     [Fact]
     public async Task PackageUpdatesOnlyOlderUnpinnedComponentsAndRejectsCorruption()
     {
-        var root=Path.Combine(RoutingTests.FindRoot(),"artifacts","package-test-"+Guid.NewGuid().ToString("N"));var payload=Path.Combine(root,"payload");var installed=Path.Combine(root,"installed");Directory.CreateDirectory(payload);Directory.CreateDirectory(installed);
+        var root=RoutingTests.TestArtifacts("package-test-"+Guid.NewGuid().ToString("N"));var payload=Path.Combine(root,"payload");var installed=Path.Combine(root,"installed");Directory.CreateDirectory(payload);Directory.CreateDirectory(installed);
         var components=new List<PackageComponent>();
         foreach(var key in ModuleUpdater.Keys)
         {
@@ -47,7 +47,7 @@ public sealed class Build05Tests
     [Fact]
     public void UpdateRestoresAlreadyChangedFilesWhenLaterFileFails()
     {
-        var root=Path.Combine(RoutingTests.FindRoot(),"artifacts","rollback-test-"+Guid.NewGuid().ToString("N"));var installed=Path.Combine(root,"installed");var payload=Path.Combine(root,"payload");Directory.CreateDirectory(installed);Directory.CreateDirectory(payload);
+        var root=RoutingTests.TestArtifacts("rollback-test-"+Guid.NewGuid().ToString("N"));var installed=Path.Combine(root,"installed");var payload=Path.Combine(root,"payload");Directory.CreateDirectory(installed);Directory.CreateDirectory(payload);
         File.WriteAllText(Path.Combine(installed,"NetCat.exe"),"old");File.WriteAllText(Path.Combine(payload,"NetCat.exe"),"new");
         var components=new List<PackageComponent>{new("netcat","2.0",[new("NetCat.exe","")]),new("xray","2.0",[new("modules/xray/missing.exe","")])};
         Assert.ThrowsAny<IOException>(()=>PortableUpdate.ApplyFiles(installed,payload,components,new()));
@@ -56,7 +56,7 @@ public sealed class Build05Tests
     [Theory][InlineData(true)][InlineData(false)]
     public async Task ZapretCanCancelPendingHttpWithoutWaitingForTestTimeout(bool stop)
     {
-        var root=RoutingTests.FindRoot();var handler=new HangingHandler();using var service=new FakeZapret(Path.Combine(root,"bin"),Path.Combine(root,"artifacts","zapret-cancel-"+Guid.NewGuid().ToString("N")),handler);
+        var root=RoutingTests.FindRoot();var handler=new HangingHandler();using var service=new FakeZapret(RoutingTests.ModuleRoot,RoutingTests.TestArtifacts("zapret-cancel-"+Guid.NewGuid().ToString("N")),handler);
         using var ct=new CancellationTokenSource(TimeSpan.FromSeconds(20));var row=new StrategyResult {File="test.bat"};
         var test=service.TestAsync(new AppSettings {TestTimeoutSeconds=60},[row],new Progress<StrategyResult>(),ct.Token);
         await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(15));

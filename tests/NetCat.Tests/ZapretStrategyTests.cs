@@ -23,7 +23,7 @@ public sealed class ZapretStrategyTests
     [InlineData(true, false)] [InlineData(false, true)] [InlineData(true, true)]
     public void PackagedProfilesKeepGoogleDiscordAndIpFiltersSeparate(bool youtube, bool discord)
     {
-        var root = Path.Combine(RoutingTests.FindRoot(), "bin", "zapret");
+        var root = Path.Combine(RoutingTests.ModuleRoot, "zapret");
         foreach (var batch in Directory.GetFiles(root, "general*.bat"))
         {
             var args = ZapretArguments.Build(batch, root, "scenario-hosts.txt", youtube, discord, 24);

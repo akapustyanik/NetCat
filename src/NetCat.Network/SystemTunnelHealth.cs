@@ -12,8 +12,22 @@ public sealed class SystemTunnelHealth : IDisposable
     private HttpClient? client;
     private int boundPort;
     public void Dispose() { client?.Dispose(); client = null; }
+    public static async Task<NetworkStream> ConnectProbeAsync(IPAddress local,IPEndPoint target,CancellationToken ct)
+    {
+        var socket=new Socket(AddressFamily.InterNetwork,SocketType.Stream,ProtocolType.Tcp) { ExclusiveAddressUse=true };
+        try
+        {
+            // The actual source socket owns its ephemeral port until disposed.
+            // Never reuse a pre-probed number or a prior TLS connection's tuple.
+            socket.Bind(new IPEndPoint(local,0));
+            await socket.ConnectAsync(target,ct);
+            return new NetworkStream(socket,ownsSocket:true);
+        }
+        catch {socket.Dispose();throw;}
+    }
     public async Task<DelayResult> CheckAsync(int sourcePort, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         var tun = NetworkInterface.GetAllNetworkInterfaces().FirstOrDefault(n=>n.Name=="NetCat-TUN" && n.OperationalStatus==OperationalStatus.Up);
         if (tun == null || sourcePort == 0) return new(false,-1,"Системный туннель не готов.");
         if (GetBestInterface(0x01010101,out var best) != 0 || best != tun.GetIPProperties().GetIPv4Properties().Index)
@@ -25,16 +39,7 @@ public sealed class SystemTunnelHealth : IDisposable
         var handler = new SocketsHttpHandler { UseProxy=false, AllowAutoRedirect=false,
             ConnectCallback=async (_,token)=>
             {
-                var socket=new Socket(AddressFamily.InterNetwork,SocketType.Stream,ProtocolType.Tcp) { LingerState=new LingerOption(true,0) };
-                try
-                {
-                    socket.ExclusiveAddressUse = false;
-                    socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-                    socket.Bind(new IPEndPoint(IPAddress.Parse("172.29.255.1"),sourcePort));
-                    await socket.ConnectAsync(IPAddress.Parse("1.1.1.1"),443,token);
-                    return new NetworkStream(socket,ownsSocket:true);
-                }
-                catch { socket.Dispose(); throw; }
+                return await ConnectProbeAsync(IPAddress.Parse("172.29.255.1"),new IPEndPoint(IPAddress.Parse("1.1.1.1"),443),token);
             } };
         client=new HttpClient(handler);
         }

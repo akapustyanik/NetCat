@@ -29,3 +29,43 @@ runtime/
 
 # Geodata and binary databases
 *.dat
+
+*.dpapi
+*.nckey
+*.p12
+*.seed
+*.zip
+__pycache__/
+prompt*.txt
+candidate*-current-files.txt
+candidate*-dev*-audit.txt
+candidate*-updater-current.txt
+*.before-*
+
+# Private input, diagnostics, backups and local audit tools
+*.pem
+.env
+.env.*
+*.bak
+*.backup
+*.trx
+*.dmp
+*.etl
+*.db
+*.sqlite*
+*.7z
+*.tar.gz
+privacy-fixture.json
+*credential*.xml
+*acceptance-targets*.json
+.gemini/
+.astra/
+.codex/
+.venv/
+venv/
+.pytest_cache/
+/docs/*.md
+/docs/*.txt
+/docs/releases/*
+!/docs/releases/v1.0.0.md
+/scripts/Test-ZapretLifetime.ps1

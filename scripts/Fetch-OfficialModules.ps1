@@ -6,6 +6,10 @@ New-Item -ItemType Directory -Force $cache,$moduleRoot | Out-Null
 $headers = @{ 'User-Agent' = 'NetCat-Build'; Accept = 'application/vnd.github+json' }
 if ($env:GITHUB_TOKEN) { $headers['Authorization'] = "Bearer $env:GITHUB_TOKEN" }
 $records = @()
+function Receive-ModuleFile([string]$Url, [string]$Path) {
+    & curl.exe --fail --location --silent --show-error --max-time 180 --retry 2 --output $Path $Url
+    if ($LASTEXITCODE -ne 0) { throw 'Official module download failed.' }
+}
 function Get-GitHubModule([string]$Key, [string]$Repo, [string]$Tag, [string]$Pattern, [string]$Binary) {
     $release = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/tags/$Tag" -Headers $headers
     $assets = @($release.assets | Where-Object { $_.name -match $Pattern })
@@ -14,7 +18,7 @@ function Get-GitHubModule([string]$Key, [string]$Repo, [string]$Tag, [string]$Pa
     if ($asset.digest -notmatch '^sha256:([a-f0-9]{64})$') { throw "No trusted release digest for $Key" }
     $expected = $Matches[1]
     $archive = Join-Path $cache $asset.name
-    if (-not (Test-Path $archive)) { Invoke-WebRequest $asset.browser_download_url -OutFile $archive }
+    if (-not (Test-Path $archive)) { Receive-ModuleFile $asset.browser_download_url $archive }
     if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) { throw "SHA256 mismatch: $Key" }
     $dest = Join-Path $moduleRoot $Key
     New-Item -ItemType Directory -Force $dest | Out-Null
@@ -29,12 +33,12 @@ function Get-GitHubModule([string]$Key, [string]$Repo, [string]$Tag, [string]$Pa
     $script:records += @{ key=$Key; repo=$Repo; version=$Tag; asset=$asset.name; url=$asset.browser_download_url; sha256=$expected; verified='GitHub release asset SHA-256' }
     Write-Host "$Key $Tag verified"
 }
-Get-GitHubModule 'sing-box' 'SagerNet/sing-box' 'v1.14.0' '^sing-box-1\.14\.0-windows-amd64\.zip$' 'sing-box.exe'
+Get-GitHubModule 'sing-box' 'SagerNet/sing-box' 'v1.14.2' '^sing-box-1\.14\.2-windows-amd64\.zip$' 'sing-box.exe'
 Get-GitHubModule 'xray' 'XTLS/Xray-core' 'v26.3.27' '^Xray-windows-64\.zip$' 'xray.exe'
-Get-GitHubModule 'zapret' 'Flowseal/zapret-discord-youtube' '1.10.2' '\.zip$' 'winws.exe'
-Get-GitHubModule 'tg-ws-proxy' 'Flowseal/tg-ws-proxy' 'v1.10.2' '^TgWsProxy_windows\.exe$' 'TgWsProxy_windows.exe'
+Get-GitHubModule 'zapret' 'Flowseal/zapret-discord-youtube' '1.10.3' '\.zip$' 'winws.exe'
+Get-GitHubModule 'tg-ws-proxy' 'Flowseal/tg-ws-proxy' 'v1.10.4' '^TgWsProxy_windows\.exe$' 'TgWsProxy_windows.exe'
 $wintunZip = Join-Path $cache 'wintun-0.14.1.zip'
-if (-not (Test-Path $wintunZip)) { Invoke-WebRequest 'https://www.wintun.net/builds/wintun-0.14.1.zip' -OutFile $wintunZip }
+if (-not (Test-Path $wintunZip)) { Receive-ModuleFile 'https://www.wintun.net/builds/wintun-0.14.1.zip' $wintunZip }
 Expand-Archive -LiteralPath $wintunZip -DestinationPath (Join-Path $cache 'wintun') -Force
 $wintunDll = Join-Path $cache 'wintun/wintun/bin/amd64/wintun.dll'
 $signature = Get-AuthenticodeSignature -LiteralPath $wintunDll
@@ -44,7 +48,7 @@ New-Item -ItemType Directory -Force (Join-Path $moduleRoot 'wintun') | Out-Null
 Copy-Item -LiteralPath $wintunDll -Destination (Join-Path $moduleRoot 'wintun/wintun.dll') -Force
 $records += @{ key='wintun'; version='0.14.1'; url='https://www.wintun.net/builds/wintun-0.14.1.zip'; sha256=(Get-FileHash $wintunZip).Hash.ToLowerInvariant(); verified='Authenticode: WireGuard' }
 $msi = Join-Path $cache 'OpenVPN-2.6.22-I001-amd64.msi'
-if (-not (Test-Path $msi)) { Invoke-WebRequest 'https://swupdate.openvpn.org/community/releases/OpenVPN-2.6.22-I001-amd64.msi' -OutFile $msi }
+if (-not (Test-Path $msi)) { Receive-ModuleFile 'https://swupdate.openvpn.org/community/releases/OpenVPN-2.6.22-I001-amd64.msi' $msi }
 $signature = Get-AuthenticodeSignature -LiteralPath $msi
 if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'OpenVPN') { throw 'OpenVPN MSI signature verification failed' }
 $msiDir = Join-Path $cache 'openvpn-2.6.22-expanded'
@@ -56,6 +60,11 @@ if (-not $openvpn) { throw 'OpenVPN executable missing from MSI' }
 $dest = Join-Path $moduleRoot 'openvpn'
 New-Item -ItemType Directory -Force $dest | Out-Null
 Copy-Item -Path (Join-Path $openvpn.DirectoryName '*') -Destination $dest -Recurse -Force
+$openVpnParent = Split-Path $openvpn.DirectoryName -Parent
+$sslDir = Join-Path $openVpnParent 'ssl'
+if (Test-Path $sslDir) {
+    Copy-Item -Path $sslDir -Destination $dest -Recurse -Force
+}
 Copy-Item -LiteralPath $wintunDll -Destination (Join-Path $dest 'wintun.dll') -Force
 $records += @{key='openvpn';version='2.6.22';url='https://swupdate.openvpn.org/community/releases/OpenVPN-2.6.22-I001-amd64.msi';sha256=(Get-FileHash $msi).Hash.ToLowerInvariant();verified='Authenticode: OpenVPN'}
 $records | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $moduleRoot 'modules.lock.json') -Encoding utf8

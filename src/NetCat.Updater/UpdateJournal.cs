@@ -42,7 +42,7 @@ public static class DurableUpdate
         foreach(var c in plan) nextVersions[c.Key]=c.Version;
         var journal=new UpdateJournal(1,root,Guid.NewGuid().ToString("N"),stage,UpdatePhase.Prepared,oldVersions,nextVersions,[]);
         var backup=PortableUpdate.SafePath(root,BackupPath(journal)); Directory.CreateDirectory(backup);
-        Save(journal); int count=0;
+        Save(journal); int count=0; bool committed=false;
         void Change(string relative,string? source)
         {
             var target=PortableUpdate.SafePath(root,relative);
@@ -78,23 +78,25 @@ public static class DurableUpdate
                 var source=Path.Combine(backup,"ownership-"+c.Key+".json"); Write(source,c); Change(relative,source);
             }
             var versionFile=Path.Combine(backup,"versions.json"); Write(versionFile,nextVersions); Change("metadata/installed.json",versionFile);
-            journal=journal with {Phase=UpdatePhase.Committed}; Save(journal);
+            journal=journal with {Phase=UpdatePhase.Committed}; Save(journal); committed=true;
             versions.Clear(); foreach(var pair in nextVersions) versions[pair.Key]=pair.Value;
             afterMutation?.Invoke(++count,UpdatePhase.Committed);
         }
         catch(Exception error) when(error is not SimulatedUpdateCrash)
         {
             Recover(root);
-            versions.Clear(); foreach(var pair in oldVersions) versions[pair.Key]=pair.Value;
+            // Recovery preserves a durable commit. A later diagnostic/callback
+            // failure must not report old versions while the files are new.
+            versions.Clear(); foreach(var pair in committed ? nextVersions : oldVersions) versions[pair.Key]=pair.Value;
             throw;
         }
-        Cleanup(journal);
+        TryCleanup(journal);
     }
     public static UpdateJournal? Read(string root)
     {
         root=Canonical(root); var path=PortableUpdate.SafePath(root,JournalPath); if(!File.Exists(path)) return null;
         var journal=JsonSerializer.Deserialize<UpdateJournal>(File.ReadAllText(path),JsonSettings.Options) ?? throw new InvalidDataException("Пустой журнал обновления.");
-        if(journal.Schema!=1 || Canonical(journal.Root)!=root || !Guid.TryParseExact(journal.UpdateId,"N",out _) || !Enum.IsDefined(journal.Phase)) throw new InvalidDataException("Некорректный журнал обновления.");
+        if(journal.Schema!=1 || !string.Equals(Canonical(journal.Root),root,StringComparison.OrdinalIgnoreCase) || !Guid.TryParseExact(journal.UpdateId,"N",out _) || !Enum.IsDefined(journal.Phase)) throw new InvalidDataException("Некорректный журнал обновления.");
         var paths=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach(var op in journal.Operations)
         { if(!Allowed(op.Target) || !paths.Add(op.Target)) throw new InvalidDataException("Недопустимый путь восстановления."); PortableUpdate.SafePath(root,op.Target); }
@@ -105,6 +107,11 @@ public static class DurableUpdate
         var journal=Read(root); if(journal==null) return;
         if(journal.Phase is UpdatePhase.Prepared or UpdatePhase.Applying)
         {
+            // Never move the running image out of its launch path. Its verified
+            // external helper performs recovery after the original process exits.
+            if (journal.Operations.Any(o => o.Target == "NetCat.exe") &&
+                Path.GetFullPath(Environment.ProcessPath!).Equals(PortableUpdate.SafePath(root, "NetCat.exe"), StringComparison.OrdinalIgnoreCase))
+                throw new IOException("Для восстановления запущенного NetCat.exe требуется внешний помощник.");
             var backup=PortableUpdate.SafePath(root,BackupPath(journal));
             // Validate every backup BEFORE restoring anything. Partial/corrupt backups remain available for diagnosis.
             foreach(var op in journal.Operations.Where(o=>o.Existed))
@@ -115,14 +122,6 @@ public static class DurableUpdate
                 if(op.Existed)
                 {
                     var next=PortableUpdate.SafePath(root,op.Target+".netcat-new");File.Copy(PortableUpdate.SafePath(backup,op.Target),next,true);FlushFile(next);
-                    // A mapped Windows EXE may be renamed but cannot be overwritten in place.
-                    // The operation's durable backup also covers a crash between these two moves.
-                    if(op.Target=="NetCat.exe" && File.Exists(target) && Path.GetFullPath(Environment.ProcessPath!).Equals(target,StringComparison.OrdinalIgnoreCase))
-                    {
-                        var displaced=PortableUpdate.SafePath(root,"NetCat.exe.netcat-displaced");
-                        if(File.Exists(displaced))File.Delete(displaced);
-                        File.Move(target,displaced);
-                    }
                     File.Move(next,target,true);
                 }
                 else File.Delete(target);
@@ -130,7 +129,27 @@ public static class DurableUpdate
             // CleanupPending also means a completed rollback; a subsequent startup must never replay it.
             journal=journal with {Phase=UpdatePhase.CleanupPending}; Save(journal);
         }
-        Cleanup(journal);
+        TryCleanup(journal);
+    }
+    // Failure to remove temporary files cannot invalidate a completed
+    // commit or a successfully persisted rollback.
+    // CleanupPending is retried by Recover() at the next startup.
+    private static void TryCleanup(UpdateJournal journal)
+    {
+        try
+        {
+            Cleanup(journal);
+        }
+        catch(IOException ex)
+        {
+            System.Diagnostics.Trace.WriteLine(
+                "UPDATE_CLEANUP deferred reason=" + ex.GetType().Name);
+        }
+        catch(UnauthorizedAccessException ex)
+        {
+            System.Diagnostics.Trace.WriteLine(
+                "UPDATE_CLEANUP deferred reason=" + ex.GetType().Name);
+        }
     }
     private static void Cleanup(UpdateJournal journal)
     {

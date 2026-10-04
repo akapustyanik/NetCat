@@ -12,9 +12,10 @@ internal static class LiveRulesSmoke
         if(!App.IsSmoke) throw new InvalidOperationException("Only isolated smoke settings are allowed.");
         var profile=ProfileImporter.ParseLink("socks://192.0.2.1:1080#Smoke");
         await vm.UpdateSettingsAsync(next=>{next.Profiles=[profile];next.MainProfileId=profile.Id;next.Tun=false;next.SocksPort=OpenVpnService.FreePort();});
+        vm.UpdateDesiredState(d => d with { MainVpnEnabled = true, SelectedVpnProfileId = profile.Id, TunEnabled = false });
         try
         {
-            await vm.Router.SetVpnAsync(vm.State,true);
+            await vm.RuntimeCoordinator.ReconcileAsync(ReconcileReason.UserToggledVpn);
             async Task Check(string expected, string? absent=null)
             {
                 await vm.PendingRoutes.WaitAsync(TimeSpan.FromSeconds(15));
@@ -44,7 +45,7 @@ internal static class LiveRulesSmoke
                 var current=JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(vm.Store.Root,"runtime","router.json")))!;
                 var rule=current["route"]!["rules"]!.AsArray().First(r=>r?["process_name"] is JsonArray names && names.Any(n=>n?.ToString()=="Telegram.exe"));
                 if(rule?["outbound"]?.ToString()!=target || vm.Store.Load().TelegramSocks || vm.Store.Load().TelegramVpnDefault!=(target=="vpn"))
-                    throw new InvalidOperationException("Telegram default did not apply/persist.");
+                    throw new InvalidOperationException($"Telegram default did not apply/persist: ruleOutbound={rule?["outbound"]?.ToString()} storeSocks={vm.Store.Load().TelegramSocks} storeVpnDef={vm.Store.Load().TelegramVpnDefault} target={target}");
             }
             await CheckTelegram("vpn");
             vm.TelegramVpnDefault=false; await vm.PendingRoutes; await CheckTelegram("direct");
@@ -54,7 +55,7 @@ internal static class LiveRulesSmoke
         }
         finally
         {
-            await vm.Router.StopAllAsync(); await vm.UpdateSettingsAsync(next=>{next.Profiles=[];next.MainProfileId=null;next.Rules=[];next.Tun=true;});
+            await vm.StopComponentsAsync(); await vm.UpdateSettingsAsync(next=>{next.Profiles=[];next.MainProfileId=null;next.Rules=[];next.Tun=true;});
         }
     }
 }

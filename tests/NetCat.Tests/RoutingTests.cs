@@ -8,6 +8,10 @@ using Xunit;
 namespace NetCat.Tests;
 public sealed class RoutingTests
 {
+    // Select a verified immutable module bundle for native integration runs.
+    // Production paths and all test assertions remain unchanged.
+    public static string ModuleRoot => Environment.GetEnvironmentVariable("NETCAT_TEST_MODULE_ROOT")
+        is { Length: > 0 } path ? Path.GetFullPath(path) : Path.Combine(FindRoot(), "bin");
     private static readonly NetworkSnapshot Physical = new("Wi-Fi", 5, "192.168.20.10", "192.168.20.1", ["corp.example"]);
     private static Profile Vless() => ProfileImporter.ParseLink("vless://00000000-0000-4000-8000-000000000001@vpn.example.com:443?security=tls&sni=vpn.example.com#Test");
     [Theory]
@@ -155,9 +159,11 @@ public sealed class RoutingTests
         // Top-level DNS in global mode remains prefer_ipv4 for VPN DNS, but direct DNS rules enforce ipv4_only
         Assert.Equal("prefer_ipv4", c["dns"]!["strategy"]!.ToString());
         var ytDns = c["dns"]!["rules"]!.AsArray().First(n => n?["domain_suffix"]?.ToJsonString().Contains("youtube.com") == true)!;
-        Assert.Equal("ipv4_only", ytDns["strategy"]!.ToString());
+        Assert.Null(ytDns["strategy"]);
+        Assert.Contains(c["dns"]!["rules"]!.AsArray(), r => r?["action"]?.ToString() == "predefined" && r.ToJsonString().Contains("youtube.com"));
         var dcDns = c["dns"]!["rules"]!.AsArray().First(n => n?["domain_suffix"]?.ToJsonString().Contains("discord.com") == true)!;
-        Assert.Equal("ipv4_only", dcDns["strategy"]!.ToString());
+        Assert.Null(dcDns["strategy"]);
+        Assert.Contains(c["dns"]!["rules"]!.AsArray(), r => r?["action"]?.ToString() == "predefined" && r.ToJsonString().Contains("discord.com"));
     }
     [Fact]
     public void PhysicalNetworkCaptureDetectsUsableIpv6StatusCorrectly()
@@ -270,15 +276,16 @@ public sealed class RoutingTests
     [Fact]
     public void OpenVpnDoesNotHijackDefaultRouteOrDns()
     {
-        var prepared = OpenVpnConfiguration.Prepare("client\ndev tun\nremote vpn.example.com 1194\nredirect-gateway def1\ndhcp-option DNS 8.8.8.8\nroute 0.0.0.0 0.0.0.0\n<ca>\nCERTIFICATE\n</ca>");
+        Assert.Throws<InvalidDataException>(() => OpenVpnConfiguration.Prepare("client\ndev tun\nroute 0.0.0.0 0.0.0.0"));
+        var prepared = OpenVpnConfiguration.Prepare("client\ndev tun\nremote vpn.example.com 1194\nredirect-gateway def1\ndhcp-option DNS 8.8.8.8\n<ca>\nCERTIFICATE\n</ca>");
         Assert.DoesNotContain("redirect-gateway def1", prepared); Assert.DoesNotContain("dhcp-option DNS", prepared);
         Assert.Contains("route-nopull", prepared); Assert.Contains("route-noexec", prepared); Assert.Contains("CERTIFICATE", prepared);
     }
     [Fact]
     public async Task OfficialSingBoxAcceptsAllGeneratedScenarios()
     {
-        var root = FindRoot(); var exe = Path.Combine(root, "bin/sing-box/sing-box.exe"); Assert.True(File.Exists(exe), "Fetch official modules before integration tests.");
-        var folder = Path.Combine(root, "artifacts", "validation"); Directory.CreateDirectory(folder);
+        var root = FindRoot(); var exe = Path.Combine(ModuleRoot, "sing-box/sing-box.exe"); Assert.True(File.Exists(exe), "Fetch official modules before integration tests.");
+        var folder = TestArtifacts("validation"); Directory.CreateDirectory(folder);
         foreach (var yt in Enum.GetValues<ServiceRoute>()) foreach (var dc in Enum.GetValues<ServiceRoute>()) foreach (var openvpn in new[] { false, true })
         {
             var settings = new AppSettings { YouTube = yt, Discord = dc, OpenVpnDomains = "office.example", TelegramSocks = true, Rules = [new() { Kind = RuleKind.Domain, Value = "portal.example", Target = RouteTarget.Direct }] };
@@ -290,7 +297,7 @@ public sealed class RoutingTests
     [Fact]
     public void FlowsealStrategiesAreRestrictedToScenarioWithoutExecutingBatch()
     {
-        var root = FindRoot(); var zapret = Path.Combine(root, "bin", "zapret"); var file = Path.Combine(zapret, "general (ALT).bat");
+        var root = FindRoot(); var zapret = Path.Combine(RoutingTests.ModuleRoot, "zapret"); var file = Path.Combine(zapret, "general (ALT).bat");
         var youtube = ZapretArguments.Build(file, zapret, "scenario-hosts.txt", true, false);
         Assert.DoesNotContain(youtube, a => a.Contains("--filter-l7=discord")); Assert.Contains(youtube, a => a.StartsWith("--ipset="));
         Assert.Contains(youtube, a => a == "--hostlist=scenario-hosts.txt"); Assert.DoesNotContain(youtube, a => a.Contains("list-general.txt"));
@@ -300,7 +307,7 @@ public sealed class RoutingTests
     [Fact]
     public void AllFlowsealStrategiesReferenceExistingFiles()
     {
-        var root=Path.Combine(FindRoot(),"bin","zapret");
+        var root=Path.Combine(ModuleRoot,"zapret");
         foreach(var file in Directory.GetFiles(root,"general*.bat")) foreach(var scenario in new[]{(true,false),(false,true),(true,true)})
         {
             var args=ZapretArguments.Build(file,root,"scenario-hosts.txt",scenario.Item1,scenario.Item2);
@@ -327,4 +334,12 @@ public sealed class RoutingTests
         var renamed=JsonSettings.Clone(xhttp); renamed.Name="Локальное имя"; Assert.Equal(ProfileIdentity.Key(xhttp),ProfileIdentity.Key(renamed));
     }
     public static string FindRoot() { var d = new DirectoryInfo(AppContext.BaseDirectory); while (d != null && !File.Exists(Path.Combine(d.FullName, "NetCat.sln"))) d = d.Parent; return d?.FullName ?? throw new DirectoryNotFoundException(); }
+    public static string TestArtifacts(params string[] subPaths)
+    {
+        var dir = Path.Combine(FindRoot(), "artifacts", "test-logs");
+        Directory.CreateDirectory(dir);
+        var result=subPaths.Length == 0 ? dir : Path.Combine([dir, ..subPaths]);
+        if(subPaths.Length>0)Directory.CreateDirectory(Path.GetDirectoryName(result)!);
+        return result;
+    }
 }

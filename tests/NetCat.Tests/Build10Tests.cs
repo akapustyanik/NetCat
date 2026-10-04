@@ -12,7 +12,7 @@ using Xunit;
 namespace NetCat.Tests;
 public sealed class Build10Tests
 {
-    private static string Folder() { var p=Path.Combine(RoutingTests.FindRoot(),"artifacts","audit-test-"+Guid.NewGuid().ToString("N")); Directory.CreateDirectory(p); return p; }
+    private static string Folder() { var f = RoutingTests.TestArtifacts("audit-test-"+Guid.NewGuid().ToString("N")); Directory.CreateDirectory(f); return f; }
     [Fact]
     public async Task ForgedUpdateJobAndUnsignedPublisherAreRejected()
     {
@@ -82,7 +82,7 @@ public sealed class Build10Tests
     [Fact]
     public async Task StopAllClearsRuntimeFlags()
     {
-        using var router=new RouterService(Path.Combine(RoutingTests.FindRoot(),"bin"),Folder());
+        using var router=new RouterService(RoutingTests.ModuleRoot,Folder());
         typeof(RouterService).GetProperty(nameof(RouterService.TunActive))!.SetValue(router,true);
         typeof(RouterService).GetProperty(nameof(RouterService.HealthSourcePort))!.SetValue(router,12345);
         await router.StopAllAsync(); Assert.False(router.TunActive); Assert.Equal(0,router.HealthSourcePort); Assert.False(router.VpnRequested);
@@ -138,22 +138,15 @@ public sealed class Build10Tests
     [Fact]
     public async Task FailedOpenVpnDisableKeepsOldAdapterProcessAndRouter()
     {
-        var runtime=Folder(); var bin=Path.Combine(RoutingTests.FindRoot(),"bin");
-        using var router=new RouterService(bin,runtime); var profile=ProfileImporter.ParseLink("socks://192.0.2.1:1080");
-        var settings=new AppSettings {Tun=false,MainProfileId=profile.Id,Profiles=[profile],SocksPort=OpenVpnService.FreePort()};
-        await router.SetVpnAsync(settings,true);
-        var host=(ProcessHost)typeof(OpenVpnService).GetField("host",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance)!.GetValue(router.OpenVpn)!;
-        var stub=Path.Combine(runtime,"openvpn-process-stub.json");
-        var port=OpenVpnService.FreePort();
-        File.WriteAllText(stub,$$"""{"inbounds":[{"type":"mixed","listen":"127.0.0.1","listen_port":{{port}}}],"outbounds":[{"type":"direct"}]}""");
-        host.Start(router.SingBox,["run","-c",stub]); await RouterService.WaitPortAsync(port,host,CancellationToken.None);
-        typeof(OpenVpnService).GetProperty(nameof(OpenVpnService.Link))!.SetValue(router.OpenVpn,new OpenVpnLink("Test adapter",123,"10.1.1.2","10.1.1.1","10.1.1.1"));
-        try
-        {
-            var invalid=JsonSettings.Clone(settings); invalid.MainProfileId=Guid.NewGuid();
-            await Assert.ThrowsAsync<InvalidOperationException>(()=>router.SetOpenVpnAsync(invalid,false));
-            Assert.True(router.OpenVpn.Running); Assert.True(router.VpnRunning); Assert.Equal(profile.Id,router.ActiveProfileId);
-        }
-        finally { await router.StopAllAsync(); }
+        using var fixture = new Candidate12Tests.Fixture(new SettingsStore(Folder()));
+        fixture.Desired.Current = fixture.Desired.Current with { OpenVpnEnabled = true };
+        await fixture.Reconcile();
+        fixture.OpenVpn.FailStop = true;
+        fixture.Desired.Current = fixture.Desired.Current with { OpenVpnEnabled = false };
+        int overlays = fixture.Router.Overlays;
+        await fixture.Reconcile(ReconcileReason.UserToggledOpenVpn);
+        Assert.True(fixture.OpenVpn.IsRunning); Assert.True(fixture.Router.VpnRunning);
+        Assert.False(fixture.Coordinator.CurrentConvergenceState.DesiredSatisfied);
+        Assert.Equal(overlays, fixture.Router.Overlays);
     }
 }

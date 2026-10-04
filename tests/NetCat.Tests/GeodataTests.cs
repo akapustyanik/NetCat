@@ -46,7 +46,7 @@ public sealed class GeodataTests
     [Fact]
     public async Task BundledDatabasesProduceValidNativeRoutingAndDnsRules()
     {
-        var root = RoutingTests.FindRoot(); var bin = Path.Combine(root, "bin");
+        var root = RoutingTests.FindRoot(); var bin = RoutingTests.ModuleRoot;
         var site = new Geodata(Geodata.FilePath(bin, RuleKind.GeoSite), false);
         var ip = new Geodata(Geodata.FilePath(bin, RuleKind.GeoIp), true);
         Assert.True(site.Contains("youtube", "www.youtube.com")); Assert.False(site.Contains("youtube", "youtube.com.evil.example"));
@@ -64,7 +64,7 @@ public sealed class GeodataTests
         Assert.Contains(routes, r => r?["ip_cidr"] is JsonArray a && a.Count > 100 && r?["outbound"]?.ToString() == "direct");
         Assert.Contains(config["dns"]!["rules"]!.AsArray(), r => r?["action"]?.ToString() == "reject");
         Assert.DoesNotContain("\"geosite\"", config.ToJsonString());
-        var file = Path.Combine(root, "artifacts", "geodata-check", "native-config.json"); Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        var file = RoutingTests.TestArtifacts("geodata-check", "native-config.json"); Directory.CreateDirectory(Path.GetDirectoryName(file)!);
         await File.WriteAllTextAsync(file, config.ToJsonString(JsonSettings.Options));
         using var ct = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var result = await ProcessHost.RunAsync(Path.Combine(bin, "sing-box", "sing-box.exe"), ["check", "-c", file], ct.Token);

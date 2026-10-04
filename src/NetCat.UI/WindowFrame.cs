@@ -12,7 +12,15 @@ public static class WindowFrame
     [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
     public static void Apply(Window window)
     {
-        window.Icon = new System.Windows.Media.Imaging.BitmapImage(new Uri("pack://application:,,,/Assets/logo.png"));
+        try
+        {
+            window.Icon = new System.Windows.Media.Imaging.BitmapImage(new Uri("pack://application:,,,/NetCat;component/Assets/logo.png"));
+        }
+        catch
+        {
+            try { window.Icon = new System.Windows.Media.Imaging.BitmapImage(new Uri("pack://application:,,,/Assets/logo.png")); }
+            catch { }
+        }
         var content = window.Content; window.Content = null; window.WindowStyle = WindowStyle.None;
         var main = window is MainWindow;
         WindowChrome.SetWindowChrome(window, new WindowChrome { CaptionHeight = main ? 38 : 40, ResizeBorderThickness = new Thickness(main ? 3 : 6), GlassFrameThickness = new Thickness(0), CornerRadius = new CornerRadius(0), UseAeroCaptionButtons = false });

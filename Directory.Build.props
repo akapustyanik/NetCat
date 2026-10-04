@@ -4,12 +4,19 @@
     <LangVersion>12</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <Version>1.0.0-beta</Version>
+    <Version>1.0.0</Version>
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
     <FileVersion>1.0.0.0</FileVersion>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Product>NetCat</Product>
     <Company>NetCat</Company>
     <Deterministic>true</Deterministic>
+    <CandidateName Condition="'$(CandidateName)' == ''">Release</CandidateName>
+    <RuntimeFrameworkVersion>8.0.31</RuntimeFrameworkVersion>
   </PropertyGroup>
+  <ItemGroup>
+    <AssemblyMetadata Include="NetCatCandidate">
+      <Value>$(CandidateName)</Value>
+    </AssemblyMetadata>
+  </ItemGroup>
 </Project>

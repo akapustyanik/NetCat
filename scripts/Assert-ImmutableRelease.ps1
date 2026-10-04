@@ -15,7 +15,7 @@ $taskExisting=@()
 if(Test-Path -LiteralPath $Destination) { $taskExisting+=(Resolve-Path -LiteralPath $Destination).Path }
 if($ReleasesRoot -and (Test-Path -LiteralPath $ReleasesRoot)) {
  foreach($taskDirectory in Get-ChildItem -LiteralPath $ReleasesRoot -Directory) {
-  if($taskDirectory.FullName -eq $taskCandidate -or $taskDirectory.Name.StartsWith('.build-')) { continue }
+  if($taskDirectory.FullName -eq $taskCandidate -or $taskDirectory.Name.StartsWith('.build-') -or $taskDirectory.Name -match '-Candidate\d*$') { continue }
   $taskPriorManifest=Join-Path $taskDirectory.FullName 'metadata/release-manifest.json'
   if(Test-Path -LiteralPath $taskPriorManifest) {
    $taskPrior=Get-Content -Raw -LiteralPath $taskPriorManifest | ConvertFrom-Json

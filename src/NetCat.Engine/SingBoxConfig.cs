@@ -10,36 +10,67 @@ public static class SingBoxConfig
     {
         match["action"] = server == "block" ? "reject" : "route";
         if (server != "block") match["server"] = server;
-        if (!string.IsNullOrWhiteSpace(strategy)) match["strategy"] = strategy;
+        if (server == "dns-openvpn") match["disable_cache"] = true;
+        if (strategy == "ipv4_only") match["_ipv4_only"] = true;
         return match;
     }
-    public static JsonObject Build(AppSettings s, NetworkSnapshot physical, Profile? main, OpenVpnLink? ovpn, bool tun, int? port = null, int? xrayPort = null, bool zapretRunning = true, int? latencyPort = null, int healthSourcePort = 0, string? geodataDirectory = null)
+    public static JsonObject Build(AppSettings s, NetworkSnapshot physical, Profile? main, OpenVpnLink? ovpn, bool tun, int? port = null, int? xrayPort = null, bool zapretRunning = true, int? latencyPort = null, int healthSourcePort = 0, string? geodataDirectory = null, OpenVpnGateway? openVpnGateway = null)
     {
         var outbound = new JsonArray(); var route = new JsonArray(); var dnsRules = new JsonArray();
+        void AddDns(JsonObject rule)
+        {
+            if (rule.Remove("_ipv4_only"))
+            {
+                var match = (JsonObject)rule.DeepClone(); match.Remove("action"); match.Remove("server"); match.Remove("disable_cache");
+                dnsRules.Add(new JsonObject { ["type"] = "logical", ["mode"] = "and",
+                    ["rules"] = new JsonArray(match, new JsonObject { ["query_type"] = Array(["AAAA"]) }),
+                    ["action"] = "predefined", ["rcode"] = "NOERROR" });
+            }
+            dnsRules.Add(rule);
+        }
         var directOutbound = new JsonObject { ["type"] = "direct", ["tag"] = "direct", ["domain_resolver"] = "dns-direct" };
         if (!string.IsNullOrWhiteSpace(physical.Name))
         {
             directOutbound["bind_interface"] = physical.Name;
             if (!string.IsNullOrWhiteSpace(physical.Address)) directOutbound["inet4_bind_address"] = physical.Address;
         }
-        outbound.Add(directOutbound);
+        if (openVpnGateway?.GuardedDirectPort is {} guardedPort)
+        {
+            directOutbound["tag"] = "direct-user";
+            if(openVpnGateway.GuardedDirectDnsPort != null)directOutbound["domain_resolver"]="dns-direct-origin";
+            outbound.Add(directOutbound);
+            outbound.Add(new JsonObject { ["type"] = "socks", ["tag"] = "direct", ["server"] = "127.0.0.1", ["server_port"] = guardedPort,
+                ["username"] = openVpnGateway.GuardedDirectUsername, ["password"] = openVpnGateway.GuardedDirectPassword, ["domain_resolver"] = "dns-direct" });
+        }
+        else outbound.Add(directOutbound);
         if (main != null)
         {
             var proxy = xrayPort.HasValue ? new JsonObject { ["type"] = "socks", ["server"] = "127.0.0.1", ["server_port"] = xrayPort.Value } : JsonNode.Parse(main.OutboundJson)!.AsObject();
             var localNames = RuleValidation.Domains(s.LocalDomains).Concat(physical.Suffixes).Concat(["local","lan","home.arpa"]);
             var localServer = !main.Host.Contains('.') || localNames.Any(d => main.Host.Equals(d,StringComparison.OrdinalIgnoreCase) || main.Host.EndsWith("."+d,StringComparison.OrdinalIgnoreCase));
-            proxy["tag"] = "vpn"; if (!xrayPort.HasValue) { proxy["server"] = main.Host; proxy["server_port"] = main.Port; proxy["bind_interface"] = physical.Name; proxy["domain_resolver"] = localServer ? "dns-direct" : "dns-bootstrap"; }
+            proxy["tag"] = openVpnGateway?.GuardedVpnPort != null ? "vpn-user" : "vpn"; if (!xrayPort.HasValue) { proxy["server"] = main.Host; proxy["server_port"] = main.Port; proxy["bind_interface"] = physical.Name; proxy["domain_resolver"] = localServer ? "dns-direct" : "dns-bootstrap"; }
             outbound.Add(proxy);
+            if(openVpnGateway?.GuardedVpnPort is {} vpnGuardPort)
+                outbound.Add(new JsonObject{["type"]="socks",["tag"]="vpn",["server"]="127.0.0.1",["server_port"]=vpnGuardPort,
+                    ["username"]=openVpnGateway.GuardedVpnUsername,["password"]=openVpnGateway.GuardedVpnPassword});
         }
-        if (ovpn != null) outbound.Add(new JsonObject { ["type"] = "direct", ["tag"] = "openvpn", ["bind_interface"] = ovpn.Name, ["inet4_bind_address"] = ovpn.Address, ["domain_resolver"] = "dns-openvpn" });
+        if (openVpnGateway?.TransportKey != null) outbound.Add(new JsonObject { ["type"] = "shadowsocks", ["tag"] = "openvpn", ["server"] = "127.0.0.1",
+            ["server_port"] = openVpnGateway.SocksPort, ["method"] = "2022-blake3-aes-256-gcm", ["password"] = openVpnGateway.TransportKey + ":" + openVpnGateway.ExplicitRouteKey });
+        else if (openVpnGateway != null) outbound.Add(new JsonObject { ["type"] = "socks", ["tag"] = "openvpn", ["server"] = "127.0.0.1",
+            ["server_port"] = openVpnGateway.SocksPort, ["username"] = openVpnGateway.Username, ["password"] = openVpnGateway.Password });
+        else if (ovpn != null) outbound.Add(new JsonObject { ["type"] = "direct", ["tag"] = "openvpn", ["bind_interface"] = ovpn.Name, ["inet4_bind_address"] = ovpn.Address, ["domain_resolver"] = "dns-openvpn" });
+        if (openVpnGateway?.TransportKey != null) outbound.Add(new JsonObject { ["type"] = "shadowsocks", ["tag"] = "openvpn-owned", ["server"] = "127.0.0.1",
+            ["server_port"] = openVpnGateway.SocksPort, ["method"] = "2022-blake3-aes-256-gcm", ["password"] = openVpnGateway.TransportKey + ":" + openVpnGateway.OwnedRouteKey });
         if (s.TelegramSocks) outbound.Add(new JsonObject { ["type"] = "socks", ["tag"] = "telegram", ["server"] = s.TelegramSocksHost, ["server_port"] = s.TelegramSocksPort, ["domain_resolver"] = "dns-direct", ["bind_interface"] = physical.Name });
-        string Target(RouteTarget t) => t switch { RouteTarget.Vpn => main == null ? "block" : "vpn", RouteTarget.OpenVpn => ovpn == null ? "block" : "openvpn", RouteTarget.Block => "block", _ => "direct" };
+        string Target(RouteTarget t) => t switch { RouteTarget.Vpn => main == null ? "block" : "vpn", RouteTarget.OpenVpn => ovpn == null && openVpnGateway == null ? "block" : "openvpn", RouteTarget.Block => "block", _ => "direct" };
         string Server(string target) => target switch { "vpn" => "dns-vpn", "openvpn" => "dns-openvpn", "block" => "block", _ => "dns-direct" };
         var dnsServers = new JsonArray(new JsonObject { ["type"] = "udp", ["tag"] = "dns-direct", ["server"] = string.IsNullOrWhiteSpace(s.DirectDns) ? physical.Dns : s.DirectDns, ["bind_interface"] = physical.Name });
         // Public VPN endpoint names must be resolvable before the VPN exists. LAN names keep adapter DNS.
         if (main != null) dnsServers.Add(new JsonObject { ["type"] = "https", ["tag"] = "dns-bootstrap", ["server"] = "1.1.1.1", ["path"] = "/dns-query", ["bind_interface"] = physical.Name });
         if (main != null) dnsServers.Add(new JsonObject { ["type"] = "https", ["tag"] = "dns-vpn", ["server"] = "1.1.1.1", ["path"] = "/dns-query", ["detour"] = "vpn" });
-        if (ovpn != null) dnsServers.Add(new JsonObject { ["type"] = "udp", ["tag"] = "dns-openvpn", ["server"] = string.IsNullOrWhiteSpace(s.OpenVpnDns) ? ovpn.Dns : s.OpenVpnDns, ["bind_interface"] = ovpn.Name });
+        if (openVpnGateway != null) dnsServers.Add(new JsonObject { ["type"] = "udp", ["tag"] = "dns-openvpn", ["server"] = "127.0.0.1", ["server_port"] = openVpnGateway.DnsPort });
+        else if (ovpn != null) dnsServers.Add(new JsonObject { ["type"] = "udp", ["tag"] = "dns-openvpn", ["server"] = string.IsNullOrWhiteSpace(s.OpenVpnDns) ? ovpn.Dns : s.OpenVpnDns, ["bind_interface"] = ovpn.Name });
+        if (openVpnGateway?.TransportKey != null) dnsServers.Last()!["detour"] = "openvpn";
         // A dedicated loopback inbound measures the active VPN even in selective/direct mode.
         // It precedes the NetCat process bypass and never changes routes for ordinary traffic.
         if (latencyPort.HasValue)
@@ -48,11 +79,25 @@ public static class SingBoxConfig
             if (main != null) dnsRules.Insert(0, Dns(new JsonObject { ["inbound"] = Array(["latency"]) }, "dns-vpn"));
         }
         if (tun && main != null && healthSourcePort > 0)
+        {
             route.Add(Route(new JsonObject { ["inbound"] = Array(["tun"]), ["source_ip_cidr"] = Array(["172.29.255.1/32"]), ["source_port"] = healthSourcePort, ["network"] = "tcp" }, "vpn"));
+            // Current probe owns a fresh OS-assigned TCP source socket. The old
+            // source-port rule remains for callers using the legacy contract.
+            route.Add(Route(new JsonObject { ["inbound"]=Array(["tun"]),["source_ip_cidr"]=Array(["172.29.255.1/32"]),
+                ["ip_cidr"]=Array(["1.1.1.1/32"]),["port"]=443,["network"]="tcp",["process_name"]=Array(["NetCat.exe"]) }, "vpn"));
+        }
         route.Add(new JsonObject { ["action"] = "sniff" });
-        route.Add(new JsonObject { ["port"] = 53, ["action"] = "hijack-dns" });
-        // Core and OpenVPN transport sockets must never route back into the tunnel.
-        route.Add(Route(new JsonObject { ["process_name"] = Array(["NetCat.exe", "sing-box.exe", "xray.exe", "openvpn.exe"]) }, "direct"));
+        // A port number alone does not prove that a packet contains a DNS question.
+        // Sniff first, then reject unrecognized port-53 payloads before the DNS parser.
+        route.Add(new JsonObject { ["port"] = 53, ["protocol"] = "dns", ["action"] = "hijack-dns" });
+        route.Add(new JsonObject { ["port"] = 53, ["action"] = "reject" });
+        // TCP transport captured by TUN must not recurse. Public SOCKS traffic
+        // is user traffic, even when its process lookup names a core. Windows
+        // UDP owner lookup may select another wildcard socket on the same port;
+        // that attribution cannot authorize bypassing rules/corporate guards.
+        // UDP transports already use explicit physical interface/socket binding.
+        route.Add(Route(new JsonObject { ["inbound"] = Array(["tun"]), ["network"] = "tcp",
+            ["process_name"] = Array(["NetCat.exe", "sing-box.exe", "xray.exe", "openvpn.exe"]) }, openVpnGateway?.GuardedDirectPort != null ? "direct-user" : "direct"));
         bool connectionSpecificRuleBefore = false;
         void AddDomains(IEnumerable<string> domains, string target)
         {
@@ -62,7 +107,7 @@ public static class SingBoxConfig
             {
                 var dnsServer = Server(target);
                 var domainStrategy = (!physical.HasIpv6DefaultRoute && dnsServer == "dns-direct") ? "ipv4_only" : null;
-                dnsRules.Add(Dns(new JsonObject { ["domain_suffix"] = Array(items) }, dnsServer, domainStrategy));
+                AddDns(Dns(new JsonObject { ["domain_suffix"] = Array(items) }, dnsServer, domainStrategy));
             }
         }
         var databases = new Dictionary<RuleKind, Geodata>();
@@ -86,7 +131,8 @@ public static class SingBoxConfig
         foreach (var r in s.Rules.Where(r => r.Enabled))
         {
             RuleValidation.Validate(r);
-            var m = RuleMatch(r); route.Add(Route(m, Target(r.Target)));
+            var m = RuleMatch(r); route.Add(Route(m, r.Target == RouteTarget.Direct && openVpnGateway?.GuardedDirectPort != null ? "direct-user" :
+                r.Target == RouteTarget.Vpn && main != null && openVpnGateway?.GuardedVpnPort != null ? "vpn-user" : Target(r.Target)));
             // A DNS lookup does not reliably identify the destination port/IP/application
             // of the later connection. Do not preempt an earlier exception by rejecting DNS.
             var connectionSpecific = r.Kind is RuleKind.Process or RuleKind.ExecutablePath or RuleKind.IpCidr or RuleKind.GeoIp || r.Network.Length > 0 || r.Port.Length > 0;
@@ -95,16 +141,26 @@ public static class SingBoxConfig
             {
                 var dnsServer = Server(Target(r.Target));
                 var ruleStrategy = (!physical.HasIpv6DefaultRoute && dnsServer == "dns-direct") ? "ipv4_only" : null;
-                dnsRules.Add(Dns(RuleMatch(r, true), dnsServer, ruleStrategy));
+                // An explicit domain rule deliberately precedes corporate defaults.
+                // Only these user rules bypass the automatic domain guard.
+                if(openVpnGateway?.GuardedDirectDnsPort != null && dnsServer is "dns-direct" or "dns-vpn") dnsServer += "-origin";
+                AddDns(Dns(RuleMatch(r, true), dnsServer, ruleStrategy));
             }
             connectionSpecificRuleBefore |= connectionSpecific;
         }
         // User rules precede service defaults, including the WS worker and corporate domains.
+        if (openVpnGateway?.TransportKey != null)
+            route.Add(Route(new JsonObject { ["rule_set"] = Array(["openvpn-owned"]) }, "openvpn-owned"));
         route.Add(Route(new JsonObject { ["process_name"] = Array(["NetCat.Telegram.exe", "TgWsProxy_windows.exe"]) }, "direct"));
-        AddDomains(RuleValidation.Domains(s.OpenVpnDomains), Target(RouteTarget.OpenVpn));
+        if (openVpnGateway?.TransportKey != null)
+        {
+            route.Add(Route(new JsonObject { ["rule_set"] = Array(["openvpn-domains"]) }, "openvpn"));
+            AddDns(Dns(new JsonObject { ["rule_set"] = Array(["openvpn-domains"]) }, "dns-openvpn", "ipv4_only"));
+        }
+        else AddDomains(RuleValidation.Domains(s.OpenVpnDomains), Target(RouteTarget.OpenVpn));
         AddDomains(RuleValidation.Domains(s.LocalDomains).Concat(physical.Suffixes).Concat(["local", "lan", "localdomain", "home.arpa"]), "direct");
         route.Add(Route(new JsonObject { ["domain_regex"] = Array(["^[^.]+$"]) }, "direct"));
-        dnsRules.Add(Dns(new JsonObject { ["domain_regex"] = Array(["^[^.]+$"]) }, "dns-direct", physical.HasIpv6DefaultRoute ? null : "ipv4_only"));
+        AddDns(Dns(new JsonObject { ["domain_regex"] = Array(["^[^.]+$"]) }, "dns-direct", physical.HasIpv6DefaultRoute ? null : "ipv4_only"));
         // Explicit service choices apply in BOTH modes; Global only changes the fallback.
         AddDomains(ServiceDomains.YouTube, s.YouTube == ServiceRoute.Zapret ? "direct" : Target(RouteTarget.Vpn));
         AddDomains(ServiceDomains.Discord, s.Discord == ServiceRoute.Zapret ? "direct" : Target(RouteTarget.Vpn));
@@ -116,12 +172,50 @@ public static class SingBoxConfig
         route.Add(Route(new JsonObject { ["process_name"] = Array(["Telegram.exe"]) }, telegram));
         route.Add(Route(new JsonObject { ["ip_cidr"] = Array(ServiceDomains.TelegramIps) }, telegram));
         AddDomains(ServiceDomains.Telegram, telegram);
+        var explicitCidrs = new HashSet<string>(s.Rules.Where(r => r.Enabled && r.Kind == RuleKind.IpCidr).Select(r => r.Value), StringComparer.OrdinalIgnoreCase);
+        var ovpnProfile = s.Profiles.FirstOrDefault(p => p.Id == s.OpenVpnProfileId && p.IsOpenVpn);
+        var learnedRoutes = ovpnProfile?.LearnedRoutes ?? Enumerable.Empty<string>();
+        var linkRoutes = ovpn?.PushedRoutes ?? Enumerable.Empty<string>();
+        var openVpnOwnedCidrs = learnedRoutes
+            .Concat(linkRoutes)
+            .Where(c => !string.IsNullOrWhiteSpace(c) && !explicitCidrs.Contains(c))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (openVpnGateway is { TransportKey: null })
+            route.Add(Route(new JsonObject { ["rule_set"] = Array(["openvpn-owned"]) }, "openvpn"));
+        else if (openVpnGateway == null && openVpnOwnedCidrs.Length > 0)
+        {
+            var target = ovpn != null ? "openvpn" : "block";
+            route.Add(Route(new JsonObject { ["ip_cidr"] = Array(openVpnOwnedCidrs) }, target));
+        }
         route.Add(Route(new JsonObject { ["ip_is_private"] = true }, "direct"));
         // Resolve direct domains through adapter DNS BEFORE remote default. No FakeIP for LAN.
         var fallback = s.Mode is RoutingMode.Global or RoutingMode.SelectiveDirect ? Target(RouteTarget.Vpn) : "direct";
         if (fallback == "block") route.Add(new JsonObject { ["action"] = "reject" });
         var inbounds = new JsonArray(new JsonObject { ["type"] = "mixed", ["tag"] = "local", ["listen"] = "127.0.0.1", ["listen_port"] = port ?? s.SocksPort });
+        if(main != null && openVpnGateway?.VpnReturnPort is {} vpnReturn)
+        {
+            inbounds.Add(new JsonObject{["type"]="socks",["tag"]="vpn-return",["listen"]="127.0.0.1",["listen_port"]=vpnReturn,
+                ["users"]=new JsonArray(new JsonObject{["username"]=openVpnGateway.GuardedVpnUsername,["password"]=openVpnGateway.GuardedVpnPassword})});
+            route.Insert(0,Route(new JsonObject{["inbound"]=Array(["vpn-return"])},"vpn-user"));
+            // Ordinary DNS already passed the synchronous DNS guard (or an
+            // intentional user-domain rule). Avoid recursively guarding DoH.
+            dnsServers.First(n=>n?["tag"]?.ToString()=="dns-vpn")!["detour"]="vpn-user";
+        }
         if (latencyPort.HasValue) inbounds.Add(new JsonObject { ["type"] = "mixed", ["tag"] = "latency", ["listen"] = "127.0.0.1", ["listen_port"] = latencyPort.Value });
+        if(openVpnGateway?.GuardedDirectDnsPort is {} dnsGuardPort)
+        {
+            foreach(var item in new[]{("dns-direct",dnsGuardPort,openVpnGateway.DirectDnsReturnPort), ("dns-vpn",openVpnGateway.GuardedVpnDnsPort!.Value,openVpnGateway.VpnDnsReturnPort)})
+            {
+                var original=dnsServers.FirstOrDefault(n=>n?["tag"]?.ToString()==item.Item1);
+                if(original==null)continue;
+                original["tag"]=item.Item1+"-origin";
+                dnsServers.Add(new JsonObject{["type"]="udp",["tag"]=item.Item1,["server"]="127.0.0.1",["server_port"]=item.Item2});
+                string inbound=item.Item1+"-return";
+                inbounds.Add(new JsonObject{["type"]="direct",["tag"]=inbound,["listen"]="127.0.0.1",["listen_port"]=item.Item3,["override_address"]="1.1.1.1",["override_port"]=53});
+                dnsRules.Insert(0,Dns(new JsonObject{["inbound"]=Array([inbound])},item.Item1+"-origin"));
+            }
+        }
         var tunAddresses = physical.HasIpv6DefaultRoute
             ? new[] { "172.29.255.1/30", "fdfe:dcba:1984::1/126" }
             : new[] { "172.29.255.1/30" };
@@ -134,12 +228,16 @@ public static class SingBoxConfig
             ["find_process"] = true,
             ["default_domain_resolver"] = "dns-direct"
         };
+        if (openVpnGateway != null) routeConfig["rule_set"] = new JsonArray(new JsonObject
+            { ["type"] = "local", ["tag"] = "openvpn-owned", ["format"] = "source", ["path"] = openVpnGateway.RulesPath });
+        if (openVpnGateway?.TransportKey != null) routeConfig["rule_set"]!.AsArray().Add(new JsonObject
+            { ["type"] = "local", ["tag"] = "openvpn-domains", ["format"] = "source", ["path"] = openVpnGateway.DomainsPath });
         if (!string.IsNullOrWhiteSpace(physical.Name)) routeConfig["default_interface"] = physical.Name;
         else routeConfig["auto_detect_interface"] = true;
         return new JsonObject
         {
             ["log"] = new JsonObject { ["level"] = "warn", ["timestamp"] = true },
-            ["dns"] = new JsonObject { ["servers"] = dnsServers, ["rules"] = dnsRules, ["final"] = fallback == "vpn" ? "dns-vpn" : "dns-direct", ["strategy"] = dnsStrategy, ["reverse_mapping"] = true },
+            ["dns"] = new JsonObject { ["servers"] = dnsServers, ["rules"] = dnsRules, ["final"] = fallback == "vpn" ? "dns-vpn" : "dns-direct", ["strategy"] = dnsStrategy, ["reverse_mapping"] = true, ["disable_cache"] = openVpnGateway?.GuardedDirectDnsPort != null },
             ["inbounds"] = inbounds, ["outbounds"] = outbound,
             ["route"] = routeConfig
         };

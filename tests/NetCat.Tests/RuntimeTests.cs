@@ -42,7 +42,7 @@ public sealed class RuntimeTests
             await stream.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"), ct);
         }, ct);
         var root = RoutingTests.FindRoot();
-        using var router = new RouterService(Path.Combine(root, "bin"), Path.Combine(root, "artifacts", "runtime-test"));
+        using var router = new RouterService(RoutingTests.ModuleRoot, RoutingTests.TestArtifacts("runtime-test"));
         var profile = ProfileImporter.ParseLink($"socks://{network.Address}:{port}#Local-test");
         var settings = new AppSettings { TestUrl = "http://probe.example.invalid/generate_204", TestTimeoutSeconds = 10, PhysicalInterface = network.Name };
         var result = await router.TestProfileAsync(profile, settings, ct);
@@ -60,10 +60,10 @@ public sealed class RuntimeTests
         var root = RoutingTests.FindRoot();
         var profile = ProfileImporter.ParseLink("vless://00000000-0000-4000-8000-000000000001@vpn.example.com:443?security=tls&sni=vpn.example.com#Test");
         var config = XrayConfig.Build(profile, 19089, "192.168.20.10");
-        var directory = Path.Combine(root, "artifacts", "validation"); Directory.CreateDirectory(directory);
+        var directory = RoutingTests.TestArtifacts("validation"); Directory.CreateDirectory(directory);
         var file = Path.Combine(directory, "xray-test.json"); await File.WriteAllTextAsync(file, config.ToJsonString());
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        var result = await ProcessHost.RunAsync(Path.Combine(root, "bin", "xray", "xray.exe"), ["run", "-test", "-c", file], timeout.Token);
+        var result = await ProcessHost.RunAsync(Path.Combine(RoutingTests.ModuleRoot, "xray", "xray.exe"), ["run", "-test", "-c", file], timeout.Token);
         Assert.True(result.Code == 0, result.Output);
     }
 
@@ -71,18 +71,18 @@ public sealed class RuntimeTests
     public async Task BundledOpenVpnSupportsWintun()
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var result = await ProcessHost.RunAsync(Path.Combine(RoutingTests.FindRoot(), "bin", "openvpn", "openvpn.exe"), ["--help"], timeout.Token);
+        var result = await ProcessHost.RunAsync(Path.Combine(RoutingTests.ModuleRoot, "openvpn", "openvpn.exe"), ["--help"], timeout.Token);
         Assert.Contains("wintun", result.Output, StringComparison.OrdinalIgnoreCase);
     }
     [Fact]
     public async Task ForeignListenerNeverCountsAsNewCoreReadiness()
     {
-        var root=RoutingTests.FindRoot(); var folder=Path.Combine(root,"artifacts","collision-test"); Directory.CreateDirectory(folder);
+        var root=RoutingTests.FindRoot(); var folder=RoutingTests.TestArtifacts("collision-test"); Directory.CreateDirectory(folder);
         using var listener=new TcpListener(IPAddress.Loopback,0); listener.Start(); var port=((IPEndPoint)listener.LocalEndpoint).Port;
         Assert.Equal(Environment.ProcessId,LocalListener.Owner(port));
         var path=Path.Combine(folder,"config.json");
         await File.WriteAllTextAsync(path,$$"""{"inbounds":[{"type":"mixed","listen":"127.0.0.1","listen_port":{{port}}}],"outbounds":[{"type":"direct"}]}""");
-        using var process=new ProcessHost(); process.Start(Path.Combine(root,"bin","sing-box","sing-box.exe"),["run","-c",path]);
+        using var process=new ProcessHost(); process.Start(Path.Combine(RoutingTests.ModuleRoot,"sing-box","sing-box.exe"),["run","-c",path]);
         using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await Assert.ThrowsAsync<PortCollisionException>(()=>RouterService.WaitPortAsync(port,process,deadline.Token));
     }
@@ -91,9 +91,9 @@ public sealed class RuntimeTests
     {
         var profile=ProfileImporter.ParseLink("vless://00000000-0000-4000-8000-000000000001@vpn.example.com:443?type=xhttp&security=tls&sni=vpn.example.com&path=%2Ftransport&host=cdn.example.com&mode=packet-up&extra=%7B%22noGRPCHeader%22%3Atrue%7D#Test");
         Assert.Equal("Xray",profile.Core); Assert.Contains("packet-up",profile.OutboundJson); Assert.Contains("noGRPCHeader",profile.OutboundJson);
-        var config=XrayConfig.Build(profile,19089,"192.168.20.10"); var root=RoutingTests.FindRoot(); var path=Path.Combine(root,"artifacts","validation","xhttp.json"); Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var config=XrayConfig.Build(profile,19089,"192.168.20.10"); var root=RoutingTests.FindRoot(); var path=RoutingTests.TestArtifacts("validation","xhttp.json"); Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path,config.ToJsonString()); using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        var result=await ProcessHost.RunAsync(Path.Combine(root,"bin","xray","xray.exe"),["run","-test","-c",path],timeout.Token);
+        var result=await ProcessHost.RunAsync(Path.Combine(RoutingTests.ModuleRoot,"xray","xray.exe"),["run","-test","-c",path],timeout.Token);
         Assert.True(result.Code==0,result.Output);
         var reimport=ProfileImporter.Parse(config.ToJsonString()); Assert.Empty(reimport.Errors); Assert.Single(reimport.Profiles); Assert.Equal("Xray",reimport.Profiles[0].Core);
     }
@@ -101,7 +101,7 @@ public sealed class RuntimeTests
     public async Task TelegramCliStartsAndStopsWithoutAnyTrayApplication()
     {
         var root=RoutingTests.FindRoot(); var port=OpenVpnService.FreePort();
-        using var service=new TelegramService(Path.Combine(root,"bin"),Path.Combine(root,"artifacts","telegram-test"));
+        using var service=new TelegramService(RoutingTests.ModuleRoot,RoutingTests.TestArtifacts("telegram-test"));
         using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(20));
         await service.StartAsync(new AppSettings { TelegramWsPort=port },deadline.Token);
         Assert.True(service.Running); Assert.Contains("port="+port+"&",service.Link); Assert.NotEqual(0,LocalListener.Owner(port));
@@ -112,7 +112,7 @@ public sealed class RuntimeTests
     {
         var network=PhysicalNetwork.Capture(""); using var server=new TcpListener(IPAddress.Parse(network.Address),0); server.Start();
         var port=((IPEndPoint)server.LocalEndpoint).Port; var profile=ProfileImporter.ParseLink($"socks://{network.Address}:{port}#Slow-test");
-        var root=RoutingTests.FindRoot(); using var router=new RouterService(Path.Combine(root,"bin"),Path.Combine(root,"artifacts","concurrent-test"));
+        var root=RoutingTests.FindRoot(); using var router=new RouterService(RoutingTests.ModuleRoot,RoutingTests.TestArtifacts("concurrent-test"));
         using var cancel=new CancellationTokenSource(TimeSpan.FromSeconds(12));
         var probe=router.TestProfileAsync(profile,new AppSettings { TestUrl="http://probe.example.invalid/",TestTimeoutSeconds=10 },cancel.Token);
         using var connection=await server.AcceptTcpClientAsync(cancel.Token);

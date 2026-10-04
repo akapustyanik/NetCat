@@ -1,17 +1,19 @@
+param([string]$Root = (Split-Path $PSScriptRoot -Parent), [switch]$SourceOnly)
 $ErrorActionPreference='Stop'
-$taskRoot=Split-Path $PSScriptRoot -Parent
+$taskRoot=[IO.Path]::GetFullPath($Root)
 $taskCache=Join-Path $taskRoot 'artifacts/downloads/telegram-headless'
 $taskRuntime=Join-Path $taskRoot 'bin/tg-runtime'
 $taskModule=Join-Path $taskRoot 'bin/tg-ws-proxy'
 New-Item -ItemType Directory -Force $taskCache,$taskRuntime,$taskModule | Out-Null
-$taskTag='v1.10.2'
+$taskTag='v1.10.4'
 $taskHeaders = @{ 'User-Agent' = 'NetCat-Build'; Accept = 'application/vnd.github+json' }
 if ($env:GITHUB_TOKEN) { $taskHeaders['Authorization'] = "Bearer $env:GITHUB_TOKEN" }
 $taskTree=Invoke-RestMethod "https://api.github.com/repos/Flowseal/tg-ws-proxy/git/trees/${taskTag}?recursive=1" -Headers $taskHeaders
 foreach($taskEntry in ($taskTree.tree | Where-Object { $_.type -eq 'blob' -and ($_.path -match '^proxy/[a-zA-Z0-9_/]+\.py$' -or $_.path -eq 'LICENSE') })) {
     $taskDest=Join-Path $taskModule $taskEntry.path
     New-Item -ItemType Directory -Force (Split-Path $taskDest -Parent) | Out-Null
-    Invoke-WebRequest "https://raw.githubusercontent.com/Flowseal/tg-ws-proxy/$($taskTree.sha)/$($taskEntry.path)" -OutFile $taskDest
+    & curl.exe --fail --location --silent --show-error --max-time 90 --retry 2 --output $taskDest "https://raw.githubusercontent.com/Flowseal/tg-ws-proxy/$($taskTree.sha)/$($taskEntry.path)"
+    if ($LASTEXITCODE -ne 0) { throw 'Official Telegram source download failed.' }
     $taskBytes=[IO.File]::ReadAllBytes($taskDest)
     $taskBlob=[Text.Encoding]::UTF8.GetBytes("blob $($taskBytes.Length)`0") + $taskBytes
     $taskHasher=[Security.Cryptography.SHA1]::Create()
@@ -20,6 +22,7 @@ foreach($taskEntry in ($taskTree.tree | Where-Object { $_.type -eq 'blob' -and (
     if($taskDigest -ne $taskEntry.sha) { throw 'Source blob hash mismatch' }
 }
 @{Key='tg-ws-proxy';Repository='Flowseal/tg-ws-proxy';Version=$taskTag;Asset='headless source';Url="https://github.com/Flowseal/tg-ws-proxy/tree/$taskTag";Sha256='';SourceTree=$taskTree.sha} | ConvertTo-Json | Set-Content (Join-Path $taskModule 'netcat-source.json') -Encoding utf8
+if ($SourceOnly) { Write-Host "Telegram headless source $taskTag verified against the official Git tree."; return }
 $taskPython=Join-Path $taskCache 'python-3.13.15-embed-amd64.zip'
 if(-not (Test-Path -LiteralPath $taskPython)) { Invoke-WebRequest 'https://www.python.org/ftp/python/3.13.15/python-3.13.15-embed-amd64.zip' -OutFile $taskPython }
 Expand-Archive -LiteralPath $taskPython -DestinationPath $taskRuntime -Force

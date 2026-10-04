@@ -43,7 +43,7 @@ public sealed class ConnectionLatencyTests
             await stream.WriteAsync(Encoding.ASCII.GetBytes($"HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"), ct);
         }, ct);
         var root = RoutingTests.FindRoot();
-        using var router = new RouterService(Path.Combine(root,"bin"),Path.Combine(root,"artifacts","latency-test-"+Guid.NewGuid().ToString("N")));
+        using var router = new RouterService(RoutingTests.ModuleRoot,RoutingTests.TestArtifacts("latency-test-"+Guid.NewGuid().ToString("N")));
         if (mode.HasValue)
         {
             var profile = ProfileImporter.ParseLink($"socks://{physical.Address}:{port}#Latency-test");

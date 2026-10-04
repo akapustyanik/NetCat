@@ -12,6 +12,7 @@ public sealed class TrayIntegration : IDisposable
     private readonly Action exit;
     private readonly Func<IEnumerable<TrayCommand>> commands;
     private ContextMenu? menu;
+    private bool suppressDoubleClickRelease;
     private readonly IntPtr ownedIcon;
     public TrayIntegration(Window window, Action exit, Func<IEnumerable<TrayCommand>> commands)
     {
@@ -21,14 +22,20 @@ public sealed class TrayIntegration : IDisposable
         using var iconBuffer = new MemoryStream(); iconStream.CopyTo(iconBuffer); var iconBytes=iconBuffer.ToArray();
         var iconImage=NetCat.Core.IconDirectory.Image(iconBytes);
         ownedIcon=CreateIconFromResourceEx(iconImage,(uint)iconImage.Length,true,0x30000,32,32,0);
-        data = new NotifyIcon { Size = Marshal.SizeOf<NotifyIcon>(), Window = handle, Id = 1, Flags = 1 | 2 | 4, Callback = 0x8001, Icon = ownedIcon != IntPtr.Zero ? ownedIcon : LoadIcon(IntPtr.Zero, (IntPtr)32512), Tip = "NetCat — открыть двойным щелчком", Info = "", InfoTitle = "" };
+        data = new NotifyIcon { Size = Marshal.SizeOf<NotifyIcon>(), Window = handle, Id = 1, Flags = 1 | 2 | 4, Callback = 0x8001, Icon = ownedIcon != IntPtr.Zero ? ownedIcon : LoadIcon(IntPtr.Zero, (IntPtr)32512), Tip = "NetCat — открыть щелчком", Info = "", InfoTitle = "" };
         Shell_NotifyIcon(0, ref data);
     }
     private IntPtr Hook(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         if (message != 0x8001) return IntPtr.Zero;
-        if ((int)lParam == 0x203) Show();
-        if ((int)lParam == 0x205)
+        if ((int)lParam == 0x201) suppressDoubleClickRelease = false; // WM_LBUTTONDOWN
+        else if ((int)lParam == 0x203) suppressDoubleClickRelease = true; // WM_LBUTTONDBLCLK
+        else if ((int)lParam == 0x202) // WM_LBUTTONUP
+        {
+            if (!suppressDoubleClickRelease) Show();
+            suppressDoubleClickRelease = false;
+        }
+        else if ((int)lParam == 0x205)
         {
             SetForegroundWindow(hwnd); menu?.SetCurrentValue(ContextMenu.IsOpenProperty, false);
             menu = CreateMenu(Show, exit, commands()); menu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
@@ -48,7 +55,7 @@ public sealed class TrayIntegration : IDisposable
         foreach(var command in commands) Add(command.Label,command.Toggle,command.Checked,command.Enabled);
         menu.Items.Add(new Separator()); Add("Полностью выйти",exit); return menu;
     }
-    private void Show() { window.Show(); window.WindowState = WindowState.Normal; window.Activate(); }
+    private void Show() { window.ShowInTaskbar = true; if (!window.IsVisible) window.Show(); if (window.WindowState == WindowState.Minimized) window.WindowState = WindowState.Normal; window.Activate(); window.Focus(); }
     public void Dispose() { if(menu!=null) menu.IsOpen=false; Shell_NotifyIcon(2, ref data); source.RemoveHook(Hook); if(ownedIcon!=IntPtr.Zero) DestroyIcon(ownedIcon); }
     [DllImport("user32.dll")] private static extern IntPtr CreateIconFromResourceEx(byte[] bits,uint size,bool icon,uint version,int width,int height,uint flags);
     [DllImport("user32.dll")] private static extern bool DestroyIcon(IntPtr icon);

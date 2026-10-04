@@ -4,27 +4,41 @@ using System.Text;
 using NetCat.Core;
 using NetCat.Engine;
 using NetCat.Network;
+using NetCat.UI;
 using Xunit;
 
 namespace NetCat.Tests;
 public sealed class ProfileSwitchTests
 {
     [Fact]
-    public async Task DisabledAutoSwitchDoesNotCommitSuccessfulPreflight()
+    public async Task CancelledPreflightCannotCommitAfterNewerSelection()
     {
-        using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(20)); var ct=deadline.Token;
-        var physical=PhysicalNetwork.Capture("");
-        using var server=new TcpListener(IPAddress.Parse(physical.Address),0); server.Start();
-        var candidate=ProfileImporter.ParseLink($"socks://{physical.Address}:{((IPEndPoint)server.LocalEndpoint).Port}");
-        var old=ProfileImporter.ParseLink("socks://127.0.0.1:19999");
-        var serving=Serve(server,204,ct);
-        using var router=new RouterService(Path.Combine(RoutingTests.FindRoot(),"bin"),Path.Combine(RoutingTests.FindRoot(),"artifacts","preflight-disabled-"+Guid.NewGuid().ToString("N")));
-        var s=new AppSettings {Tun=false,Profiles=[old,candidate],MainProfileId=old.Id,SocksPort=OpenVpnService.FreePort(),TestUrl="http://switch.example.invalid/probe"};
-        await router.SetVpnAsync(s,true,ct); var port=router.LatencyPort;
-        s.MainProfileId=candidate.Id;
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(()=>router.SwitchProfileAsync(s,ct,canCommit:()=>false));
-        await serving;
-        Assert.Equal(old.Id,router.ActiveProfileId); Assert.Equal(port,router.LatencyPort);
+        var folder = RoutingTests.TestArtifacts("selection-cancel-" + Guid.NewGuid().ToString("N"));
+        var store = new SettingsStore(folder);
+        var a = ProfileImporter.ParseLink("socks://127.0.0.1:19998");
+        var b = ProfileImporter.ParseLink("socks://127.0.0.1:19999");
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var router = new RouterService(RoutingTests.ModuleRoot, folder)
+        {
+            PreflightOverride = async (profile, _, ct) =>
+            {
+                if (profile.Id == b.Id) { entered.TrySetResult(); await release.Task; }
+                return new DelayResult(true, 1, "");
+            }
+        };
+        store.SaveDesiredState(new DesiredRuntimeState { MainVpnEnabled = true, SelectedVpnProfileId = a.Id, TunEnabled = false });
+        using var vm = new MainViewModel(store, new AppSettings { Profiles = [a,b], MainProfileId = a.Id, Tun = false }, router);
+        // No native start: the provider explicitly reports no network.
+        typeof(RuntimeCoordinator).GetProperty(nameof(RuntimeCoordinator.PhysicalNetworkProvider))!.SetValue(vm.RuntimeCoordinator,
+            new Candidate9Tests.FakePhysicalProvider { Current = null });
+        vm.UserSelectedVpnProfile(b.Id); var previous = vm.PendingSelection;
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        vm.UserSelectedVpnProfile(a.Id); release.TrySetResult();
+        await previous; await vm.PendingSelection;
+        Assert.Equal(a.Id, vm.GetCurrentDesiredState().SelectedVpnProfileId);
+        Assert.Equal(a.Id, vm.ConfigRepository.CurrentSettings.MainProfileId);
+        Assert.False(router.Running);
     }
     [Fact]
     public async Task FailedPreflightLeavesCurrentConnectionAvailable()
@@ -36,11 +50,14 @@ public sealed class ProfileSwitchTests
         Profile P(TcpListener server)=>ProfileImporter.ParseLink($"socks://{physical.Address}:{((IPEndPoint)server.LocalEndpoint).Port}");
         var old=P(oldServer); var candidate=P(newServer);
         var oldServing=Serve(oldServer,204,ct); var candidateServing=Serve(newServer,503,ct);
-        using var router=new RouterService(Path.Combine(RoutingTests.FindRoot(),"bin"),Path.Combine(RoutingTests.FindRoot(),"artifacts","preflight-"+Guid.NewGuid().ToString("N")));
+        using var router=new RouterService(RoutingTests.ModuleRoot,RoutingTests.TestArtifacts("preflight-"+Guid.NewGuid().ToString("N")));
         var s=new AppSettings {Tun=false,Profiles=[old,candidate],MainProfileId=old.Id,SocksPort=OpenVpnService.FreePort(),TestUrl="http://switch.example.invalid/probe"};
         await router.SetVpnAsync(s,true,ct); var port=router.LatencyPort;
-        s.MainProfileId=candidate.Id;
-        await Assert.ThrowsAsync<InvalidDataException>(()=>router.SwitchProfileAsync(s,ct)); await candidateServing;
+        var store = new SettingsStore(RoutingTests.TestArtifacts("selection-fail-" + Guid.NewGuid().ToString("N")));
+        store.SaveDesiredState(new DesiredRuntimeState { MainVpnEnabled = true, SelectedVpnProfileId = old.Id, TunEnabled = false });
+        using var vm = new MainViewModel(store, s, router);
+        vm.UserSelectedVpnProfile(candidate.Id); await vm.PendingSelection; await candidateServing;
+        Assert.Equal(old.Id, vm.GetCurrentDesiredState().SelectedVpnProfileId);
         Assert.Equal(old.Id,router.ActiveProfileId); Assert.Equal(port,router.LatencyPort);
         Assert.True((await ConnectionLatency.MeasureAsync(port,s.TestUrl,ct)).Success); await oldServing;
     }
@@ -54,18 +71,18 @@ public sealed class ProfileSwitchTests
         Profile Profile(TcpListener server) => ProfileImporter.ParseLink($"socks://{physical.Address}:{((IPEndPoint)server.LocalEndpoint).Port}#Test");
         var p1=Profile(first); var p2=Profile(second);
         var serving1=Serve(first,204,ct); var serving2=Serve(second,503,ct);
-        using var router=new RouterService(Path.Combine(RoutingTests.FindRoot(),"bin"),Path.Combine(RoutingTests.FindRoot(),"artifacts","switch-"+Guid.NewGuid().ToString("N")));
+        using var router=new RouterService(RoutingTests.ModuleRoot,RoutingTests.TestArtifacts("switch-"+Guid.NewGuid().ToString("N")));
         var s=new AppSettings {Tun=false,SocksPort=OpenVpnService.FreePort(),Profiles=[p1,p2],MainProfileId=p1.Id,Mode=RoutingMode.Global};
         await router.SetVpnAsync(s,true,ct);
         Assert.True((await ConnectionLatency.MeasureAsync(router.LatencyPort,"http://switch.example.invalid/probe",ct)).Success); await serving1;
-        s.MainProfileId=p2.Id; await router.SwitchProfileAsync(s,ct,preflight:false);
+        s.MainProfileId=p2.Id; await router.EnsureRunningAsync(s,physical,"test-profile-change",ct);
         Assert.True(router.VpnRequested); Assert.Equal(p2.Id,router.ActiveProfileId);
         var result=await ConnectionLatency.MeasureAsync(router.LatencyPort,"http://switch.example.invalid/probe",ct); await serving2;
         Assert.Equal("HTTP 503",result.Error);
         var invalid=new Profile {Host="invalid.example",OutboundJson="{\"type\":\"invalid-protocol\"}"}; s.Profiles.Add(invalid); s.MainProfileId=invalid.Id;
-        await Assert.ThrowsAsync<InvalidDataException>(()=>router.SwitchProfileAsync(s,ct,preflight:false));
+        await Assert.ThrowsAsync<InvalidDataException>(()=>router.EnsureRunningAsync(s,physical,"test-profile-change",ct));
         Assert.True(router.VpnRunning); Assert.Equal(p2.Id,router.ActiveProfileId);
-        await router.SetVpnAsync(s,false,ct); s.MainProfileId=p1.Id; await router.SwitchProfileAsync(s,ct,preflight:false);
+        await router.EnsureStoppedAsync(ct);
         Assert.False(router.VpnRunning);
     }
     private static async Task Serve(TcpListener listener,int status,CancellationToken ct)

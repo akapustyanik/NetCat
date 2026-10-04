@@ -57,3 +57,10 @@ NetCat integrates and interacts with several third-party open-source components 
 - **Upstream:** [https://github.com/Flowseal/tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy) and [https://www.python.org/](https://www.python.org/)
 - **License:** MIT License (tg-ws-proxy) / Python Software Foundation License (Python 3.12 embedded)
 - **Usage:** Standalone runtime directory (`modules/tg-runtime/`, `modules/tg-ws-proxy/`). Used as an optional local WebSocket proxy for Telegram MTProto.
+---
+
+### 9. Bouncy Castle Cryptography (.NET)
+- **Upstream:** [https://github.com/bcgit/bc-csharp](https://github.com/bcgit/bc-csharp)
+- **Package:** `BouncyCastle.Cryptography` 2.6.2
+- **License:** MIT License ([LICENSE.md](https://github.com/bcgit/bc-csharp/blob/master/LICENSE.md))
+- **Usage:** Managed cryptographic library (`BouncyCastle.Cryptography.dll`). Used for Ed25519 detached signature verification of portable update manifests. No private signing keys are bundled.

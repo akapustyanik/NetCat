@@ -91,7 +91,7 @@ public sealed class QualityRegressionTests
     {
         var root=Path.Combine(Path.GetTempPath(),"NetCat-Snapshot-"+Guid.NewGuid());var p=ProfileImporter.ParseLink("socks://192.0.2.1:1080");
         var s=new AppSettings{Profiles=[p],MainProfileId=p.Id,Tun=false,SocksPort=OpenVpnService.FreePort()};int starts=0;RouterService? router=null;
-        using(router=new RouterService(Path.Combine(RoutingTests.FindRoot(),"bin"),root){StartProcessOverride=(host,exe,args)=>
+        using(router=new RouterService(RoutingTests.ModuleRoot,root){StartProcessOverride=(host,exe,args)=>
         {
             if(++starts==2)
             {
@@ -120,7 +120,7 @@ public sealed class QualityRegressionTests
         using var handler=new ProbeHandler();using var client=new HttpClient(handler);bool ws=false;
         var result=await ZapretProbes.RunAsync(client,ZapretProbes.Defaults,CancellationToken.None,(uri,_)=>{Assert.Equal("gateway.discord.gg",uri.Host);ws=true;return Task.CompletedTask;});
         Assert.True(ws);Assert.Equal(5,result.Count);Assert.All(result,r=>Assert.True(r.Success));Assert.Equal(4,handler.Seen.Count);
-        Assert.Contains("Voice UDP: не проверялось",ZapretProbes.Summary(result,"Discord"));
+        Assert.Contains("Voice UDP: автоматически не проверяется",ZapretProbes.Summary(result,"Discord"));
         handler.BadGateway=true;ws=false;result=await ZapretProbes.RunAsync(client,ZapretProbes.Defaults,CancellationToken.None,(_,_)=>{ws=true;return Task.CompletedTask;});
         Assert.False(ws);Assert.Contains(result,r=>r.Name=="Gateway discovery"&&!r.Success);
     }

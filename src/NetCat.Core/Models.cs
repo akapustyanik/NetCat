@@ -7,6 +7,31 @@ public enum RuleKind { Domain, ExactDomain, Process, ExecutablePath, IpCidr, Geo
 public enum RouteTarget { Direct, Vpn, OpenVpn, Block }
 public enum ServiceRoute { Vpn, Zapret }
 public enum RoutingMode { Rules, Global, SelectiveVpn, SelectiveDirect }
+public enum NetworkLifecycleState { Normal, NetworkTransition, Rebuilding, NetworkUnavailable }
+public enum WindowPresentationState { VisibleNormal, VisibleMaximized, HiddenToTray }
+public enum ConvergencePhase { Starting, WaitingForPhysicalNetwork, Reconciling, Degraded, Converged }
+
+public sealed record ZapretObservedState(
+    bool IsRunning,
+    bool IsReady,
+    bool Owned,
+    int ProcessId,
+    DateTimeOffset ProcessStartTime,
+    int BoundPhysicalInterfaceIndex,
+    string ConfigFingerprint,
+    string? LastExitReason
+);
+
+public sealed record DesiredRuntimeState
+{
+    public bool MainVpnEnabled { get; init; }
+    public bool TunEnabled { get; init; } = true;
+    public bool ZapretEnabled { get; init; }
+    public bool OpenVpnEnabled { get; init; }
+    public Guid? SelectedVpnProfileId { get; init; }
+    public Guid? SelectedOpenVpnProfileId { get; init; }
+    public DateTimeOffset LastUpdatedUtc { get; init; } = DateTimeOffset.UtcNow;
+}
 
 public sealed class Profile : System.ComponentModel.INotifyPropertyChanged
 {
@@ -18,11 +43,17 @@ public sealed class Profile : System.ComponentModel.INotifyPropertyChanged
     public int Port { get; set; } = 443;
     public string OutboundJson { get; set; } = "{}";
     public string OpenVpnConfig { get; set; } = "";
+    public bool OpenVpnLegacyProviderRequired { get; set; } = false;
     public string Username { get; set; } = "";
     public string Password { get; set; } = "";
     public Guid? SubscriptionId { get; set; }
     public string SubscriptionItemId { get; set; } = "";
+    public string SubscriptionSource { get; set; } = "";
+    public bool SubscriptionRemoved { get; set; }
+    [JsonIgnore] public string SubscriptionDescription => SubscriptionSource + (SubscriptionRemoved ? " · удалён на сервере; сохранён до смены выбранного профиля" : "");
     public bool Candidate { get; set; } = true;
+    public List<string> LearnedRoutes { get; set; } = [];
+    public bool AllowPublicPushedRoutes { get; set; } = false;
     private string result = "Не проверен";
     [JsonIgnore] public string Result { get => result; set { result = value; PropertyChanged?.Invoke(this,new(nameof(Result))); } }
     private string resultDetails = "Проверка ещё не выполнялась.";
@@ -32,8 +63,18 @@ public sealed class Profile : System.ComponentModel.INotifyPropertyChanged
         Result = TestFeedback.Summary(tested);
         ResultDetails = DateTime.Now.ToString("dd.MM HH:mm:ss") + " · " + Core + Environment.NewLine + (tested.Success ? $"HTTP-ответ получен за {tested.Milliseconds} мс." : tested.Error);
     }
+    private string trafficResult = "Не проверен";
+    [JsonIgnore] public string TrafficResult { get => trafficResult; set { trafficResult = value; PropertyChanged?.Invoke(this,new(nameof(TrafficResult))); } }
+    private string trafficDetails = "Проверка передачи данных ещё не выполнялась.";
+    [JsonIgnore] public string TrafficDetails { get => trafficDetails; set { trafficDetails = value; PropertyChanged?.Invoke(this,new(nameof(TrafficDetails))); } }
+    public void SetTrafficTestResult(TrafficTestResult tested)
+    {
+        TrafficResult = tested.Summary;
+        TrafficDetails = DateTime.Now.ToString("dd.MM HH:mm:ss") + " · " + Core + Environment.NewLine + tested.Details;
+    }
     public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
     [JsonIgnore] public bool IsOpenVpn => Protocol.Equals("openvpn", StringComparison.OrdinalIgnoreCase);
+    [JsonIgnore] public string SecurityWarning => ProfileSecurity.Warning(this);
     public override string ToString() => $"{Name} · {Protocol}";
 }
 public sealed class RoutingRule
@@ -53,6 +94,8 @@ public sealed class Subscription
     public string Url { get; set; } = "";
     public DateTimeOffset? UpdatedAt { get; set; }
     public int UpdateHours { get; set; } = 24;
+    public bool AllowInsecureTransport { get; set; }
+    public string LastRefreshSummary { get; set; } = "";
     public override string ToString() => Name;
 }
 public sealed class AppSettings : System.ComponentModel.INotifyPropertyChanged
@@ -86,6 +129,10 @@ public sealed class AppSettings : System.ComponentModel.INotifyPropertyChanged
     public ServiceRoute YouTube { get => _youTube; set => SetField(ref _youTube, value); }
     private ServiceRoute _discord = ServiceRoute.Vpn;
     public ServiceRoute Discord { get => _discord; set => SetField(ref _discord, value); }
+    private bool? _autostart;
+    public bool? Autostart { get => _autostart; set => SetField(ref _autostart, value); }
+    private bool _restoreConnectionsOnStartup = true;
+    public bool RestoreConnectionsOnStartup { get => _restoreConnectionsOnStartup; set => SetField(ref _restoreConnectionsOnStartup, value); }
     private bool _telegramSocks;
     public bool TelegramSocks { get => _telegramSocks; set => SetField(ref _telegramSocks, value); }
     private bool _telegramVpnDefault = true;
@@ -118,7 +165,7 @@ public sealed class AppSettings : System.ComponentModel.INotifyPropertyChanged
     public bool AutoTest { get => _autoTest; set => SetField(ref _autoTest, value); }
     private bool _autoSwitch;
     public bool AutoSwitch { get => _autoSwitch; set => SetField(ref _autoSwitch, value); }
-    private int _testIntervalSeconds = 60;
+    private int _testIntervalSeconds = 15;
     public int TestIntervalSeconds { get => _testIntervalSeconds; set => SetField(ref _testIntervalSeconds, value); }
     private int _failureThreshold = 2;
     public int FailureThreshold { get => _failureThreshold; set => SetField(ref _failureThreshold, value); }
@@ -130,6 +177,10 @@ public sealed class AppSettings : System.ComponentModel.INotifyPropertyChanged
     public string AccentColor { get => _accentColor; set => SetField(ref _accentColor, value); }
     private string _baseColor = "#F4F6F8";
     public string BaseColor { get => _baseColor; set => SetField(ref _baseColor, value); }
+    private double _panelBrightness = 6;
+    public double PanelBrightness { get => _panelBrightness; set => SetField(ref _panelBrightness, value); }
+    private bool _highContrastText;
+    public bool HighContrastText { get => _highContrastText; set => SetField(ref _highContrastText, value); }
     private bool _minimizeToTray = true;
     public bool MinimizeToTray { get => _minimizeToTray; set => SetField(ref _minimizeToTray, value); }
     private string _zapretStrategy = "";
@@ -141,8 +192,15 @@ public sealed class AppSettings : System.ComponentModel.INotifyPropertyChanged
     public HashSet<string> PinnedModules { get; set; } = [];
     [JsonIgnore] public string Scenario => $"youtube-{YouTube}_discord-{Discord}";
 }
-public sealed record NetworkSnapshot(string Name, int Index, string Address, string Dns, string[] Suffixes, bool HasIpv6DefaultRoute = false, string Ipv6Address = "");
-public sealed record OpenVpnLink(string Name, int Index, string Address, string Gateway, string Dns);
+public sealed record NetworkSnapshot(string Name, int Index, string Address, string Dns, string[] Suffixes, bool HasIpv6DefaultRoute = false, string Ipv6Address = "", string DefaultRoute = "");
+public sealed record OpenVpnLink(string Name, int Index, string Address, string Gateway, string Dns, IReadOnlyList<string>? PushedRoutes = null)
+{
+    public int DnsPort { get; init; } = 53;
+    public Guid? ProfileId { get; init; }
+    public long Generation { get; init; }
+    public Guid RouteOwnerId { get; init; }
+    public IReadOnlyList<string> LearnedRoutes => PushedRoutes ?? Array.Empty<string>();
+}
 public sealed record DelayResult(bool Success, int Milliseconds, string Error = "");
 public sealed record ZapretTestRecord(string File, string Scenario, DateTimeOffset At, string YouTube, string Discord, bool Passed, int Score, int Delay, string Details);
 public static class JsonSettings

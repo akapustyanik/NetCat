@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><AssemblyName>NetCat.AuditHarness</AssemblyName></PropertyGroup>
+  <ItemGroup><ProjectReference Include="../../src/NetCat.Updater/NetCat.Updater.csproj" /></ItemGroup>
+</Project>

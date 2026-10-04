@@ -4,6 +4,44 @@ using NetCat.Engine;
 using NetCat.Network;
 using NetCat.Core;
 
+if(args is ["unsigned-update-admission"])
+{
+    var root = Path.Combine(Path.GetTempPath(), "NetCat-UnsignedAdmission-" + Guid.NewGuid().ToString("N"));
+    using var proxy = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0); proxy.Start();
+    using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+    bool rejected = false;
+    try
+    {
+        await NetCat.Updater.PortableUpdate.PrepareAsync(new("netcat", "akapustyanik/NetCat", "9.0.0", "NetCat-v9.0.0-win-x64.zip",
+            "https://github.com/akapustyanik/NetCat/releases/download/v9.0.0/NetCat-v9.0.0-win-x64.zip", new string('A', 64)),
+            root, new HashSet<string>(), deadline.Token, ((System.Net.IPEndPoint)proxy.LocalEndpoint).Port);
+    }
+    catch (InvalidDataException error) { rejected = error.Message.Contains("подписанную"); }
+    if (!rejected || proxy.Pending() || Directory.Exists(root)) throw new InvalidOperationException("Unsigned application was not rejected before update work.");
+    Console.WriteLine("unsigned-update-rejected-before-work");
+    return;
+}
+
+if(args is ["observer-exit"])
+{
+    using var host = new ProcessHost();
+    var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    host.Exited += (_, _) => throw new InvalidOperationException("Exit observer failed");
+    host.Exited += (_, code) => { if(code == 0) exited.TrySetResult(); };
+    host.Start(ProcessHost.PowerShellPath, ["-NoProfile", "-NonInteractive", "-Command", "exit 0"]);
+    await exited.Task.WaitAsync(TimeSpan.FromSeconds(10));
+    await host.StopAsync();
+    Console.WriteLine("exit-observer-complete");
+    return;
+}
+
+if(args.Length>=2 && args[0]=="--config")
+{
+    // Harmless preflight stand-in: records that the client would have launched.
+    const string marker="# NETCAT_TEST_PREFLIGHT_MARKER ";
+    var line=File.ReadLines(args[1]).Single(s=>s.StartsWith(marker,StringComparison.Ordinal));
+    File.WriteAllText(line[marker.Length..],"launched");return;
+}
 if(args[0].StartsWith("--wf-",StringComparison.Ordinal)) {await Task.Delay(TimeSpan.FromMinutes(2));return;} // Harmless winws stand-in for cancellation tests.
 var mode=args[0]; var file=Path.GetFullPath(args[1]);
 if(mode=="dry-run")
@@ -19,11 +57,20 @@ if(mode=="dry-run")
     File.WriteAllText(file,checkedCount.ToString());return;
 }
 if(mode=="leaf") { await Task.Delay(TimeSpan.FromMinutes(2)); return; }
+if(mode=="publication-race")
+{
+    await PublishAsync(file,"[1,2]",async()=>
+    {
+        File.WriteAllText(file+".writing","");
+        while(!File.Exists(file+".release"))await Task.Delay(20);
+    });
+    return;
+}
 if(mode is "child" or "child-exit")
 {
     var psi=new ProcessStartInfo(Environment.ProcessPath!) {UseShellExecute=false,CreateNoWindow=true,WindowStyle=ProcessWindowStyle.Hidden}; psi.ArgumentList.Add("leaf"); psi.ArgumentList.Add(file);
     using var leaf=Process.Start(psi)!;
-    File.WriteAllText(file,JsonSerializer.Serialize(new[]{Environment.ProcessId,leaf.Id}));
+    await PublishAsync(file,JsonSerializer.Serialize(new[]{Environment.ProcessId,leaf.Id}));
     if(mode=="child") await Task.Delay(TimeSpan.FromMinutes(2));
     return;
 }
@@ -51,7 +98,7 @@ if(mode=="service-cancel")
     if(service.Running || service.ActiveStrategy.Length>0)throw new Exception("Zapret survives cancellation");
     File.WriteAllText(file,JsonSerializer.Serialize(new[]{id})); return;
 }
-var owner=new ProcessHost(); owner.Start(Environment.ProcessPath!,[mode=="exited-root"?"child-exit":"child",file]);
+var owner=new ProcessHost(new SelfTrust()); owner.Start(Environment.ProcessPath!,[mode=="exited-root"?"child-exit":"child",file]);
 while(!File.Exists(file+".command")) await Task.Delay(20);
 var command=File.ReadAllText(file+".command");
 if(command=="stop") await owner.StopAsync();
@@ -60,3 +107,31 @@ File.WriteAllText(file+".done","done");
 GC.KeepAlive(owner);
 if(command=="exit") Environment.Exit(0);
 await Task.Delay(TimeSpan.FromMinutes(2));
+
+// File existence is the parent's readiness signal. Publish only after the writer
+// is closed; a visible Create/Write file can still be locked or contain partial JSON.
+static async Task PublishAsync(string path,string contents,Func<Task>? whileWriting=null)
+{
+    var temporary=path+"."+Guid.NewGuid().ToString("N")+".pending";
+    try
+    {
+        await using(var stream=new FileStream(temporary,FileMode.CreateNew,FileAccess.Write,FileShare.None))
+        {
+            await using var writer=new StreamWriter(stream);
+            await writer.WriteAsync(contents);await writer.FlushAsync();
+            if(whileWriting!=null)await whileWriting();
+        }
+        File.Move(temporary,path);
+    }
+    finally{if(File.Exists(temporary))File.Delete(temporary);}
+}
+
+sealed class SelfTrust : IExecutableTrustPolicy
+{
+    public IDisposable AcquireExecutable(string path)
+    {
+        if(Path.GetFullPath(path)!=Environment.ProcessPath)throw new InvalidDataException("Unexpected fixture executable");
+        return new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read);
+    }
+    public IDisposable AcquirePackage(string key,string folder)=>throw new NotSupportedException();
+}

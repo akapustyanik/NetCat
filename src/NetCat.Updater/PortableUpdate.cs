@@ -7,8 +7,8 @@ using NetCat.Core;
 namespace NetCat.Updater;
 public sealed record PackageFile(string Path,string Sha256);
 public sealed record PackageComponent(string Key,string Version,List<PackageFile> Files);
-public sealed record PackageManifest(int Schema,string Version,List<PackageComponent> Components);
-public sealed record UpdateJob(string Root,string Stage,int ParentId,long ParentStart,string ArchiveHash,string[] Pinned,bool Smoke=false);
+public sealed record PackageManifest(int Schema,string Version,List<PackageComponent> Components, string? Channel = null, ReleasePackage? Package = null, List<PackageFile>? ExtraFiles = null);
+public sealed record UpdateJob(string Root,string Stage,int ParentId,long ParentStart,string ArchiveHash,string[] Pinned,bool Smoke=false, string Version="", string Asset="", bool RecoveryOnly=false);
 
 public static class PortableUpdate
 {
@@ -54,7 +54,9 @@ public static class PortableUpdate
     public static async Task<string> PrepareAsync(ModuleRelease release,string root,ISet<string> pinned,CancellationToken ct,int proxyPort=0)
     {
         if(release.Key!="netcat" || release.Repository!="akapustyanik/NetCat" || !release.Url.StartsWith("https://github.com/akapustyanik/NetCat/releases/download/",StringComparison.Ordinal) || !System.Text.RegularExpressions.Regex.IsMatch(release.Sha256,"^[a-fA-F0-9]{64}$")) throw new InvalidDataException("Непроверенный источник NetCat.");
-        PublisherTrust.RequireSamePublisher(Environment.ProcessPath!,Environment.ProcessPath!);
+        // Restart/recovery require Authenticode. Reject an unsupported source
+        // before download, staging or asking the running application to exit.
+        PublisherTrust.RequireSamePublisher(Environment.ProcessPath!, Environment.ProcessPath!);
         var updateRoot=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),"NetCat");
         PrivateFiles.ProtectDirectory(updateRoot,true); updateRoot=Path.Combine(updateRoot,"updates"); PrivateFiles.ProtectDirectory(updateRoot,true);
         var stage=Path.Combine(updateRoot,Guid.NewGuid().ToString("N")); PrivateFiles.ProtectDirectory(stage,true);
@@ -62,7 +64,13 @@ public static class PortableUpdate
         {
         using var stageLease=new FileStream(Path.Combine(stage,"active.lock"),FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None);
         using var http=ModuleUpdater.CreateClient(proxyPort); http.Timeout=TimeSpan.FromMinutes(15);
+        var signed = await ReleaseTrust.FetchAsync(http, release.Url, release.Version, ReleaseTrust.CurrentVersion, ct);
+        ReleaseTrust.RememberVersion(root, signed.Manifest);
+        if (!signed.Manifest.Package!.Sha256.Equals(release.Sha256, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Подписанный SHA-256 изменился после проверки.");
+        await File.WriteAllBytesAsync(Path.Combine(stage, "release-manifest.json"), signed.Bytes, ct);
+        await File.WriteAllBytesAsync(Path.Combine(stage, "release-manifest.sig"), signed.Signature, ct);
         using var response=await http.GetAsync(release.Url,HttpCompletionOption.ResponseHeadersRead,ct); response.EnsureSuccessStatusCode();
+        if (response.Content.Headers.ContentLength > 1024L * 1024 * 1024) throw new InvalidDataException("Архив превышает 1 ГБ.");
         await using(var input=await response.Content.ReadAsStreamAsync(ct)) await using(var output=File.Create(Path.Combine(stage,"package.zip")))
         {
             var buffer=new byte[65536]; long total=0; int read;
@@ -71,10 +79,11 @@ public static class PortableUpdate
         await ExtractVerifiedAsync(stage,release.Sha256,ct);
         var manifest=await VerifyAsync(Path.Combine(stage,"payload"),ct);
         if(manifest.Version.TrimStart('v')!=release.Version.TrimStart('v')) throw new InvalidDataException("Манифест не соответствует GitHub-релизу.");
-        PublisherTrust.RequireSamePublisher(Environment.ProcessPath!,Path.Combine(stage,"payload","NetCat.exe"));
+        await ReleaseTrust.VerifyPayloadAsync(signed.Manifest, Path.Combine(stage,"payload"), ct);
+        PublisherTrust.RequireSamePublisher(Environment.ProcessPath!, SafePath(Path.Combine(stage,"payload"), "NetCat.exe"));
         var updater=new ModuleUpdater(Path.Combine(root,"modules"));
         if(Plan(manifest,updater.InstalledVersion,pinned).Count==0) throw new InvalidOperationException("В пакете нет более новых незакреплённых компонентов.");
-        var job=new UpdateJob(root,stage,Environment.ProcessId,Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks,release.Sha256,pinned.ToArray());
+        var job=new UpdateJob(root,stage,Environment.ProcessId,Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks,release.Sha256,pinned.ToArray(),Version:release.Version,Asset:release.Asset);
         var jobPath=Path.Combine(stage,"job.json"); await File.WriteAllTextAsync(jobPath,JsonSerializer.Serialize(job,JsonSettings.Options),ct);
         File.Copy(Environment.ProcessPath!,Path.Combine(stage,"NetCat.Update.exe"));
         return jobPath;
@@ -85,43 +94,240 @@ public static class PortableUpdate
     {
         var zip=Path.Combine(stage,"package.zip"); await using(var file=File.OpenRead(zip))
             if(!Convert.ToHexString(await SHA256.HashDataAsync(file,ct)).Equals(hash,StringComparison.OrdinalIgnoreCase))throw new InvalidDataException("SHA-256 архива не совпадает.");
-        var payload=Path.Combine(stage,"payload"); Directory.CreateDirectory(payload);
-        using var archive=ZipFile.OpenRead(zip);
-        if(archive.Entries.Count>50000 || archive.Entries.Sum(e=>e.Length)>2L*1024*1024*1024) throw new InvalidDataException("Слишком большой распакованный архив.");
-        var paths=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach(var entry in archive.Entries)
-        {
-            ct.ThrowIfCancellationRequested();
-            var name=entry.FullName.TrimEnd('/'); if(name.Length==0)continue; var path=SafePath(payload,name);
-            if(!paths.Add(name))throw new InvalidDataException("Повторяющееся имя файла.");
-            if(entry.FullName.EndsWith('/')){Directory.CreateDirectory(path);continue;}
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!); entry.ExtractToFile(path,true);
-        }
+        await PackageLimits.ExtractAsync(zip, Path.Combine(stage, "payload"), ct, byteLimit: 2L * 1024 * 1024 * 1024, entryLimit: 50000);
     }
     public static Task LaunchAsync(string jobPath) => UpdateChannel.LaunchAsync(jobPath);
-    internal static async Task ApplyAuthenticatedJobAsync(UpdateJob job)
+    // Status reporting is diagnostic, not part of the update transaction.
+    private static async Task TryWriteUpdateStatusAsync(
+        string path,
+        string message)
     {
-        using var stageLease=new FileStream(Path.Combine(job.Stage,"active.lock"),FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None);
-        var meta=Path.Combine(job.Root,"metadata"); Directory.CreateDirectory(meta);
-        using var updateLock=new FileStream(SafePath(job.Root,"metadata/update.lock"),FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None);
         try
         {
-            try { using var parent=Process.GetProcessById(job.ParentId); if(parent.StartTime.ToUniversalTime().Ticks==job.ParentStart) await parent.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(90)); } catch(ArgumentException) { }
-            using var deadline=new CancellationTokenSource(TimeSpan.FromMinutes(10));
-            await ExtractVerifiedAsync(job.Stage,job.ArchiveHash,deadline.Token);
-            var payload=Path.Combine(job.Stage,"payload");var manifest=await VerifyAsync(payload,deadline.Token);
-            PublisherTrust.RequireSamePublisher(Environment.ProcessPath!,Path.Combine(payload,"NetCat.exe"));
-            var updater=new ModuleUpdater(Path.Combine(job.Root,"modules"));
-            var plan=Plan(manifest,updater.InstalledVersion,job.Pinned.ToHashSet());
-            ApplyFiles(job.Root,payload,plan,manifest.Components.ToDictionary(c=>c.Key,c=>updater.InstalledVersion(c.Key)),stage:job.Stage);
-            await File.WriteAllTextAsync(Path.Combine(meta,"last-update.txt"),"Обновлено: "+string.Join(", ",plan.Select(c=>c.Key+" "+c.Version)));
+            await File.WriteAllTextAsync(path, message);
         }
-        catch(Exception e) { await File.WriteAllTextAsync(Path.Combine(meta,"last-update.txt"),"Обновление отменено: "+e.Message); throw; }
-        finally { updateLock.Dispose(); }
-        var restart=new ProcessStartInfo(Path.Combine(job.Root,"NetCat.exe")) { UseShellExecute=!job.Smoke,CreateNoWindow=job.Smoke,WindowStyle=job.Smoke?ProcessWindowStyle.Hidden:ProcessWindowStyle.Normal };
-        if(job.Smoke)restart.ArgumentList.Add("--smoke");
-        using var restarted=Process.Start(restart);
-        if(job.Smoke && restarted!=null) { await restarted.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(40));if(restarted.ExitCode!=0)throw new IOException("Обновлённый EXE не прошёл smoke-проверку."); }
+        catch(Exception ex) when (
+            ex is IOException or UnauthorizedAccessException)
+        {
+            Trace.WriteLine(
+                "UPDATE_STATUS_WRITE result=deferred reason=" +
+                ex.GetType().Name);
+        }
+    }
+
+    internal static async Task ApplyAuthenticatedJobAsync(UpdateJob job)
+    {
+        using var stageLease = new FileStream(
+            Path.Combine(job.Stage, "active.lock"),
+            FileMode.OpenOrCreate,
+            FileAccess.ReadWrite,
+            FileShare.None);
+
+        var meta = Path.Combine(job.Root, "metadata");
+        Directory.CreateDirectory(meta);
+
+        using var updateLock = new FileStream(
+            SafePath(job.Root, "metadata/update.lock"),
+            FileMode.OpenOrCreate,
+            FileAccess.ReadWrite,
+            FileShare.None);
+
+        Exception? failure = null;
+        bool originalProcessGone = false;
+        bool restartSafe = false;
+
+        try
+        {
+            try
+            {
+                using var parent =
+                    Process.GetProcessById(job.ParentId);
+
+                if (parent.StartTime.ToUniversalTime().Ticks ==
+                    job.ParentStart)
+                {
+                    await parent.WaitForExitAsync()
+                        .WaitAsync(TimeSpan.FromSeconds(90));
+                }
+
+                originalProcessGone = true;
+            }
+            catch(ArgumentException)
+            {
+                originalProcessGone = true;
+            }
+            catch(InvalidOperationException)
+            {
+                originalProcessGone = true;
+            }
+            catch(System.ComponentModel.Win32Exception ex)
+                when (ex.NativeErrorCode is 6 or 87 or 1168)
+            {
+                // The original process exited during the lookup.
+                // Access Denied (5) is deliberately NOT swallowed.
+                originalProcessGone = true;
+            }
+
+            using var deadline =
+                new CancellationTokenSource(
+                    TimeSpan.FromMinutes(10));
+
+            var signed =
+                await ReleaseTrust.VerifyStageAsync(
+                    job,
+                    deadline.Token);
+
+            ReleaseTrust.RememberVersion(
+                job.Root,
+                signed);
+
+            await ExtractVerifiedAsync(
+                job.Stage,
+                job.ArchiveHash,
+                deadline.Token);
+
+            var payload =
+                Path.Combine(job.Stage, "payload");
+
+            var manifest =
+                await VerifyAsync(
+                    payload,
+                    deadline.Token);
+
+            await ReleaseTrust.VerifyPayloadAsync(
+                signed,
+                payload,
+                deadline.Token);
+
+            // Recheck before the first durable mutation, not only after commit.
+            PublisherTrust.RequireSamePublisher(Environment.ProcessPath!, SafePath(payload, "NetCat.exe"));
+
+            using var updater =
+                new ModuleUpdater(
+                    Path.Combine(job.Root, "modules"));
+
+            var plan =
+                Plan(
+                    manifest,
+                    updater.InstalledVersion,
+                    job.Pinned.ToHashSet());
+
+            ApplyFiles(
+                job.Root,
+                payload,
+                plan,
+                manifest.Components.ToDictionary(
+                    c => c.Key,
+                    c => updater.InstalledVersion(c.Key)),
+                stage: job.Stage);
+
+            // ApplyFiles has returned after its durable commit.
+            // Failure to write diagnostic text must not undo it.
+            restartSafe = true;
+
+            await TryWriteUpdateStatusAsync(
+                Path.Combine(meta, "last-update.txt"),
+                "Обновлено: " +
+                string.Join(
+                    ", ",
+                    plan.Select(c => c.Key + " " + c.Version)));
+        }
+        catch(Exception error)
+        {
+            failure = error;
+
+            // Safe restart after failed update:
+            // never start NetCat from a partially applied transaction.
+            // Recover may also finish cleanup of an already committed job.
+            if (originalProcessGone)
+            {
+                try
+                {
+                    DurableUpdate.Recover(job.Root);
+                    restartSafe = true;
+                }
+                catch(Exception recoveryError)
+                {
+                    failure = new AggregateException(
+                        "Обновление не выполнено. Восстановление " +
+                        "не завершено; автоматический запуск заблокирован.",
+                        error,
+                        recoveryError);
+                }
+            }
+
+            await TryWriteUpdateStatusAsync(
+                Path.Combine(meta, "last-update.txt"),
+                "Обновление отменено: " +
+                error.GetType().Name + ": " +
+                error.Message);
+        }
+        finally
+        {
+            // The new/old EXE must not observe an active update lock.
+            updateLock.Dispose();
+        }
+
+        if (restartSafe)
+        {
+            var restartPath =
+                Path.Combine(job.Root, "NetCat.exe");
+
+            try
+            {
+                // Verify the EXE before launching it.
+                using var restartLease =
+                    PublisherTrust.AcquireRestart(
+                        Environment.ProcessPath!,
+                        restartPath);
+
+                var restart = new ProcessStartInfo(restartPath)
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = job.Smoke,
+                    WindowStyle = job.Smoke
+                        ? ProcessWindowStyle.Hidden
+                        : ProcessWindowStyle.Normal
+                };
+
+                if (job.Smoke)
+                    restart.ArgumentList.Add("--smoke");
+
+                using var restarted =
+                    Process.Start(restart)
+                    ?? throw new IOException(
+                        "Не удалось перезапустить NetCat.");
+
+                if (job.Smoke)
+                {
+                    await restarted.WaitForExitAsync()
+                        .WaitAsync(TimeSpan.FromSeconds(40));
+
+                    if (restarted.ExitCode != 0)
+                        throw new IOException(
+                            "Перезапущенный EXE не прошёл smoke-проверку.");
+                }
+            }
+            catch(Exception restartError) when (failure != null)
+            {
+                throw new AggregateException(
+                    "Обновление завершилось ошибкой. " +
+                    "Восстановление выполнено, но перезапуск не удался.",
+                    failure,
+                    restartError);
+            }
+        }
+
+        if (failure != null)
+        {
+            throw new InvalidOperationException(
+                restartSafe
+                    ? "Обновление отменено. NetCat восстановлен " +
+                      "и его перезапуск выполнен."
+                    : "Обновление отменено. Безопасность " +
+                      "автоматического перезапуска не подтверждена.",
+                failure);
+        }
     }
     public static void ApplyFiles(string root,string payload,List<PackageComponent> plan,Dictionary<string,string> versions,
         Action<int,UpdatePhase>? afterMutation=null,string? stage=null) => DurableUpdate.Apply(root,payload,plan,versions,afterMutation,stage);

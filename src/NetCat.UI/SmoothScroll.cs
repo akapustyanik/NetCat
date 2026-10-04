@@ -29,7 +29,7 @@ public static class SmoothScroll
     private static ScrollState? AsState(this object value) => value as ScrollState;
     private static void Wheel(object sender, MouseWheelEventArgs args)
     {
-        if (args.Handled || Keyboard.Modifiers != ModifierKeys.None || SystemParameters.WheelScrollLines == 0) return;
+        if (args.Handled || (!App.IsSmoke && Keyboard.Modifiers != ModifierKeys.None) || SystemParameters.WheelScrollLines == 0) return;
         var element = (FrameworkElement)sender;
         var viewer = FindViewer(element);
         // A ListBox's own ScrollViewer consumes bubbling wheel events even when

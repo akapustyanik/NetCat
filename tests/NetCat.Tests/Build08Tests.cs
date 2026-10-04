@@ -56,9 +56,9 @@ public sealed class Build08Tests
         Assert.Equal("tun",check["inbound"]![0]!.ToString()); Assert.Equal("vpn",check["outbound"]!.ToString());
         Assert.Equal("172.29.255.1/32",check["source_ip_cidr"]![0]!.ToString());
         Assert.True(rules.IndexOf(check)<rules.IndexOf(rules.First(n=>n?["process_name"]?.ToJsonString().Contains("NetCat.exe")==true)));
-        var file=Path.Combine(RoutingTests.FindRoot(),"artifacts/validation/health08.json"); await File.WriteAllTextAsync(file,config.ToJsonString());
+        var file=RoutingTests.TestArtifacts("validation","health08.json"); await File.WriteAllTextAsync(file,config.ToJsonString());
         using var ct=new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var result=await ProcessHost.RunAsync(Path.Combine(RoutingTests.FindRoot(),"bin/sing-box/sing-box.exe"),["check","-c",file],ct.Token);
+        var result=await ProcessHost.RunAsync(Path.Combine(RoutingTests.ModuleRoot, "sing-box/sing-box.exe"),["check","-c",file],ct.Token);
         Assert.True(result.Code==0,result.Output);
     }
 }

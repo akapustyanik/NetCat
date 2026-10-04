@@ -7,24 +7,153 @@ using NetCat.Engine;
 
 namespace NetCat.Network;
 public sealed record RuntimeSnapshot(Guid? ActiveProfileId,int ListenPort,int LatencyPort,int HealthSourcePort,bool TunActive,bool VpnRequested,bool RequiresXray);
-public sealed class RouterService(string bin, string runtime) : IDisposable
+public sealed class RouterService : IDisposable, IRouterRuntime
 {
+    private readonly string bin, runtime;
+    public RouterService(string bin, string runtime)
+    {
+        this.bin = bin; this.runtime = runtime;
+        OpenVpn = new(Path.Combine(bin, "openvpn", "openvpn.exe"), Path.Combine(runtime, "openvpn"));
+        xray.Exited += (pid, _) =>
+        {
+            // ProcessHost owns this exact child; queued exits from a replaced
+            // child and intentional reconfiguration must not signal a loss.
+            if (pid != xray.Id || Reconfiguring || !VpnRequested || !requiresXray) return;
+            Log?.Invoke("XRAY_PROCESS unexpected_exit");
+            DependencyLost?.Invoke();
+        };
+    }
     private readonly ProcessHost core = new(), xray = new();
     private readonly SemaphoreSlim gate = new(1);
     private readonly SemaphoreSlim probes = new(2);
+    public NetworkSnapshot? ActivePhysical { get; private set; }
+    public long NetworkRevision { get; private set; }
+    public string RecoveryStatus { get; private set; } = "";
+    private bool networkRefresh;
+    private NetworkSnapshot? coordinatorBinding;
+    private AppSettings activeSettings = new();
+    public Func<string, NetworkSnapshot> CaptureBinding { get; init; } = name => PhysicalNetwork.ResolveCurrentBinding(name);
     public long SessionRevision { get; private set; }
-    private bool logsAttached, requiresXray, suppressOpenVpn;
-    public OpenVpnService OpenVpn { get; } = new(Path.Combine(bin, "openvpn", "openvpn.exe"), Path.Combine(runtime, "openvpn"));
+    private bool logsAttached, requiresXray;
+    private OpenVpnSidecar? openVpnSidecar;
+    private GuardedDirectGateway? guardedDirect;
+    private GuardedVpnGateway? guardedVpn;
+    private CorporateDnsGuard? corporateDns;
+    private bool invalidateInternalPorts;
+    private readonly HashSet<int> retiredVpnReturns = [];
+    private readonly CorporateDomainGuard domainGuard = new();
+    public CorporateDomainGuard DomainGuard => domainGuard;
+    private readonly object gatewayLock = new();
+    public bool OpenVpnGatewayReady => openVpnSidecar?.Running ?? !IsRunning;
+    public void InvalidateOpenVpnOverlay() => openVpnSidecar?.Invalidate();
+    public bool OpenVpnOverlayReady => openVpnSidecar?.Active == true;
+    public event Action? OpenVpnOverlayLost;
+    public void PrepareDomainOwnership(AppSettings settings)
+    {
+        lock (gatewayLock)
+        {
+            domainGuard.Prepare(settings);
+            corporateDns?.Prepare(settings);
+            guardedDirect?.Update(settings, OpenVpn.Link, OpenVpnOwnership.Build(settings, OpenVpn.Link));
+        }
+    }
+    private OpenVpnSidecar GatewaySidecar
+    {
+        get
+        {
+            lock (gatewayLock)
+            {
+            if (openVpnSidecar != null) return openVpnSidecar;
+            guardedDirect ??= new(domainGuard);
+            corporateDns ??= new(domainGuard);
+            if(guardedVpn == null) { guardedVpn = new(domainGuard); guardedVpn.Start(PortStartup.Distinct(OpenVpnService.FreeTcpUdpPort,
+                corporateDns.DirectReturnPort,corporateDns.VpnReturnPort,corporateDns.DirectPort,corporateDns.VpnPort,guardedDirect.Port,guardedVpn.Port)); }
+            openVpnSidecar = new(SingBox, Path.Combine(runtime, "openvpn-gateway"), OpenVpn.DestinationLeases) { Log = line => Log?.Invoke(line), OwnershipPrepared = (settings,link,ownership) => { domainGuard.Prepare(settings); corporateDns.Prepare(settings); guardedDirect.Update(settings,link,ownership); } };
+            OpenVpn.CandidateGenerationPrepared += guardedDirect.Candidate;
+            OpenVpn.CandidateGenerationInvalidated += guardedDirect.ClearCandidate;
+            openVpnSidecar.ProcessExited += (_, _) => OpenVpnOverlayLost?.Invoke();
+            OpenVpn.ProcessExited += (_, _) => _ = DeactivateLostOpenVpnAsync();
+            OpenVpn.LinkChanged += () => { openVpnSidecar?.Invalidate(); OpenVpnOverlayLost?.Invoke(); };
+            return openVpnSidecar;
+            }
+        }
+    }
+    private async Task DeactivateLostOpenVpnAsync()
+    {
+        try { if (openVpnSidecar != null) await openVpnSidecar.DeactivateAsync(() => !OpenVpn.IsRunning).ConfigureAwait(false); }
+        catch (Exception ex) { Log?.Invoke("OPENVPN_SIDECAR deactivate_error=" + ex.Message); }
+    }
+    public Task ApplyOpenVpnOverlayAsync(AppSettings settings, OpenVpnLink? link, CancellationToken ct)
+        => GatewaySidecar.ApplyAsync(settings, link, ct);
+    public Task ApplyOpenVpnOverlayAsync(AppSettings settings, OpenVpnLink? link, Func<bool> stillCurrent, CancellationToken ct)
+        => GatewaySidecar.ApplyAsync(settings, link, ct, stillCurrent);
+    public OpenVpnService OpenVpn { get; }
     public bool VpnRequested { get; private set; }
     public Guid? ActiveProfileId { get; private set; }
     public bool ZapretAvailable { get; set; }
     public bool Running => core.Running;
+    public bool IsRunning => Running;
     public bool VpnRunning => VpnRequested && core.Running && (!requiresXray || xray.Running);
+    public bool DependenciesHealthy => !requiresXray || xray.Running;
+    public event Action? DependencyLost;
     public int ListenPort { get; private set; }
     public int LatencyPort { get; private set; }
     public int HealthSourcePort { get; private set; }
     public bool TunActive { get; private set; }
     public bool Reconfiguring { get; private set; }
+    private string? activeConfigFingerprint;
+    public string? ActiveConfigFingerprint => activeConfigFingerprint;
+    public int StartCount { get; private set; }
+
+    public static string ComputeConfigFingerprint(AppSettings settings, NetworkSnapshot? physical, Profile? mainProfile, OpenVpnLink? openVpnLink)
+    {
+        var desired = new DesiredRuntimeState { MainVpnEnabled = mainProfile != null, TunEnabled = settings.Tun,
+            SelectedVpnProfileId = mainProfile?.Id ?? settings.MainProfileId, OpenVpnEnabled = openVpnLink != null,
+            SelectedOpenVpnProfileId = settings.OpenVpnProfileId };
+        var effective = EffectiveRuntimeConfigBuilder.Build(settings, desired, physical, openVpnLink?.LearnedRoutes);
+        return $"{effective.VpnProfileId}|{effective.TunEnabled}|{effective.PhysicalBindingFingerprint}|{effective.RoutingRulesFingerprint}|{effective.DnsPolicyFingerprint}|{effective.OpenVpnEnabled}|{effective.LearnedOpenVpnRoutesFingerprint}";
+    }
+
+    public async Task EnsureRunningAsync(AppSettings settings, NetworkSnapshot physical, string reason, CancellationToken ct)
+    {
+        var profile = settings.Profiles.FirstOrDefault(p => p.Id == settings.MainProfileId && !p.IsOpenVpn);
+        var targetFingerprint = ComputeConfigFingerprint(settings, physical, profile, OpenVpn.Link);
+
+        if (reason != "restart-structural-tun" && VpnRunning && !Reconfiguring && activeConfigFingerprint == targetFingerprint)
+        {
+            return;
+        }
+
+        await SetVpnAsync(settings, true, ct, reason: reason, physical: physical);
+        activeConfigFingerprint = targetFingerprint;
+        StartCount++;
+    }
+
+    public async Task EnsureStoppedAsync(CancellationToken ct)
+    {
+        if (!VpnRequested && !Running) return;
+        await SetVpnAsync(JsonSettings.Clone(activeSettings), false, ct, reason: "stop");
+    }
+
+    public async Task SuspendModuleAsync(string key,CancellationToken ct)
+    {
+        if(key=="sing-box" && openVpnSidecar!=null)await openVpnSidecar.DeactivateAsync();
+        await EnsureStoppedAsync(ct);
+    }
+
+    public async Task RefreshPhysicalAsync(AppSettings settings, NetworkSnapshot physical, string reason, CancellationToken ct)
+    {
+        await gate.WaitAsync(ct);
+        try
+        {
+            coordinatorBinding = physical;
+            SessionRevision++;
+            await ReconfigureInternal(settings, ct, reason: reason);
+            activeSettings = JsonSettings.Clone(settings);
+            activeConfigFingerprint = ComputeConfigFingerprint(settings, physical, settings.Profiles.FirstOrDefault(p => p.Id == ActiveProfileId), OpenVpn.Link);
+        }
+        finally { coordinatorBinding = null; gate.Release(); }
+    }
     public event Action<string>? Log;
     public event Action? Changed;
     public Action<ProcessHost,string,string[]>? StartProcessOverride { get; init; }
@@ -35,80 +164,82 @@ public sealed class RouterService(string bin, string runtime) : IDisposable
     private void ClearRuntimeState(bool clearRequest)
     {
         ActiveProfileId=null; ListenPort=LatencyPort=HealthSourcePort=0; TunActive=false; requiresXray=false;
-        if(clearRequest) VpnRequested=false;
+        activeConfigFingerprint = null;
+        if(clearRequest) { VpnRequested=false; ActivePhysical=null; RecoveryStatus=""; }
     }
     public RuntimeSnapshot CaptureRuntime() => new(ActiveProfileId,ListenPort,LatencyPort,HealthSourcePort,TunActive,VpnRequested,requiresXray);
+    public ActiveTrafficStamp CaptureTrafficStamp() => new(ActiveProfileId, SessionRevision, NetworkRevision, core.Id, TunActive && VpnRunning && !Reconfiguring);
+    public async Task<ActiveTrafficTest> TestActiveTrafficAsync(CancellationToken ct,
+        Func<CancellationToken, Task<TrafficTestResult>>? measure = null)
+    {
+        ct.ThrowIfCancellationRequested();
+        var stamp = CaptureTrafficStamp();
+        if(!stamp.TunActive || stamp.ProfileId == null)
+            return new(stamp, null, "VPN/TUN не готов");
+        var result = await (measure?.Invoke(ct) ?? SystemTrafficProbeWorker.MeasureAsync(runtime, ct)).ConfigureAwait(false);
+        return new ActiveTrafficTest(stamp, result).Validate(CaptureTrafficStamp());
+    }
     private void RestoreRuntime(RuntimeSnapshot snapshot)
     {
         ActiveProfileId=snapshot.ActiveProfileId; ListenPort=snapshot.ListenPort; LatencyPort=snapshot.LatencyPort;
         HealthSourcePort=snapshot.HealthSourcePort; TunActive=snapshot.TunActive; VpnRequested=snapshot.VpnRequested; requiresXray=snapshot.RequiresXray;
     }
     public string SingBox => Path.Combine(bin, "sing-box", "sing-box.exe");
-    public async Task SetVpnAsync(AppSettings s, bool enabled, CancellationToken ct = default)
+    public async Task SetVpnAsync(AppSettings s, bool enabled, CancellationToken ct = default, string reason = "vpn-toggle", NetworkSnapshot? physical = null)
     {
         SessionRevision++;
         await gate.WaitAsync(ct);
         var old = VpnRequested; var previous=CaptureRuntime();
-        try { VpnRequested = enabled; await ReconfigureInternal(s, ct,previous); }
-        catch { VpnRequested = core.Running && old; Changed?.Invoke(); throw; }
-        finally { gate.Release(); }
-    }
-    public async Task SetOpenVpnAsync(AppSettings s, bool enabled, CancellationToken ct = default)
-    {
-        SessionRevision++;
-        await gate.WaitAsync(ct);
-        bool wasRunning=OpenVpn.Running;
         try
         {
+            coordinatorBinding = physical;
+            VpnRequested = enabled;
+            await ReconfigureInternal(s, ct, previous, reason: reason);
+            activeSettings = JsonSettings.Clone(s);
             if (enabled)
             {
-                var p = s.Profiles.FirstOrDefault(p => p.Id == s.OpenVpnProfileId && p.IsOpenVpn) ?? throw new InvalidOperationException("Выберите OpenVPN профиль.");
-                await OpenVpn.StartAsync(p, s.OpenVpnDns, ct);
-                await ReconfigureInternal(s, ct);
+                var profile = s.Profiles.FirstOrDefault(p => p.Id == s.MainProfileId && !p.IsOpenVpn);
+                activeConfigFingerprint = ComputeConfigFingerprint(s, ActivePhysical, profile, OpenVpn.Link);
             }
             else
             {
-                // Keep the old adapter alive until the replacement router has passed
-                // validation AND started. Rollback can still use the old configuration.
-                suppressOpenVpn=true;
-                try { await ReconfigureInternal(s,ct); } finally { suppressOpenVpn=false; }
-                await OpenVpn.StopAsync();
+                activeConfigFingerprint = null;
             }
         }
-        catch { if (enabled && !wasRunning) await OpenVpn.StopAsync(); throw; }
-        finally { suppressOpenVpn=false; gate.Release(); Changed?.Invoke(); }
+        catch { VpnRequested = core.Running && old; Changed?.Invoke(); throw; }
+        finally { coordinatorBinding = null; gate.Release(); }
     }
-
-    public async Task ApplyAsync(AppSettings s, CancellationToken ct = default)
+    public async Task ApplyAsync(AppSettings s, CancellationToken ct = default, string reason = "apply")
     {
         SessionRevision++;
-        await gate.WaitAsync(ct); try { await ReconfigureInternal(s, ct); } finally { gate.Release(); }
+        await gate.WaitAsync(ct); try { await ReconfigureInternal(s, ct, reason: reason); } finally { gate.Release(); }
     }
-    public async Task SwitchProfileAsync(AppSettings s, CancellationToken ct = default, bool preflight = true, Func<bool>? canCommit = null)
-    {
-        var revision = ++SessionRevision;
-        if (!VpnRequested) return;
-        var snapshot = JsonSettings.Clone(s);
-        if (preflight)
-        {
-            var profile = snapshot.Profiles.FirstOrDefault(p=>p.Id==snapshot.MainProfileId && !p.IsOpenVpn) ?? throw new InvalidOperationException("Выберите VPN-профиль.");
-            var tested = PreflightOverride is {} test ? await test(profile,snapshot,ct) : await TestProfileAsync(profile,snapshot,ct);
-            if (!tested.Success) throw new InvalidDataException("Новый профиль не прошёл проверку: " + TestFeedback.Summary(tested) + ". Текущее подключение сохранено.\n" + tested.Error);
-        }
-        await gate.WaitAsync(ct);
-        try
-        {
-            if (!VpnRequested || SessionRevision != revision || canCommit?.Invoke() == false) throw new OperationCanceledException("Подключение изменено во время проверки.");
-            await ReconfigureInternal(snapshot, ct);
-        }
-        finally { gate.Release(); }
-    }
-    private async Task ReconfigureInternal(AppSettings s, CancellationToken ct,RuntimeSnapshot? previous=null)
+    private async Task ReconfigureInternal(AppSettings s, CancellationToken ct, RuntimeSnapshot? previous = null, string reason = "manual")
     {
         Reconfiguring = true; Changed?.Invoke();
+        Log?.Invoke($"ROUTER_RECONFIG reason={reason}");
         var requested=VpnRequested;
         previous ??= CaptureRuntime();
-        try { await PortStartup.RetryAsync(async _=>{VpnRequested=requested;await ReconfigureCore(s,ct,previous);return true;},ct); }
+        try { await PortStartup.RetryAsync(async attempt=>{
+            if(invalidateInternalPorts && corporateDns != null)
+            {
+                // A free-port probe is not a lease. Invalidate the entire failed
+                // return allocation before generating the next runtime config.
+                corporateDns.ReallocateReturnPorts(s.SocksPort, ListenPort, LatencyPort,
+                    openVpnSidecar?.Gateway.SocksPort ?? 0, openVpnSidecar?.Gateway.DnsPort ?? 0);
+                if(guardedVpn != null)
+                {
+                    retiredVpnReturns.Add(guardedVpn.ReturnPort);
+                    guardedVpn.SetReturnPort(PortStartup.Distinct(OpenVpnService.FreeTcpUdpPort,retiredVpnReturns
+                        .Concat([corporateDns.DirectReturnPort,corporateDns.VpnReturnPort,s.SocksPort]).Select(p=>(int?)p).ToArray()));
+                }
+                invalidateInternalPorts=false;
+                Log?.Invoke($"INTERNAL_PORT_REALLOCATE attempt={attempt+1} direct={corporateDns.DirectReturnPort} vpn={corporateDns.VpnReturnPort}");
+            }
+            try { VpnRequested=requested;await ReconfigureCore(s,ct,previous);return true; }
+            catch(Exception e) when(e is PortCollisionException || e is SocketException se && se.SocketErrorCode==SocketError.AddressAlreadyInUse)
+            { invalidateInternalPorts=true;throw; }
+        },ct); }
         finally { Reconfiguring = false; Changed?.Invoke(); }
     }
     private async Task ReconfigureCore(AppSettings s, CancellationToken ct,RuntimeSnapshot previousState)
@@ -117,30 +248,61 @@ public sealed class RouterService(string bin, string runtime) : IDisposable
         {
             core.Line += line => Log?.Invoke("sing-box: " + line);
             xray.Line += line => Log?.Invoke("Xray: " + line);
+            OpenVpn.Log += line => Log?.Invoke("OpenVPN: " + line);
+            OpenVpn.Warning += line => Log?.Invoke("OpenVPN: " + line);
             logsAttached = true;
         }
-        if (!VpnRequested && (!OpenVpn.Running || suppressOpenVpn)) { await core.StopAsync(); await xray.StopAsync(); ClearRuntimeState(true); Changed?.Invoke(); return; }
-        var physical = PhysicalNetwork.Capture(s.PhysicalInterface);
+        // OpenVPN now has its own gateway; it never needs a helper main TUN.
+        if (!VpnRequested) { await core.StopAsync(); await xray.StopAsync(); ClearRuntimeState(true); Changed?.Invoke(); return; }
+        var physical = coordinatorBinding ?? await Task.Run(() => CaptureBinding(s.PhysicalInterface), ct);
         var selected = VpnRequested ? s.Profiles.FirstOrDefault(p => p.Id == s.MainProfileId && !p.IsOpenVpn) ?? throw new InvalidOperationException("Выберите основной VPN-профиль.") : null;
         if (selected != null) SettingsMigration.NormalizeCore(selected);
         if (s.TelegramSocks && !await SocksAvailableAsync(s.TelegramSocksHost,s.TelegramSocksPort,ct))
         {
             Log?.Invoke("Внешний SOCKS5 Telegram недоступен. Маршрут Telegram сохранён; автоматического перехода на VPN нет. Проверьте сервер или отключите внешний SOCKS5.");
         }
-        Directory.CreateDirectory(runtime);
-        var localPort = s.SocksPort;
-        var owner = LocalListener.Owner(localPort);
-        if (owner != 0 && (!core.Running || owner != core.Id))
+        OpenVpnRouteJournal.CheckPath(runtime); PrivateFiles.ProtectDirectory(runtime);
+        var gateway = GatewaySidecar;
+        domainGuard.Prepare(s);
+        corporateDns?.Prepare(s);
+        if (!gateway.Running)
         {
-            localPort = AllocatePort();
+            try { await gateway.ApplyAsync(s, null, ct).ConfigureAwait(false); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { Log?.Invoke("OPENVPN_GATEWAY_REJECTING error=" + ProcessHost.Redact(ex.Message)); OpenVpnOverlayLost?.Invoke(); }
+        }
+        var localPort = s.SocksPort;
+        int?[] reserved=[gateway.Gateway.SocksPort,gateway.Gateway.DnsPort,corporateDns!.DirectPort,corporateDns.VpnPort,
+            corporateDns.DirectReturnPort,corporateDns.VpnReturnPort,guardedDirect!.Port,guardedVpn!.Port,guardedVpn.ReturnPort];
+        var owner = LocalListener.Owner(localPort);
+        if (reserved.Contains(localPort) || owner != 0 && (!core.Running || owner != core.Id))
+        {
+            localPort = PortStartup.Distinct(AllocatePort, reserved);
             Log?.Invoke($"Порт {s.SocksPort} занят другим процессом (PID {owner}). Для этой сессии выбран 127.0.0.1:{localPort}.");
         }
-        int? bridge = selected?.Core == "Xray" ? AllocateTcpUdpPort() : null;
+        int? bridge = selected?.Core == "Xray" ? PortStartup.Distinct(AllocateTcpUdpPort, reserved.Append(localPort).ToArray()) : null;
         int? latencyPort = null;
-        if (selected != null) latencyPort = PortStartup.Distinct(AllocatePort,localPort,bridge);
-        var healthPort = s.Tun && selected != null ? PortStartup.Distinct(AllocatePort,localPort,bridge,latencyPort) : 0;
-        var config = await Task.Run(() => SingBoxConfig.Build(s, physical, selected, OpenVpn.Running && !suppressOpenVpn ? OpenVpn.Link : null, s.Tun, port: localPort, xrayPort: bridge, zapretRunning: ZapretAvailable, latencyPort: latencyPort, healthSourcePort: healthPort, geodataDirectory: bin), ct);
+        if (selected != null) latencyPort = PortStartup.Distinct(AllocatePort,reserved.Concat([localPort,bridge]).ToArray());
+        var healthPort = s.Tun && selected != null ? PortStartup.Distinct(AllocatePort,reserved.Concat([localPort,bridge,latencyPort]).ToArray()) : 0;
+        bool ovpnRunning = OpenVpn.Running;
+        if (!ovpnRunning)
+        {
+            var explicitOvpn = s.Rules.Where(r => r.Enabled && r.Target == RouteTarget.OpenVpn && r.Kind == RuleKind.IpCidr).Select(r => r.Value);
+            var ovpnProf = s.Profiles.FirstOrDefault(p => p.Id == s.OpenVpnProfileId && p.IsOpenVpn);
+            var learned = ovpnProf?.LearnedRoutes ?? (IEnumerable<string>)Array.Empty<string>();
+            var blockedRoutes = explicitOvpn.Concat(learned).Where(c => !string.IsNullOrWhiteSpace(c)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            foreach (var r in blockedRoutes)
+            {
+                Log?.Invoke($"Маршрут {r} требует OpenVPN, но OpenVPN отключён.");
+            }
+        }
+        gateway.RememberRoutes(s, ovpnRunning ? OpenVpn.Link : null);
+        guardedDirect!.Bind(physical);
+        var stableGateway = gateway.Gateway with { GuardedDirectPort = guardedDirect.Port, GuardedDirectUsername = guardedDirect.Username, GuardedDirectPassword = guardedDirect.Password,
+            GuardedVpnPort=guardedVpn!.Port,VpnReturnPort=guardedVpn.ReturnPort,GuardedVpnUsername=guardedVpn.Username,GuardedVpnPassword=guardedVpn.Password,
+            GuardedDirectDnsPort=corporateDns!.DirectPort,GuardedVpnDnsPort=corporateDns.VpnPort,DirectDnsReturnPort=corporateDns.DirectReturnPort,VpnDnsReturnPort=corporateDns.VpnReturnPort };
+        var config = await Task.Run(() => SingBoxConfig.Build(s, physical, selected, null, s.Tun, port: localPort, xrayPort: bridge, zapretRunning: ZapretAvailable, latencyPort: latencyPort, healthSourcePort: healthPort, geodataDirectory: bin, openVpnGateway: stableGateway), ct);
         var next = Path.Combine(runtime, "router.next.json");
+        OpenVpnRouteJournal.CheckPath(next); OpenVpnRouteJournal.CheckPath(Path.Combine(runtime, "router.json"));
         await File.WriteAllTextAsync(next, config.ToJsonString(JsonSettings.Options), ct);
         await ValidateAsync(next, ct);
         var active = Path.Combine(runtime, "router.json"); var old = File.Exists(active) ? await File.ReadAllTextAsync(active, ct) : null;
@@ -148,6 +310,7 @@ public sealed class RouterService(string bin, string runtime) : IDisposable
         var xrayFile = Path.Combine(runtime, "xray.json");
         var oldXray = File.Exists(xrayFile) ? await File.ReadAllTextAsync(xrayFile, ct) : null;
         await core.StopAsync(); await xray.StopAsync(); LatencyPort = 0;
+        if (previousState.TunActive && StartProcessOverride == null) await TunnelInspection.WaitReleasedAsync(ct);
         try
         {
             if (bridge.HasValue) await StartXrayAsync(selected!, bridge.Value, physical, xray, Path.Combine(runtime, "xray.json"), ct, RuleValidation.Domains(s.LocalDomains));
@@ -157,20 +320,20 @@ public sealed class RouterService(string bin, string runtime) : IDisposable
             if (latencyPort.HasValue) { await WaitPortAsync(latencyPort.Value, core, ct); LatencyPort = latencyPort.Value; }
             ActiveProfileId = selected?.Id;
             requiresXray = bridge.HasValue;
-            HealthSourcePort = healthPort; TunActive = s.Tun;
+            HealthSourcePort = healthPort; TunActive = s.Tun; ActivePhysical = physical; NetworkRevision++; RecoveryStatus = "";
             Log?.Invoke($"Маршрутизатор запущен; физический адаптер: {physical.Name}; DNS: {physical.Dns}; OpenVPN: {(OpenVpn.Running ? "подключён" : "отключён")}");
         }
         catch
         {
             await core.StopAsync(); await xray.StopAsync();
             VpnRequested = false;
-            if (oldRunning && old != null)
+            if (oldRunning && old != null && !networkRefresh)
             {
                 try
                 {
                     var previous = JsonNode.Parse(old)!;
                     var previousOpenVpn = previous["outbounds"]!.AsArray().FirstOrDefault(n => n?["tag"]?.ToString() == "openvpn");
-                    if (previousOpenVpn != null && (!OpenVpn.Running || previousOpenVpn["inet4_bind_address"]?.ToString() != OpenVpn.Link?.Address)) throw new IOException("Старый OpenVPN-адаптер уже отключён.");
+                    if (previousOpenVpn?["type"]?.ToString() == "direct" && (!OpenVpn.Running || previousOpenVpn["inet4_bind_address"]?.ToString() != OpenVpn.Link?.Address)) throw new IOException("Старый OpenVPN-адаптер уже отключён.");
                     if (oldXrayRunning && oldXray != null)
                     {
                         await File.WriteAllTextAsync(xrayFile, oldXray);
@@ -180,6 +343,10 @@ public sealed class RouterService(string bin, string runtime) : IDisposable
                     await File.WriteAllTextAsync(active, old); StartCore(active);
                     await WaitPortAsync(previousState.ListenPort, core, CancellationToken.None);
                     if(previousState.LatencyPort>0) await WaitPortAsync(previousState.LatencyPort,core,CancellationToken.None);
+                    var previousInbounds=previous["inbounds"]!.AsArray();
+                    int PreviousPort(string tag)=>(int)previousInbounds.First(n=>n?["tag"]?.ToString()==tag)!["listen_port"]!;
+                    corporateDns?.RestoreReturnPorts(PreviousPort("dns-direct-return"),PreviousPort("dns-vpn-return"));
+                    guardedVpn?.SetReturnPort(PreviousPort("vpn-return"));
                     RestoreRuntime(previousState);
                     Log?.Invoke("Новая конфигурация не запустилась. Восстановлена предыдущая рабочая конфигурация.");
                 }
@@ -228,7 +395,25 @@ public sealed class RouterService(string bin, string runtime) : IDisposable
         try{return await PortStartup.RetryAsync(_=>TestProfileOnceAsync(profile,settings,ct,verbose),ct);}
         catch(PortCollisionException e){return new(false,-1,e.Message);}
     }
-    private async Task<DelayResult> TestProfileOnceAsync(Profile profile, AppSettings settings, CancellationToken ct, bool verbose)
+    private Task<DelayResult> TestProfileOnceAsync(Profile profile, AppSettings settings, CancellationToken ct, bool verbose) =>
+        RunIsolatedProfileProbeAsync(profile, settings, ct, verbose, settings.TestTimeoutSeconds,
+            (port, token) => ConnectionLatency.MeasureAsync(port, settings.TestUrl, token, settings.TestTimeoutSeconds),
+            error => new DelayResult(false, -1, error));
+
+    public async Task<TrafficTestResult> TestProfileTrafficAsync(Profile profile, AppSettings settings, CancellationToken ct)
+    {
+        // OpenVPN has a shared lifecycle; a manual data test must never start/stop it.
+        if(profile.IsOpenVpn) return TrafficTestResult.Failed("Эта проверка доступна для профилей основного VPN");
+        try
+        {
+            return await PortStartup.RetryAsync(_ => RunIsolatedProfileProbeAsync(profile, settings, ct, false, 45,
+                (port, token) => ProfileTrafficProbe.MeasureAsync(port, token), TrafficTestResult.Failed, traffic: true), ct);
+        }
+        catch(PortCollisionException) { return TrafficTestResult.Failed("Не удалось выделить локальные порты проверки"); }
+    }
+
+    private async Task<T> RunIsolatedProfileProbeAsync<T>(Profile profile, AppSettings settings, CancellationToken ct, bool verbose,
+        int timeoutSeconds, Func<int, CancellationToken, Task<T>> measure, Func<string, T> failure, bool traffic = false)
     {
         SettingsMigration.NormalizeCore(profile);
         var testGate = profile.IsOpenVpn ? gate : probes;
@@ -236,12 +421,15 @@ public sealed class RouterService(string bin, string runtime) : IDisposable
         var testRuntime = Path.Combine(runtime, "probe-" + Guid.NewGuid().ToString("N"));
         var diagnostics = new System.Collections.Concurrent.ConcurrentQueue<string>();
         bool temporaryOvpn = false;
+        ProcessHost? testCore = null, testXray = null;
         try
         {
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(settings.TestTimeoutSeconds + (profile.IsOpenVpn ? 60 : 10)));
+            OpenVpnRouteJournal.CheckPath(testRuntime);
+            PrivateFiles.ProtectDirectory(testRuntime);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds + (profile.IsOpenVpn ? 60 : 10)));
             var token = timeout.Token; var physical = PhysicalNetwork.Capture(settings.PhysicalInterface); var port = AllocatePort();
             var s = new AppSettings { SocksPort = port, Mode = RoutingMode.Global, DirectDns = settings.DirectDns, PhysicalInterface = settings.PhysicalInterface };
-            using var testCore = new ProcessHost(); using var testXray = new ProcessHost();
+            testCore = new ProcessHost(); testXray = new ProcessHost();
             void Trace(string line) { diagnostics.Enqueue(line); while(diagnostics.Count>(verbose?16:3))diagnostics.TryDequeue(out _); }
             testCore.Line+=Trace; testXray.Line+=Trace;
             JsonObject conf; int? bridge = profile.Core == "Xray" ? AllocateTcpUdpPort() : null;
@@ -264,22 +452,44 @@ public sealed class RouterService(string bin, string runtime) : IDisposable
             var path = Path.Combine(testRuntime, "test.json"); Directory.CreateDirectory(testRuntime);
             await File.WriteAllTextAsync(path, conf.ToJsonString(JsonSettings.Options), token); await ValidateAsync(path, token);
             testCore.Start(SingBox, ["run", "-c", path]); await WaitPortAsync(port, testCore, token);
-            return await ConnectionLatency.MeasureAsync(port, settings.TestUrl, token, settings.TestTimeoutSeconds);
+            return await measure(port, token);
         }
         catch (PortCollisionException) { throw; }
         catch (Exception e) when (e is not OperationCanceledException || !ct.IsCancellationRequested)
         {
+            if(traffic) return failure(e is OperationCanceledException ? "Истекло время запуска проверки" : $"Не удалось запустить ядро проверки ({e.GetType().Name})");
             var message=e is OperationCanceledException ? $"Нет HTTP-ответа за {settings.TestTimeoutSeconds} с" : e.Message;
             if (e is not OperationCanceledException)
                 for (var inner = e.InnerException; inner != null; inner = inner.InnerException) message += " · " + inner.Message;
             if(!diagnostics.IsEmpty) message+=" · "+string.Join(" · ",diagnostics);
-            return new(false,-1,ProcessHost.Redact(message));
+            return failure(ProcessHost.Redact(message));
         }
         finally
         {
-            try { if (temporaryOvpn) await OpenVpn.StopAsync(); }
-            finally { if (Directory.Exists(testRuntime)) Directory.Delete(testRuntime, true); testGate.Release(); }
+            // Wait for owned children and their output readers before deleting
+            // configs. A Windows sharing/ACL failure must never consume a probe
+            // slot permanently, including cancellation and failed startup.
+            try
+            {
+                try { await StopProbeCoreAsync(testCore); }
+                finally { await StopProbeCoreAsync(testXray); }
+            }
+            finally
+            {
+                try { if (temporaryOvpn) await OpenVpn.StopAsync(); }
+                finally
+                {
+                    try { if (Directory.Exists(testRuntime)) Directory.Delete(testRuntime, true); }
+                    finally { testGate.Release(); }
+                }
+            }
         }
+    }
+    private static async Task StopProbeCoreAsync(ProcessHost? process)
+    {
+        if (process == null) return;
+        try { await process.StopAsync().ConfigureAwait(false); }
+        finally { process.Dispose(); }
     }
     public static async Task WaitPortAsync(int port, ProcessHost process, CancellationToken ct)
     {
@@ -315,13 +525,61 @@ public sealed class RouterService(string bin, string runtime) : IDisposable
         if (validation.Code != 0) throw new InvalidDataException("Xray отклонил конфигурацию: " + ProcessHost.Redact(validation.Output));
         process.Start(exe, ["run", "-c", file]); await WaitPortAsync(port, process, ct);
     }
+    public async Task<bool> RefreshNetworkAsync(AppSettings settings, bool force, string reason, CancellationToken ct)
+    {
+        await gate.WaitAsync(ct);
+        try
+        {
+            if (!VpnRequested && !OpenVpn.Running) return false;
+            NetworkSnapshot current;
+            try { current = await Task.Run(() => CaptureBinding(settings.PhysicalInterface), ct); }
+            catch (InvalidOperationException)
+            {
+                RecoveryStatus = "Прямой маршрут временно недоступен: физический интерфейс изменился";
+                // Preserve interception with a rejecting router when possible. Merely
+                // stopping TUN would let Windows send traffic through another adapter.
+                if (ActivePhysical != null) await BlockUnavailableNetworkAsync(ct);
+                ActivePhysical = null;
+                Log?.Invoke(RecoveryStatus); Changed?.Invoke(); return false;
+            }
+            if (!force && Running && PhysicalNetwork.SameBinding(ActivePhysical, current)) return false;
+            var requested = VpnRequested;
+            var health = await TunnelInspection.ReadAsync(Running, ListenPort, TunActive, ct);
+            Log?.Invoke($"NETWORK_REBUILD revision={NetworkRevision}; reason={reason}; interface={current.Name}; index={current.Index}; IPv4={current.Address}; configured={ActivePhysical?.Address}; default={current.DefaultRoute}; IPv6={current.HasIpv6DefaultRoute}; DNS={current.Dns}; TUN={health}; VPN={ActiveProfileId}; OpenVPN={OpenVpn.ActiveProfileId}");
+            networkRefresh = true;
+            try { await ReconfigureInternal(settings, ct, reason: $"network-refresh: {reason}"); return true; }
+            catch { VpnRequested = requested; RecoveryStatus = "Восстановление сети отложено; доступна повторная попытка"; throw; }
+            finally { networkRefresh = false; }
+        }
+        finally { gate.Release(); }
+    }
+    private async Task BlockUnavailableNetworkAsync(CancellationToken ct)
+    {
+        var active = Path.Combine(runtime, "router.json");
+        if (!File.Exists(active)) return;
+        var prior = JsonNode.Parse(await File.ReadAllTextAsync(active, ct))!;
+        var blocked = new JsonObject
+        {
+            ["log"] = new JsonObject { ["level"] = "warn", ["timestamp"] = true },
+            ["inbounds"] = prior["inbounds"]!.DeepClone(),
+            ["outbounds"] = new JsonArray(new JsonObject { ["type"] = "direct", ["tag"] = "unavailable", ["bind_interface"] = ActivePhysical!.Name }),
+            ["route"] = new JsonObject { ["rules"] = new JsonArray(new JsonObject { ["action"] = "reject" }), ["final"] = "unavailable", ["default_interface"] = ActivePhysical.Name }
+        };
+        var file = Path.Combine(runtime, "router.blocked.json"); await File.WriteAllTextAsync(file, blocked.ToJsonString(), ct); await ValidateAsync(file, ct);
+        await core.StopAsync(); await xray.StopAsync();
+        if (TunActive && StartProcessOverride == null) await TunnelInspection.WaitReleasedAsync(ct);
+        File.Move(file, active, true); StartCore(active);
+        await WaitPortAsync(ListenPort, core, ct);
+        if (LatencyPort > 0) await WaitPortAsync(LatencyPort, core, ct);
+        requiresXray = false;
+    }
     public async Task StopAllAsync()
     {
         SessionRevision++; VpnRequested=false; await gate.WaitAsync();
-        try { await core.StopAsync(); await xray.StopAsync(); await OpenVpn.StopAsync(); }
+        try { if (openVpnSidecar != null) await openVpnSidecar.DeactivateAsync(); await core.StopAsync(); await xray.StopAsync(); await OpenVpn.StopAsync(); }
         finally { ClearRuntimeState(true); gate.Release(); Changed?.Invoke(); }
     }
-    public void Dispose() { try { core.Dispose(); } finally { try { xray.Dispose(); } finally { OpenVpn.Dispose(); ClearRuntimeState(true); } } }
+    public void Dispose() { try { corporateDns?.Dispose(); guardedDirect?.Dispose(); guardedVpn?.Dispose(); openVpnSidecar?.Dispose(); } finally { try { core.Dispose(); } finally { try { xray.Dispose(); } finally { OpenVpn.Dispose(); ClearRuntimeState(true); } } } }
 }
 public static class XrayConfig
 {
@@ -359,6 +617,22 @@ public static class XrayConfig
             output = new JsonObject { ["protocol"] = p.Protocol, ["settings"] = settings, ["streamSettings"] = stream };
         }
         output["tag"] = "proxy"; output["sendThrough"] = bindAddress;
+        // A separate gRPC stream per UDP source remains idle after a SOCKS UDP
+        // association closes. Real nginx frontends advertise 128 streams; the
+        // 129th source then stalls while existing TCP still works. Bound UDP
+        // carriers with XUDP instead of increasing the frontend limit. Negative
+        // TCP concurrency disables TCP mux; UDP/443 remains allowed. Explicit
+        // native Xray mux settings belong to the user and must be preserved.
+        if (output["protocol"]?.ToString() == "trojan" &&
+            output["streamSettings"]?["network"]?.ToString() == "grpc" &&
+            !output.ContainsKey("mux"))
+        {
+            output["mux"] = new JsonObject
+            {
+                ["enabled"] = true, ["concurrency"] = -1,
+                ["xudpConcurrency"] = 16, ["xudpProxyUDP443"] = "allow"
+            };
+        }
         var streamOptions = output["streamSettings"] as JsonObject ?? new JsonObject();
         if (output["streamSettings"] == null) output["streamSettings"] = streamOptions;
         var sockets = streamOptions["sockopt"] as JsonObject ?? new JsonObject();

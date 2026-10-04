@@ -7,7 +7,11 @@ public static class SettingsMigration
     {
         settings.Mode = settings.Mode is RoutingMode.Global or RoutingMode.SelectiveDirect ? RoutingMode.Global : RoutingMode.Rules;
         settings.Fallback = settings.Mode == RoutingMode.Global ? RouteTarget.Vpn : RouteTarget.Direct;
-        foreach (var profile in settings.Profiles) NormalizeCore(profile);
+        foreach (var profile in settings.Profiles)
+        {
+            profile.Name = ProfileDisplayNames.Normalize(profile.Name);
+            NormalizeCore(profile);
+        }
     }
     public static void NormalizeCore(Profile profile)
     {

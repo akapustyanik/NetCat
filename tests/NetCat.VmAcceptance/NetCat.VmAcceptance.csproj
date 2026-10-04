@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><UseWPF>true</UseWPF><IsPackable>false</IsPackable></PropertyGroup>
+  <ItemGroup><ProjectReference Include="../NetCat.Tests/NetCat.Tests.csproj" /></ItemGroup>
+  <Target Name="ExcludeReferencedUiLaunchers" AfterTargets="ComputeFilesToPublish">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(ResolvedFileToPublish.RelativePath)' == 'NetCat.exe' Or '%(ResolvedFileToPublish.RelativePath)' == 'NetCat.deps.json' Or '%(ResolvedFileToPublish.RelativePath)' == 'NetCat.runtimeconfig.json'" />
+    </ItemGroup>
+  </Target>
+</Project>

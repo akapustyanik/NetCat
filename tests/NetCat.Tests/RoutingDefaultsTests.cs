@@ -7,7 +7,7 @@ namespace NetCat.Tests;
 public sealed class RoutingDefaultsTests
 {
     private static JsonObject Build(AppSettings s, Profile? profile = null) => SingBoxConfig.Build(s,
-        new("Ethernet",24,"192.168.1.2","192.168.1.1",[]), profile, null, false, geodataDirectory:Path.Combine(RoutingTests.FindRoot(),"bin"));
+        new("Ethernet",24,"192.168.1.2","192.168.1.1",[]), profile, null, false, geodataDirectory:RoutingTests.ModuleRoot);
     [Theory][InlineData(true)][InlineData(false)]
     public void ChoosingTelegramDefaultDisablesOldExternalProxyAndPersists(bool vpn)
     {
@@ -54,7 +54,7 @@ public sealed class RoutingDefaultsTests
         Assert.Equal("category-ru",rules[2].Value);Assert.Equal(RouteTarget.Direct,rules[2].Target);
         Assert.Empty(RoutingPreset.MissingStandardRules(rules));
         rules[2].Enabled=false;rules[2].Target=RouteTarget.Vpn;Assert.Empty(RoutingPreset.MissingStandardRules(rules));
-        var database=new Geodata(Geodata.FilePath(Path.Combine(RoutingTests.FindRoot(),"bin"),RuleKind.GeoSite),false);
+        var database=new Geodata(Geodata.FilePath(RoutingTests.ModuleRoot,RuleKind.GeoSite),false);
         Assert.True(database.Contains("category-ads-all","doubleclick.net"));Assert.True(database.Contains("category-ru","yandex.ru"));
         Assert.NotNull(Build(new(){Rules=rules}));
     }
