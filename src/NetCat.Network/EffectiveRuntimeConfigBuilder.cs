@@ -14,7 +14,7 @@ public static class EffectiveRuntimeConfigBuilder
         var target = JsonSettings.Clone(persisted);
 
         // Authoritative user intent overrides: desired state is canonical
-        target.MainProfileId = desired.SelectedVpnProfileId ?? persisted.MainProfileId;
+        target.MainProfileId = desired.MainVpnEnabled ? desired.SelectedVpnProfileId ?? persisted.MainProfileId : null;
         target.OpenVpnProfileId = desired.SelectedOpenVpnProfileId ?? persisted.OpenVpnProfileId;
         target.Tun = desired.TunEnabled;
 

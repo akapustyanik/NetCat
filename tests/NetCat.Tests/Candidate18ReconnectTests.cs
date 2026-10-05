@@ -57,7 +57,7 @@ public sealed class Candidate18ReconnectTests
             lock (Routes)
             {
                 Commands.Add(cmd);
-                string prefix = Regex.Match(cmd, "-DestinationPrefix '([^']+)'").Groups[1].Value;
+                string prefix = Regex.Match(cmd, "(?:-DestinationPrefix|DestinationPrefix -eq) '([^']+)'").Groups[1].Value;
                 string gateway = Regex.Match(cmd, "(?:-NextHop|NextHop -eq) '([^']+)'").Groups[1].Value;
                 if (cmd.StartsWith("New-NetRoute"))
                 {

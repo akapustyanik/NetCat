@@ -6,7 +6,7 @@ using NetCat.Core;
 using NetCat.Engine;
 
 namespace NetCat.Network;
-public sealed record RuntimeSnapshot(Guid? ActiveProfileId,int ListenPort,int LatencyPort,int HealthSourcePort,bool TunActive,bool VpnRequested,bool RequiresXray);
+public sealed record RuntimeSnapshot(Guid? ActiveProfileId,int ListenPort,int LatencyPort,int HealthSourcePort,bool TunActive,bool VpnRequested,bool RequiresXray,bool RouterRequested = false);
 public sealed class RouterService : IDisposable, IRouterRuntime
 {
     private readonly string bin, runtime;
@@ -127,6 +127,7 @@ public sealed class RouterService : IDisposable, IRouterRuntime
         => GatewaySidecar.ApplyAsync(settings, link, ct, stillCurrent);
     public OpenVpnService OpenVpn { get; }
     public bool VpnRequested { get; private set; }
+    private bool routerRequested;
     public Guid? ActiveProfileId { get; private set; }
     public bool ZapretAvailable { get; set; }
     public bool Running => core.Running;
@@ -152,24 +153,28 @@ public sealed class RouterService : IDisposable, IRouterRuntime
         return $"{effective.VpnProfileId}|{effective.TunEnabled}|{effective.PhysicalBindingFingerprint}|{effective.RoutingRulesFingerprint}|{effective.DnsPolicyFingerprint}|{effective.OpenVpnEnabled}|{effective.LearnedOpenVpnRoutesFingerprint}";
     }
 
-    public async Task EnsureRunningAsync(AppSettings settings, NetworkSnapshot physical, string reason, CancellationToken ct)
+    public Task EnsureRunningAsync(AppSettings settings, NetworkSnapshot physical, string reason, CancellationToken ct)
+        => EnsureRunningAsync(settings, physical, true, reason, ct);
+
+    public async Task EnsureRunningAsync(AppSettings settings, NetworkSnapshot physical, bool mainVpnEnabled, string reason, CancellationToken ct)
     {
-        var profile = settings.Profiles.FirstOrDefault(p => p.Id == settings.MainProfileId && !p.IsOpenVpn);
+        var profile = mainVpnEnabled ? settings.Profiles.FirstOrDefault(p => p.Id == settings.MainProfileId && !p.IsOpenVpn)
+            ?? throw new InvalidOperationException("Выберите основной VPN-профиль.") : null;
         var targetFingerprint = ComputeConfigFingerprint(settings, physical, profile, OpenVpn.Link);
 
-        if (reason != "restart-structural-tun" && VpnRunning && !Reconfiguring && activeConfigFingerprint == targetFingerprint)
+        if (reason != "restart-structural-tun" && Running && DependenciesHealthy && !Reconfiguring && activeConfigFingerprint == targetFingerprint)
         {
             return;
         }
 
-        await SetVpnAsync(settings, true, ct, reason: reason, physical: physical);
+        await SetVpnAsync(settings, true, ct, reason: reason, physical: physical, mainVpnEnabled: mainVpnEnabled);
         activeConfigFingerprint = targetFingerprint;
         StartCount++;
     }
 
     public async Task EnsureStoppedAsync(CancellationToken ct)
     {
-        if (!VpnRequested && !Running) return;
+        if (!routerRequested && !Running) return;
         await SetVpnAsync(JsonSettings.Clone(activeSettings), false, ct, reason: "stop");
     }
 
@@ -203,9 +208,9 @@ public sealed class RouterService : IDisposable, IRouterRuntime
     {
         ActiveProfileId=null; ListenPort=LatencyPort=HealthSourcePort=0; TunActive=false; requiresXray=false;
         activeConfigFingerprint = null;
-        if(clearRequest) { VpnRequested=false; ActivePhysical=null; RecoveryStatus=""; }
+        if(clearRequest) { routerRequested=false; VpnRequested=false; ActivePhysical=null; RecoveryStatus=""; }
     }
-    public RuntimeSnapshot CaptureRuntime() => new(ActiveProfileId,ListenPort,LatencyPort,HealthSourcePort,TunActive,VpnRequested,requiresXray);
+    public RuntimeSnapshot CaptureRuntime() => new(ActiveProfileId,ListenPort,LatencyPort,HealthSourcePort,TunActive,VpnRequested,requiresXray,routerRequested);
     public ActiveTrafficStamp CaptureTrafficStamp() => new(ActiveProfileId, SessionRevision, NetworkRevision, core.Id, TunActive && VpnRunning && !Reconfiguring);
     public async Task<ActiveTrafficTest> TestActiveTrafficAsync(CancellationToken ct,
         Func<CancellationToken, Task<TrafficTestResult>>? measure = null)
@@ -220,18 +225,19 @@ public sealed class RouterService : IDisposable, IRouterRuntime
     private void RestoreRuntime(RuntimeSnapshot snapshot)
     {
         ActiveProfileId=snapshot.ActiveProfileId; ListenPort=snapshot.ListenPort; LatencyPort=snapshot.LatencyPort;
-        HealthSourcePort=snapshot.HealthSourcePort; TunActive=snapshot.TunActive; VpnRequested=snapshot.VpnRequested; requiresXray=snapshot.RequiresXray;
+        HealthSourcePort=snapshot.HealthSourcePort; TunActive=snapshot.TunActive; VpnRequested=snapshot.VpnRequested; requiresXray=snapshot.RequiresXray; routerRequested=snapshot.RouterRequested;
     }
     public string SingBox => Path.Combine(bin, "sing-box", "sing-box.exe");
-    public async Task SetVpnAsync(AppSettings s, bool enabled, CancellationToken ct = default, string reason = "vpn-toggle", NetworkSnapshot? physical = null)
+    public async Task SetVpnAsync(AppSettings s, bool enabled, CancellationToken ct = default, string reason = "vpn-toggle", NetworkSnapshot? physical = null, bool? mainVpnEnabled = null)
     {
         SessionRevision++;
         await gate.WaitAsync(ct);
-        var old = VpnRequested; var previous=CaptureRuntime();
+        var old = VpnRequested; var oldRouterRequested=routerRequested; var previous=CaptureRuntime();
         try
         {
             coordinatorBinding = physical;
-            VpnRequested = enabled;
+            routerRequested = enabled;
+            VpnRequested = enabled && (mainVpnEnabled ?? true);
             await ReconfigureInternal(s, ct, previous, reason: reason);
             activeSettings = JsonSettings.Clone(s);
             if (enabled)
@@ -244,7 +250,7 @@ public sealed class RouterService : IDisposable, IRouterRuntime
                 activeConfigFingerprint = null;
             }
         }
-        catch { VpnRequested = core.Running && old; Changed?.Invoke(); throw; }
+        catch { routerRequested = core.Running && oldRouterRequested; VpnRequested = core.Running && old; Changed?.Invoke(); throw; }
         finally { coordinatorBinding = null; gate.Release(); }
     }
     public async Task ApplyAsync(AppSettings s, CancellationToken ct = default, string reason = "apply")
@@ -256,7 +262,7 @@ public sealed class RouterService : IDisposable, IRouterRuntime
     {
         Reconfiguring = true; Changed?.Invoke();
         Log?.Invoke($"ROUTER_RECONFIG reason={reason}");
-        var requested=VpnRequested;
+        var requested=VpnRequested; var requestedRouter=routerRequested;
         previous ??= CaptureRuntime();
         try { await PortStartup.RetryAsync(async attempt=>{
             if(invalidateInternalPorts && corporateDns != null)
@@ -274,7 +280,7 @@ public sealed class RouterService : IDisposable, IRouterRuntime
                 invalidateInternalPorts=false;
                 Log?.Invoke($"INTERNAL_PORT_REALLOCATE attempt={attempt+1} direct={corporateDns.DirectReturnPort} vpn={corporateDns.VpnReturnPort}");
             }
-            try { VpnRequested=requested;await ReconfigureCore(s,ct,previous);return true; }
+            try { routerRequested=requestedRouter; VpnRequested=requested;await ReconfigureCore(s,ct,previous);return true; }
             catch(Exception e) when(e is PortCollisionException || e is SocketException se && se.SocketErrorCode==SocketError.AddressAlreadyInUse)
             { invalidateInternalPorts=true;throw; }
         },ct); }
@@ -290,8 +296,8 @@ public sealed class RouterService : IDisposable, IRouterRuntime
             OpenVpn.Warning += line => Log?.Invoke("OpenVPN: " + line);
             logsAttached = true;
         }
-        // OpenVPN now has its own gateway; it never needs a helper main TUN.
-        if (!VpnRequested) { await core.StopAsync(); await xray.StopAsync(); ClearRuntimeState(true); Changed?.Invoke(); return; }
+        // A local router can own TUN for OpenVPN without enabling a main VPN outbound.
+        if (!routerRequested) { await core.StopAsync(); await xray.StopAsync(); ClearRuntimeState(true); Changed?.Invoke(); return; }
         var physical = coordinatorBinding ?? await Task.Run(() => CaptureBinding(s.PhysicalInterface), ct);
         var selected = VpnRequested ? s.Profiles.FirstOrDefault(p => p.Id == s.MainProfileId && !p.IsOpenVpn) ?? throw new InvalidOperationException("Выберите основной VPN-профиль.") : null;
         if (selected != null) SettingsMigration.NormalizeCore(selected);
@@ -384,7 +390,7 @@ public sealed class RouterService : IDisposable, IRouterRuntime
                     var previousInbounds=previous["inbounds"]!.AsArray();
                     int PreviousPort(string tag)=>(int)previousInbounds.First(n=>n?["tag"]?.ToString()==tag)!["listen_port"]!;
                     corporateDns?.RestoreReturnPorts(PreviousPort("dns-direct-return"),PreviousPort("dns-vpn-return"));
-                    guardedVpn?.SetReturnPort(PreviousPort("vpn-return"));
+                    if (previousState.VpnRequested) guardedVpn?.SetReturnPort(PreviousPort("vpn-return"));
                     RestoreRuntime(previousState);
                     Log?.Invoke("Новая конфигурация не запустилась. Восстановлена предыдущая рабочая конфигурация.");
                 }
@@ -568,7 +574,7 @@ public sealed class RouterService : IDisposable, IRouterRuntime
         await gate.WaitAsync(ct);
         try
         {
-            if (!VpnRequested && !OpenVpn.Running) return false;
+            if (!routerRequested && !OpenVpn.Running) return false;
             NetworkSnapshot current;
             try { current = await Task.Run(() => CaptureBinding(settings.PhysicalInterface), ct); }
             catch (InvalidOperationException)
@@ -613,7 +619,7 @@ public sealed class RouterService : IDisposable, IRouterRuntime
     }
     public async Task StopAllAsync()
     {
-        SessionRevision++; VpnRequested=false; await gate.WaitAsync();
+        SessionRevision++; routerRequested=false; VpnRequested=false; await gate.WaitAsync();
         try { if (openVpnSidecar != null) await openVpnSidecar.DeactivateAsync(); await core.StopAsync(); await xray.StopAsync(); await OpenVpn.StopAsync(); }
         finally { ClearRuntimeState(true); gate.Release(); Changed?.Invoke(); }
     }

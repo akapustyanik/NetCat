@@ -462,7 +462,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
             $"Ожидают восстановления: {string.Join(", ", convergence.PendingComponents)}. {convergence.LastError}" :
         NetworkState == NetworkLifecycleState.NetworkUnavailable ? "Не удалось восстановить сеть. Нажмите «Повторить» на вкладке «Журнал»." :
         Router.RecoveryStatus.Length > 0 ? Router.RecoveryStatus :
-        !Router.VpnRequested && !Router.Reconfiguring ? "Подключите VPN для проверки доступа." :
+        !Router.VpnRequested && !Router.Reconfiguring ?
+            (Router.Running && Router.TunActive && DesiredState.OpenVpnEnabled ? "OpenVPN использует локальный TUN; основной VPN отключён." : "Подключите VPN для проверки доступа.") :
         healthDetails + (tunDiagnostics.Detail(RuntimeCoordinator?.CurrentObservedState?.TunStatus ?? TunStructuralStatus.Unknown) is { Length: > 0 } detail ? " · " + detail : "");
 
     public string VpnStatus
@@ -545,13 +546,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
                     ? $"OpenVPN: ошибка подключения, повтор через {Math.Max(1, (int)Math.Ceiling((next - (RuntimeCoordinator?.Clock.UtcNow ?? DateTimeOffset.UtcNow)).TotalSeconds))} с…"
                     : "OpenVPN: запланирован повтор подключения…",
                 OpenVpnRetryState.Starting or OpenVpnRetryState.Connecting => "OpenVPN подключается…",
-                OpenVpnRetryState.Connected => Router.TunActive ? "OpenVPN подключён" : "OpenVPN: только IP-маршруты; для корпоративных доменов включите VPN / TUN",
+                OpenVpnRetryState.Connected => Router.TunActive ? "OpenVPN подключён" : "OpenVPN: только IP-маршруты; для корпоративных доменов включите TUN",
                 _ => Router.OpenVpn.RuntimePhase switch
                 {
                     OpenVpnRuntimePhase.LongReconnect => "OpenVPN долго переподключается; корпоративные маршруты закрыты. Можно выключить или повторить подключение.",
                     OpenVpnRuntimePhase.FailedCleanup => "OpenVPN: требуется повторная очистка маршрутов",
                     OpenVpnRuntimePhase.CleanupPending or OpenVpnRuntimePhase.Stopping => "OpenVPN останавливается и очищает маршруты…",
-                    _ => Router.OpenVpn.Reconnecting ? "OpenVPN переподключается; корпоративные маршруты закрыты" : Router.OpenVpn.Running ? (Router.TunActive ? "OpenVPN подключён" : "OpenVPN: только IP-маршруты; для корпоративных доменов включите VPN / TUN") : "OpenVPN отключён"
+                    _ => Router.OpenVpn.Reconnecting ? "OpenVPN переподключается; корпоративные маршруты закрыты" : Router.OpenVpn.Running ? (Router.TunActive ? "OpenVPN подключён" : "OpenVPN: только IP-маршруты; для корпоративных доменов включите TUN") : "OpenVPN отключён"
                 }
             };
         }

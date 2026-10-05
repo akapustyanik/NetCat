@@ -77,7 +77,7 @@ public sealed class PhysicalNetworkMonitor : IDisposable
     public async Task ObserveTunnelOnceAsync(CancellationToken ct = default)
     {
         var desired = coordinator.DesiredStateProvider.GetCurrentDesiredState();
-        if (!desired.MainVpnEnabled || !desired.TunEnabled) { lastStructuralRevision = -1; return; }
+        if (!desired.RouterEnabled || !desired.TunEnabled) { lastStructuralRevision = -1; return; }
         if (coordinator.MainRouterLifecycle is MainRouterLifecycle.Starting or MainRouterLifecycle.Stopping or MainRouterLifecycle.StoppedByDesired
             || coordinator.MainRouterRetryPending) { lastStructuralRevision = -1; return; }
         var health = await coordinator.ObserveTunnelAsync("network-monitor", ct).ConfigureAwait(false);

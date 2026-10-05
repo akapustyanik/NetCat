@@ -67,8 +67,8 @@ public sealed class Candidate25Tests
         var xaml = File.ReadAllText(xamlPath);
 
         // Right panel caption must clearly explain the technical dependency on NetCat's system TUN
-        Assert.Contains("Для этих доменов необходим включённый системный TUN NetCat (работает вместе с основным VPN).", xaml);
-        Assert.Contains("Без основного VPN OpenVPN поддерживает только IP-маршруты; системный DNS не изменяется.", xaml);
+        Assert.Contains("При включённом VPN / TUN корпоративные домены работают через OpenVPN независимо от основного VPN.", xaml);
+        Assert.Contains("При выключенном TUN доступны только IP-маршруты OpenVPN; системный DNS не изменяется.", xaml);
 
         // Left panel header must be physical/direct bypass and NEVER contain the misleading "корпоративные" label
         Assert.Contains("Домены напрямую через физическую сеть", xaml);

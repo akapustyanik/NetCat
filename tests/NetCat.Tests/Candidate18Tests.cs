@@ -90,9 +90,11 @@ public sealed class Candidate18Tests : IDisposable
         using var f = new Candidate12Tests.Fixture(new SettingsStore(root));
         f.Desired.Current = f.Desired.Current with { MainVpnEnabled = false, OpenVpnEnabled = true };
         await f.Repo.UpdateSettingsAsync(s => { s.OpenVpnDomains = "corp.test"; return s; }); await f.Reconcile();
-        Assert.True(f.OpenVpn.IsRunning); Assert.False(f.Router.IsRunning); Assert.Equal(0, f.Router.Starts); Assert.Equal(0, f.Router.Overlays);
+        Assert.True(f.OpenVpn.IsRunning); Assert.True(f.Router.IsRunning); Assert.True(f.Router.TunActive);
+        Assert.Null(f.Router.ActiveProfileId); Assert.Equal(1, f.Router.Starts); Assert.Equal(0, f.Router.Overlays);
         var xaml = File.ReadAllText(Path.Combine(RoutingTests.FindRoot(), "src", "NetCat.UI", "MainWindow.xaml"));
-        Assert.Contains("Без основного VPN OpenVPN поддерживает только IP-маршруты; системный DNS не изменяется.", xaml);
+        Assert.Contains("При включённом VPN / TUN корпоративные домены работают через OpenVPN независимо от основного VPN.", xaml);
+        Assert.Contains("При выключенном TUN доступны только IP-маршруты OpenVPN; системный DNS не изменяется.", xaml);
     }
     [Fact] public void GenerationPublicationCannotOutliveInvalidation()
     {

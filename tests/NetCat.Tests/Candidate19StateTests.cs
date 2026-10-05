@@ -39,7 +39,7 @@ public sealed class Candidate19StateTests
                 CaptureRouteTableOverride = () => { lock (Routes) return Routes.ToArray(); },
                 PowerShellOverride = (command, ct) => {
                     lock (Routes) {
-                        var prefix = Regex.Match(command,"-DestinationPrefix '([^']+)'").Groups[1].Value;
+                        var prefix = Regex.Match(command,"(?:-DestinationPrefix|DestinationPrefix -eq) '([^']+)'").Groups[1].Value;
                         var gateway = Regex.Match(command,"(?:-NextHop|NextHop -eq) '([^']+)'").Groups[1].Value;
                         if (command.StartsWith("New-NetRoute")) Routes.Add(new(4242,prefix,gateway,uint.Parse(Regex.Match(command, @"-RouteMetric (\d+)").Groups[1].Value),"NetMgmt","Manual"));
                         else { if(FailCleanup) return Task.FromResult((1,"injected cleanup failure")); Routes.RemoveAll(r=>r.DestinationPrefix==prefix && r.NextHop==gateway); }

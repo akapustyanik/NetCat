@@ -190,7 +190,9 @@ public static class SingBoxConfig
         }
         route.Add(Route(new JsonObject { ["ip_is_private"] = true }, "direct"));
         // Resolve direct domains through adapter DNS BEFORE remote default. No FakeIP for LAN.
-        var fallback = s.Mode is RoutingMode.Global or RoutingMode.SelectiveDirect ? Target(RouteTarget.Vpn) : "direct";
+        // Global is a main-VPN policy. Without that transport, the OpenVPN-only
+        // carrier sends ordinary traffic directly; explicit VPN rules still reject.
+        var fallback = main != null && s.Mode is RoutingMode.Global or RoutingMode.SelectiveDirect ? Target(RouteTarget.Vpn) : "direct";
         if (fallback == "block") route.Add(new JsonObject { ["action"] = "reject" });
         var inbounds = new JsonArray(new JsonObject { ["type"] = "mixed", ["tag"] = "local", ["listen"] = "127.0.0.1", ["listen_port"] = port ?? s.SocksPort });
         if(main != null && openVpnGateway?.VpnReturnPort is {} vpnReturn)

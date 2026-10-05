@@ -195,8 +195,10 @@ public sealed class Candidate16Tests
         f.Coordinator.RequestReconcile(ReconcileReason.Startup);
         await Until(() => f.Coordinator.CurrentConvergenceState.DesiredSatisfied);
         Assert.True(f.OpenVpn.IsRunning); Assert.Equal(1, f.OpenVpn.RouteApplications);
-        Assert.Equal(0, f.Router.Starts); Assert.Equal(0, f.Tunnel.Waits);
-        Assert.Equal(MainRouterLifecycle.StoppedByDesired, f.Coordinator.MainRouterLifecycle);
+        // Independent OpenVPN now owns the local carrier, never a main VPN profile.
+        Assert.Equal(1, f.Router.Starts); Assert.Equal(1, f.Tunnel.Waits);
+        Assert.Null(f.Router.ActiveProfileId);
+        Assert.Equal(MainRouterLifecycle.Running, f.Coordinator.MainRouterLifecycle);
     }
 
     [Fact]

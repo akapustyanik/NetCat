@@ -32,9 +32,9 @@ internal sealed class Candidate26RouteFixture : IAsyncDisposable
         lock(Commands)Commands.Add(command);
         if(command.StartsWith("New-NetRoute")&&BeforeCreate!=null)await BeforeCreate(command,ct);
         ct.ThrowIfCancellationRequested();
-        var prefix=Regex.Match(command,"-DestinationPrefix '([^']+)'").Groups[1].Value;
+        var prefix=Regex.Match(command,"(?:-DestinationPrefix|DestinationPrefix -eq) '([^']+)'").Groups[1].Value;
         var gateway=Regex.Match(command,"(?:-NextHop|NextHop -eq) '([^']+)'").Groups[1].Value;
-        int index=int.Parse(Regex.Match(command,@"-InterfaceIndex (\d+)").Groups[1].Value);
+        int index=int.Parse(Regex.Match(command,@"(?:-InterfaceIndex|InterfaceIndex -eq) (\d+)").Groups[1].Value);
         uint metric=uint.Parse(Regex.Match(command,@"(?:-RouteMetric|RouteMetric -eq) (\d+)").Groups[1].Value);
         lock(Rows)
         {

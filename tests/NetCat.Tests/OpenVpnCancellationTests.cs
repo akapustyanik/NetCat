@@ -21,7 +21,8 @@ public sealed class OpenVpnCancellationTests
         Assert.True(vm.CanCancelOperation);Assert.Equal("Отменить подключение",vm.OpenVpnButton);
         if(global)vm.CancelCurrentOperation();else vm.UserRequestedOpenVpnChange(false);
         Assert.False(vm.DesiredState.OpenVpnEnabled);await pass.WaitAsync(TimeSpan.FromSeconds(3));
-        Assert.True(captured.IsCancellationRequested);Assert.False(f.OpenVpn.IsRunning);Assert.Equal(0,f.Main.Starts);
+        Assert.True(captured.IsCancellationRequested);Assert.False(f.OpenVpn.IsRunning);Assert.Equal(1,f.Main.Starts);Assert.Null(f.Main.ActiveProfileId);
+        await c.ReconcileAsync(ReconcileReason.OpenVpnStateChanged);Assert.False(f.Main.IsRunning);
         Assert.Null(c.OpenVpnRetryController.NextAttemptAt);
     }
     [Fact] public async Task OpenVpnDesiredOffCancelsCurrentAttempt()
@@ -35,7 +36,7 @@ public sealed class OpenVpnCancellationTests
     [Fact] public async Task OpenVpnDesiredOffCancelsRetryBudget()
     {using var f=new OpenVpnBehaviorFixture();f.Fail("Connection reset");await f.Pass();f.Off();f.Clock.Advance(TimeSpan.FromHours(2));await f.Storm(1);Assert.Equal(0,f.Coordinator.OpenVpnRetryController.AttemptCount);Assert.Equal(OpenVpnRetryState.Idle,f.Coordinator.OpenVpnRetryController.State);}
     [Fact] public async Task OpenVpnDesiredOffPreventsQueuedStart()
-    {using var f=new OpenVpnBehaviorFixture();f.Coordinator.Log=line=>{if(line.StartsWith("PLAN [StartOpenVpn"))f.Off();};await f.Pass();Assert.Equal(0,f.OpenVpn.Starts);}
+    {using var f=new OpenVpnBehaviorFixture();f.Coordinator.Log=line=>{if(line.StartsWith("PLAN [") && line.Contains("StartOpenVpn"))f.Off();};await f.Pass();Assert.Equal(0,f.OpenVpn.Starts);}
     [Fact] public async Task OpenVpnDesiredOffStopsOwnedChild()
     {using var f=new OpenVpnBehaviorFixture();await f.Pass();f.Off();await f.Pass();Assert.False(f.OpenVpn.IsRunning);Assert.Equal(1,f.OpenVpn.Stops);}
     [Fact] public async Task OpenVpnDesiredOffPreservesMainVpnTunRevisionAndZapret()

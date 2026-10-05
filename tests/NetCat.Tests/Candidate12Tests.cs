@@ -306,7 +306,9 @@ public sealed class Candidate12Tests : IDisposable
         f.Desired.Current = component switch
         {
             ComponentId.Zapret => f.Desired.Current with { ZapretEnabled = false },
-            ComponentId.MainRouter => f.Desired.Current with { MainVpnEnabled = false },
+            // Turning off only the main VPN now retains the OpenVPN carrier.
+            // A router stop test must also relinquish that independent owner.
+            ComponentId.MainRouter => f.Desired.Current with { MainVpnEnabled = false, OpenVpnEnabled = false },
             _ => f.Desired.Current with { OpenVpnEnabled = false }
         };
         var overlays = f.Router.Overlays; var starts = f.Router.Starts;

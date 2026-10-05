@@ -139,6 +139,11 @@ public sealed record OpenVpnRouteJournal(int Schema, Guid? ProfileId, long Gener
         var gate=Gate(path);await gate.WaitAsync().ConfigureAwait(false);
         try { await CleanupCoreAsync(path,run,capture).ConfigureAwait(false); } finally {gate.Release();}
     }
+    private static string RemovalCommand(int index,string prefix,string gateway,uint metric)
+        // Filtered CIM queries return exit 1 for an already absent route even
+        // with SilentlyContinue. Enumerate successfully first, then match the
+        // exact owned tuple. Real enumeration/removal errors remain terminating.
+        => $"Get-NetRoute -PolicyStore ActiveStore -ErrorAction Stop | Where-Object {{ $_.InterfaceIndex -eq {index} -and $_.DestinationPrefix -eq {PhysicalNetwork.Literal(prefix)} -and $_.NextHop -eq {PhysicalNetwork.Literal(gateway)} -and $_.RouteMetric -eq {metric} }} | Remove-NetRoute -Confirm:$false -ErrorAction Stop";
     private static async Task CleanupCoreAsync(string path, Func<string, CancellationToken, Task<(int Code, string Output)>> run, Func<IReadOnlyList<RouteRow>>? capture=null)
     {
         await AwaitPendingAsync(path).ConfigureAwait(false);
@@ -148,7 +153,7 @@ public sealed record OpenVpnRouteJournal(int Schema, Guid? ProfileId, long Gener
             var metric = prefix == "0.0.0.0/0" ? 9999u : journal.Metric;
             // An absent route yields an empty pipeline. A failed removal must
             // retain intent even when the caller cannot capture the route table.
-            var result = await MutateAsync(path,run, $"Get-NetRoute -InterfaceIndex {journal.InterfaceIndex} -DestinationPrefix {PhysicalNetwork.Literal(prefix)} -NextHop {PhysicalNetwork.Literal(journal.Gateway)} -PolicyStore ActiveStore -ErrorAction SilentlyContinue | Where-Object {{ $_.RouteMetric -eq {metric} }} | Remove-NetRoute -Confirm:$false -ErrorAction Stop", CancellationToken.None).ConfigureAwait(false);
+            var result = await MutateAsync(path,run, RemovalCommand(journal.InterfaceIndex,prefix,journal.Gateway,metric), CancellationToken.None).ConfigureAwait(false);
             if (result.Code != 0) throw new IOException("Не удалось удалить собственный маршрут OpenVPN; журнал сохранён.");
             if(capture?.Invoke().Any(r=>r.InterfaceIndex==journal.InterfaceIndex && r.DestinationPrefix==prefix && r.NextHop==journal.Gateway && r.RouteMetric==metric)==true)
                 throw new IOException("Удаление собственного маршрута OpenVPN не подтверждено; журнал сохранён.");
@@ -203,7 +208,7 @@ public sealed record OpenVpnRouteJournal(int Schema, Guid? ProfileId, long Gener
         // A route serving corporate DNS is generation-static even if repaired by a lease.
         if(!RequiredDnsPrefixes(link).Contains(prefix))
         {
-            var result=await MutateAsync(path,run,$"Get-NetRoute -InterfaceIndex {link.Index} -DestinationPrefix {PhysicalNetwork.Literal(prefix)} -NextHop {PhysicalNetwork.Literal(link.Gateway)} -PolicyStore ActiveStore -ErrorAction SilentlyContinue | Where-Object {{ $_.RouteMetric -eq {OwnedMetric} }} | Remove-NetRoute -Confirm:$false -ErrorAction Stop",CancellationToken.None).ConfigureAwait(false);
+            var result=await MutateAsync(path,run,RemovalCommand(link.Index,prefix,link.Gateway,OwnedMetric),CancellationToken.None).ConfigureAwait(false);
             if(result.Code!=0)throw new IOException("Destination route cleanup failed.");
         }
         await (journal with{DestinationPrefixes=journal.DestinationPrefixes.Except([prefix]).ToArray(),DnsPrefixes=RequiredDnsPrefixes(link).Contains(prefix)?journal.DnsPrefixes.Append(prefix).Distinct().ToArray():journal.DnsPrefixes}).SaveAsync(path,CancellationToken.None).ConfigureAwait(false);

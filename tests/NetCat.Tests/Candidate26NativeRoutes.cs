@@ -15,9 +15,9 @@ internal static class Candidate26NativeRoutes
         public Task<(int Code,string Output)> Run(string command,CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
-            var prefix=Regex.Match(command,"-DestinationPrefix '([^']+)'").Groups[1].Value;
+            var prefix=Regex.Match(command,"(?:-DestinationPrefix|DestinationPrefix -eq) '([^']+)'").Groups[1].Value;
             var gateway=Regex.Match(command,"(?:-NextHop|NextHop -eq) '([^']+)'").Groups[1].Value;
-            int index=int.Parse(Regex.Match(command,@"-InterfaceIndex (\d+)").Groups[1].Value);
+            int index=int.Parse(Regex.Match(command,@"(?:-InterfaceIndex|InterfaceIndex -eq) (\d+)").Groups[1].Value);
             uint metric=uint.Parse(Regex.Match(command,@"(?:-RouteMetric|RouteMetric -eq) (\d+)").Groups[1].Value);
             lock(Rows)
             {

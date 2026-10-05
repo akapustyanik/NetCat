@@ -36,7 +36,7 @@ public static class RuntimePlanner
         var actions = new List<PlanAction>();
         var pendingComponents = new List<ComponentId>();
 
-        bool anyDesired = desired.MainVpnEnabled || desired.ZapretEnabled || desired.OpenVpnEnabled;
+        bool anyDesired = desired.RouterEnabled || desired.ZapretEnabled || desired.OpenVpnEnabled;
         if (observed.PhysicalNetworkState == PhysicalNetworkAvailability.Unknown) return RuntimePlan.Empty;
 
         // 1. Physical Network Gate
@@ -46,7 +46,7 @@ public static class RuntimePlanner
                 actions.Add(new(PlanActionType.StopZapret, "Остановка Zapret", ComponentId.Zapret));
             if (!desired.OpenVpnEnabled && observed.OpenVpnStatus != ObservedComponentState.Stopped)
                 actions.Add(new(PlanActionType.StopOpenVpn, "Остановка OpenVPN", ComponentId.OpenVpnLink));
-            if (!desired.MainVpnEnabled && observed.MainRouterStatus != ObservedComponentState.Stopped)
+            if (!desired.RouterEnabled && observed.MainRouterStatus != ObservedComponentState.Stopped)
                 actions.Add(new(PlanActionType.StopMainRouter, "Остановка VPN", ComponentId.MainRouter));
             actions.Add(new PlanAction(PlanActionType.WaitForPhysicalNetwork, "Ожидание физической сети"));
             return new RuntimePlan(actions, pendingComponents, TimeSpan.Zero);
@@ -77,9 +77,9 @@ public static class RuntimePlanner
         }
 
         // 3. Main Router / TUN
-        if (desired.MainVpnEnabled)
+        if (desired.RouterEnabled)
         {
-            bool profileMismatch = desired.SelectedVpnProfileId.HasValue &&
+            bool profileMismatch = desired.MainVpnEnabled && desired.SelectedVpnProfileId.HasValue &&
                                     desired.SelectedVpnProfileId != observed.ActiveVpnProfileId;
 
             bool profileChanged = profileMismatch || (diff != null && diff.VpnProfileChanged);
@@ -160,7 +160,7 @@ public static class RuntimePlanner
                     pendingComponents.Add(ComponentId.OpenVpnLink);
                 }
             }
-            else if (observed.OpenVpnStatus != ObservedComponentState.Starting && (observed.OpenVpnRoutesInstalled != true || (diff != null && (diff.LearnedOpenVpnRoutesChanged || !desired.MainVpnEnabled && diff.HasRouterChanges)) || failureCounts.GetValueOrDefault(ComponentId.OpenVpnRoutes) > 0))
+            else if (observed.OpenVpnStatus != ObservedComponentState.Starting && (observed.OpenVpnRoutesInstalled != true || (diff != null && (diff.LearnedOpenVpnRoutesChanged || !desired.RouterEnabled && diff.HasRouterChanges)) || failureCounts.GetValueOrDefault(ComponentId.OpenVpnRoutes) > 0))
             {
                 actions.Add(new PlanAction(PlanActionType.FinalizeRouting, "Финализация маршрутов OpenVPN", ComponentId.OpenVpnRoutes));
             }
@@ -191,9 +191,9 @@ public static class RuntimePlanner
                 {
                     ComponentId.Zapret => (desired.ZapretEnabled && observed.ZapretStatus != ObservedComponentState.RunningHealthy) ||
                                           (!desired.ZapretEnabled && observed.ZapretStatus != ObservedComponentState.Stopped),
-                    ComponentId.MainRouter => (desired.MainVpnEnabled && observed.MainRouterStatus != ObservedComponentState.RunningHealthy) ||
-                                              (!desired.MainVpnEnabled && observed.MainRouterStatus != ObservedComponentState.Stopped),
-                    ComponentId.Tun => desired.MainVpnEnabled && desired.TunEnabled && (!(observed.TunObservedHealthy ?? observed.TunReady) || observed.StructuralTunFailure),
+                    ComponentId.MainRouter => (desired.RouterEnabled && observed.MainRouterStatus != ObservedComponentState.RunningHealthy) ||
+                                              (!desired.RouterEnabled && observed.MainRouterStatus != ObservedComponentState.Stopped),
+                    ComponentId.Tun => desired.RouterEnabled && desired.TunEnabled && (!(observed.TunObservedHealthy ?? observed.TunReady) || observed.StructuralTunFailure),
                     ComponentId.OpenVpnLink => (desired.OpenVpnEnabled && observed.OpenVpnStatus != ObservedComponentState.RunningHealthy) ||
                                                (!desired.OpenVpnEnabled && observed.OpenVpnStatus != ObservedComponentState.Stopped),
                     ComponentId.OpenVpnRoutes => (desired.OpenVpnEnabled && observed.OpenVpnRoutesInstalled != true) ||

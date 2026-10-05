@@ -24,6 +24,9 @@ public sealed record ZapretObservedState(
 
 public sealed record DesiredRuntimeState
 {
+    // Router ownership is independent of the main VPN transport. Explicitly
+    // disabling TUN retains OpenVPN IP-only operation. Never persist this derived state.
+    [JsonIgnore] public bool RouterEnabled => MainVpnEnabled || (OpenVpnEnabled && TunEnabled);
     public bool MainVpnEnabled { get; init; }
     public bool TunEnabled { get; init; } = true;
     public bool ZapretEnabled { get; init; }

@@ -26,6 +26,8 @@ public interface IRouterRuntime
     Guid? ActiveProfileId { get; }
     long SessionRevision { get; }
     Task EnsureRunningAsync(AppSettings settings, NetworkSnapshot physical, string reason, CancellationToken ct);
+    Task EnsureRunningAsync(AppSettings settings, NetworkSnapshot physical, bool mainVpnEnabled, string reason, CancellationToken ct)
+        => EnsureRunningAsync(settings, physical, reason, ct);
     Task EnsureStoppedAsync(CancellationToken ct);
     Task SuspendModuleAsync(string key,CancellationToken ct) => EnsureStoppedAsync(ct);
     Task RefreshPhysicalAsync(AppSettings settings, NetworkSnapshot physical, string reason, CancellationToken ct);

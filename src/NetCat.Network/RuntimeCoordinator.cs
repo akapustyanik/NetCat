@@ -304,7 +304,7 @@ public sealed class RuntimeCoordinator : IDisposable
         lock (syncRoot)
         {
             lifecycle = mainRouterLifecycle;
-            if (!desired.MainVpnEnabled || !desired.TunEnabled) lifecycle = MainRouterLifecycle.StoppedByDesired;
+            if (!desired.RouterEnabled || !desired.TunEnabled) lifecycle = MainRouterLifecycle.StoppedByDesired;
             revision = lifecycleRevision;
         }
         var raw = await TunnelInspector.InspectAsync(RouterRuntime.IsRunning, RouterRuntime.ListenPort,
@@ -336,7 +336,7 @@ public sealed class RuntimeCoordinator : IDisposable
         publishedHealthSequence = sequence;
         return observed with
         {
-            MainRouterStatus = RouterRuntime.VpnRunning
+            MainRouterStatus = RouterHealthy
                 ? (health.StructuralFailure ? ObservedComponentState.RunningDegraded : ObservedComponentState.RunningHealthy)
                 : ObservedComponentState.Stopped,
             TunHealth = health.HealthState, TunStatus = health.StructuralStatus,
@@ -347,17 +347,20 @@ public sealed class RuntimeCoordinator : IDisposable
         });
     }
 
+    private bool RouterHealthy => RouterRuntime.IsRunning && RouterRuntime.DependenciesHealthy &&
+        (!DesiredStateProvider.GetCurrentDesiredState().MainVpnEnabled || RouterRuntime.VpnRunning);
+
     private void ObserveRouterLifecycle(DesiredRuntimeState desired)
     {
-        if (!desired.MainVpnEnabled)
+        if (!desired.RouterEnabled)
         {
-            SetRouterLifecycle(RouterRuntime.IsRunning || RouterRuntime.VpnRunning
+            SetRouterLifecycle(RouterRuntime.IsRunning || RouterHealthy
                 ? MainRouterLifecycle.Stopping
                 : MainRouterLifecycle.StoppedByDesired, "desired-off");
             return;
         }
 
-        if (RouterRuntime.VpnRunning)
+        if (RouterHealthy)
         {
             // Keep Starting until WaitTunReady has positively observed the
             // tunnel.  A non-TUN router can be considered running directly.
@@ -534,7 +537,7 @@ public sealed class RuntimeCoordinator : IDisposable
         bool tunConfigured = RouterRuntime.TunActive;
         TunStructuralStatus tunStatus = tunHealth.StructuralStatus;
         bool tunObservedHealthy = tunStatus == TunStructuralStatus.Healthy && !tunHealth.StructuralFailure;
-        bool structuralTunFailure = desired.MainVpnEnabled && desired.TunEnabled && tunHealth.StructuralFailure;
+        bool structuralTunFailure = desired.RouterEnabled && desired.TunEnabled && tunHealth.StructuralFailure;
         Log?.Invoke($"TUN_OBSERVE processAlive={tunHealth.CoreProcessHealthy} interfacePresent={tunHealth.TunInterfacePresent} routesPresent={tunHealth.TunRoutesPresent} localDataPath={tunHealth.LocalDataPathHealthy} rawClassification={tunHealth.StructuralStatus} runtimeLifecycle={mainRouterLifecycle} finalStatus={tunStatus} generation={gen}");
         if (mainRouterLifecycle == MainRouterLifecycle.Starting && tunHealth.StructuralFailure)
             Log?.Invoke("TUN_SIGNAL suppressed=StructuralFailure reason=runtime-is-starting");
@@ -544,7 +547,7 @@ public sealed class RuntimeCoordinator : IDisposable
         var observedZapret = ZapretRuntime.IsRunning
             ? (zapretDetail == null || zapretDetail.IsReady && zapretDetail.Owned ? ObservedComponentState.RunningHealthy : ObservedComponentState.RunningDegraded)
             : ObservedComponentState.Stopped;
-        var observedRouter = RouterRuntime.VpnRunning ? (structuralTunFailure ? ObservedComponentState.RunningDegraded : ObservedComponentState.RunningHealthy) :
+        var observedRouter = RouterHealthy ? (structuralTunFailure ? ObservedComponentState.RunningDegraded : ObservedComponentState.RunningHealthy) :
                              RouterRuntime.IsRunning ? ObservedComponentState.RunningDegraded : ObservedComponentState.Stopped;
         var dependenciesHealthy = RouterRuntime.DependenciesHealthy;
         lock (syncRoot)
@@ -570,9 +573,9 @@ public sealed class RuntimeCoordinator : IDisposable
         {
             // A failed stop may have terminated the process but left cleanup unfinished.
             // Only successful execution clears its retry; process absence alone does not.
-            if (desired.MainVpnEnabled && desired.TunEnabled && tunObservedHealthy && !structuralTunFailure)
+            if (desired.RouterEnabled && desired.TunEnabled && tunObservedHealthy && !structuralTunFailure)
                 componentRetries.Remove(ComponentId.Tun);
-            if (!desired.MainVpnEnabled || !desired.TunEnabled) componentRetries.Remove(ComponentId.Tun);
+            if (!desired.RouterEnabled || !desired.TunEnabled) componentRetries.Remove(ComponentId.Tun);
 
             openVpnRoutesPendingRetry = componentRetries.ContainsKey(ComponentId.OpenVpnRoutes);
         }
@@ -752,10 +755,10 @@ public sealed class RuntimeCoordinator : IDisposable
 
                 settings = GetSettings();
                 effectiveConfig = EffectiveRuntimeConfigBuilder.Build(settings, desired, physical, CurrentOpenVpnRoutes(desired));
-                if (desired.MainVpnEnabled && action.Type is PlanActionType.StartMainRouter or PlanActionType.RestartMainRouterForStructuralTunFailure
+                if (desired.RouterEnabled && action.Type is PlanActionType.StartMainRouter or PlanActionType.RestartMainRouterForStructuralTunFailure
                     or PlanActionType.EnsureMainRouterForProfileChange or PlanActionType.EnsureMainRouterForPhysicalBinding or PlanActionType.WaitTunReady)
                 {
-                    var startedAndHealthy = mainRouterStartedInBatch && RouterRuntime.VpnRunning && RouterRuntime.DependenciesHealthy;
+                    var startedAndHealthy = mainRouterStartedInBatch && RouterHealthy && RouterRuntime.DependenciesHealthy;
                     lock(syncRoot)
                     {
                         // Suppression belongs to the component/configuration, not
@@ -775,7 +778,7 @@ public sealed class RuntimeCoordinator : IDisposable
                 {
                     case PlanActionType.WaitForPhysicalNetwork:
                         SetRestoreState(StartupRestoreState.WaitingForNetwork);
-                        SetConvergenceState(new RuntimeConvergenceState(false, false, new[] { desired.MainVpnEnabled ? ComponentId.MainRouter : (ComponentId?)null, desired.ZapretEnabled ? ComponentId.Zapret : null, desired.OpenVpnEnabled ? ComponentId.OpenVpnLink : null }.Where(c => c.HasValue).Select(c => c!.Value).ToArray(), "Ожидание физической сети", Phase: ConvergencePhase.WaitingForPhysicalNetwork, LastBlockingCondition: "Физическая сеть недоступна"));
+                        SetConvergenceState(new RuntimeConvergenceState(false, false, new[] { desired.RouterEnabled ? ComponentId.MainRouter : (ComponentId?)null, desired.ZapretEnabled ? ComponentId.Zapret : null, desired.OpenVpnEnabled ? ComponentId.OpenVpnLink : null }.Where(c => c.HasValue).Select(c => c!.Value).ToArray(), "Ожидание физической сети", Phase: ConvergencePhase.WaitingForPhysicalNetwork, LastBlockingCondition: "Физическая сеть недоступна"));
                         Log?.Invoke($"PHYSICAL_NETWORK generation={PhysicalNetwork.PhysicalGeneration} state=unavailable");
                         Log?.Invoke("ACTION WaitForPhysicalNetwork result=waiting");
                         return TimeSpan.Zero;
@@ -847,14 +850,14 @@ public sealed class RuntimeCoordinator : IDisposable
                                 var reasonStr = action.Type == PlanActionType.RestartMainRouterForStructuralTunFailure
                                     ? "restart-structural-tun"
                                     : "reconcile-main-vpn";
-                                await RouterRuntime.EnsureRunningAsync(effectiveConfig.TargetSettings ?? settings, physical, reasonStr, token).ConfigureAwait(false);
+                                await RouterRuntime.EnsureRunningAsync(effectiveConfig.TargetSettings ?? settings, physical, desired.MainVpnEnabled, reasonStr, token).ConfigureAwait(false);
                                 // Successful local startup still requires authoritative TUN
                                 // readiness in this batch. Retaining the Xray failure budget
                                 // must suppress new launches, not this validation step.
                                 mainRouterStartedInBatch = true;
                                 lastAppliedConfig = (lastAppliedConfig ?? EffectiveRuntimeConfig.Empty) with
                                 {
-                                    VpnEnabled = true,
+                                    VpnEnabled = desired.MainVpnEnabled,
                                     TunEnabled = desired.TunEnabled,
                                     VpnProfileId = effectiveConfig.VpnProfileId,
                                     RoutingRulesFingerprint = effectiveConfig.RoutingRulesFingerprint,
@@ -914,7 +917,7 @@ public sealed class RuntimeCoordinator : IDisposable
                         {
                             if (physical != null)
                             {
-                                var targetProfileId = desired.SelectedVpnProfileId ?? settings.MainProfileId;
+                                var targetProfileId = desired.MainVpnEnabled ? desired.SelectedVpnProfileId ?? settings.MainProfileId : null;
                                 var targetSettings = effectiveConfig.TargetSettings ?? settings;
                                 if (targetProfileId.HasValue && targetSettings.MainProfileId != targetProfileId)
                                 {
@@ -927,12 +930,12 @@ public sealed class RuntimeCoordinator : IDisposable
                                     : "reconcile-physical-binding";
 
                                 Log?.Invoke($"VPN_PROFILE intent old={observed.ActiveVpnProfileId} new={targetProfileId}");
-                                await RouterRuntime.EnsureRunningAsync(targetSettings, physical, reasonStr, token).ConfigureAwait(false);
+                                await RouterRuntime.EnsureRunningAsync(targetSettings, physical, desired.MainVpnEnabled, reasonStr, token).ConfigureAwait(false);
                                 Log?.Invoke($"VPN_PROFILE applied={targetProfileId}");
 
                                 lastAppliedConfig = (lastAppliedConfig ?? EffectiveRuntimeConfig.Empty) with
                                 {
-                                    VpnEnabled = true,
+                                    VpnEnabled = desired.MainVpnEnabled,
                                     TunEnabled = desired.TunEnabled,
                                     VpnProfileId = targetProfileId,
                                     RoutingRulesFingerprint = effectiveConfig.RoutingRulesFingerprint,
@@ -1005,7 +1008,7 @@ public sealed class RuntimeCoordinator : IDisposable
                         try
                         {
                             await RouterRuntime.EnsureStoppedAsync(token).ConfigureAwait(false);
-                            if (RouterRuntime.VpnRunning) throw new IOException("Основной VPN продолжает работать после остановки.");
+                            if (RouterRuntime.IsRunning) throw new IOException("Локальный маршрутизатор продолжает работать после остановки.");
                             lastAppliedConfig = (lastAppliedConfig ?? EffectiveRuntimeConfig.Empty) with
                             {
                                 VpnEnabled = false
@@ -1236,7 +1239,7 @@ public sealed class RuntimeCoordinator : IDisposable
             ActiveVpnProfileId = RouterRuntime.ActiveProfileId,
             ActiveOpenVpnProfileId = OpenVpnRuntime.ActiveProfileId,
             ActiveZapretStrategy = ZapretRuntime.ActiveStrategy,
-            MainRouterStatus = RouterRuntime.VpnRunning ? ((current ?? observed).StructuralTunFailure ? ObservedComponentState.RunningDegraded : ObservedComponentState.RunningHealthy) : ObservedComponentState.Stopped,
+            MainRouterStatus = RouterHealthy ? ((current ?? observed).StructuralTunFailure ? ObservedComponentState.RunningDegraded : ObservedComponentState.RunningHealthy) : ObservedComponentState.Stopped,
             ZapretStatus = ZapretRuntime.IsRunning ? ObservedComponentState.RunningHealthy : ObservedComponentState.Stopped,
             OpenVpnStatus = ObserveOpenVpn(targetOpenVpn),
             OpenVpnRoutesInstalled = finalOpenVpnRoutesInstalled,
@@ -1438,12 +1441,12 @@ public sealed class RuntimeCoordinator : IDisposable
                 await ZapretRuntime.EnsureRunningAsync(target,null,token).ConfigureAwait(false);
                 if(!ZapretRuntime.IsRunning||ZapretRuntime.ObservedState is {IsReady:false})throw new IOException("Zapret update startup failed.");
             }
-            if(routerAffected&&desired.MainVpnEnabled)
+            if(routerAffected&&desired.RouterEnabled)
             {
                 if(physical==null||!PhysicalNetworkProvider.IsUsable(physical))throw new IOException("Physical network unavailable during update validation.");
                 SetRouterLifecycle(MainRouterLifecycle.Starting,"module-update");
-                await RouterRuntime.EnsureRunningAsync(target,physical,"module-update",token).ConfigureAwait(false);
-                if(!RouterRuntime.VpnRunning||!RouterRuntime.DependenciesHealthy)throw new IOException("Router update startup failed.");
+                await RouterRuntime.EnsureRunningAsync(target,physical,desired.MainVpnEnabled,"module-update",token).ConfigureAwait(false);
+                if(!RouterHealthy||!RouterRuntime.DependenciesHealthy)throw new IOException("Router update startup failed.");
                 var health=await TunnelInspector.WaitForTunReadyAsync(()=>RouterRuntime.IsRunning,()=>RouterRuntime.ListenPort,desired.TunEnabled,MainRouterLifecycle.Starting,TunReadyTimeout,token).ConfigureAwait(false);
                 if(health.StructuralFailure)throw new IOException("Router update datapath validation failed.");
                 SetRouterLifecycle(MainRouterLifecycle.Running,"module-update");

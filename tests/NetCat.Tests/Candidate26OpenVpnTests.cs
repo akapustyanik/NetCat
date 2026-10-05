@@ -79,7 +79,8 @@ public sealed class Candidate26OpenVpnTests
         Assert.Equal(OpenVpnRetryState.RetryScheduled,f.Coordinator.OpenVpnRetryController.State);
         f.Clock.Advance(TimeSpan.FromSeconds(5));await f.Pass();
         Assert.Equal(2,f.OpenVpn.Starts);Assert.True(f.OpenVpn.IsRunning);
-        Assert.Equal(0,f.Main.Starts);Assert.Equal(0,f.Main.Stops);
+        // The independent carrier starts once and survives link recovery.
+        Assert.Equal(1,f.Main.Starts);Assert.Null(f.Main.ActiveProfileId);Assert.Equal(0,f.Main.Stops);
     }
     [Fact] public async Task PhysicalGenerationChangeRequiresNewDatapathProof()
     {
