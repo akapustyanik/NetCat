@@ -718,11 +718,23 @@ public partial class MainWindow : Window
                     ct));
     }
     private async void StopTelegram_Click(object sender, RoutedEventArgs e) => await VM.RunAsync(ct=>VM.SetTelegramEnabledAsync(false,ct));
-    private void TelegramLink_Click(object sender, RoutedEventArgs e) { if(telegram.Running) { Clipboard.SetText(telegram.Link); VM.Status="Ссылка подключения скопирована. Откройте её в Telegram."; } }
-    private void OpenTelegram_Click(object sender, RoutedEventArgs e) { if(telegram.Running) OpenTelegramProxy(); }
+    private void TelegramLink_Click(object sender, RoutedEventArgs e)
+    {
+        if (!telegram.TryGetProxyLink(out var link, out _)) { VM.Status="Telegram WS proxy ещё не готов. Дождитесь запуска."; return; }
+        VM.Status = JournalActionFeedback.TryCopy(link, Clipboard.SetText)
+            ? "Ссылка подключения скопирована. Откройте её в Telegram."
+            : "Буфер обмена недоступен. Повторите копирование ссылки Telegram.";
+    }
+    private void OpenTelegram_Click(object sender, RoutedEventArgs e) => OpenTelegramProxy();
     private void OpenTelegramProxy()
     {
-        var result = journalShell.OpenTelegramProxy(telegram.Link, telegram.Port, Clipboard.SetText, out var message);
+        if (!telegram.TryGetProxyLink(out var link, out var port))
+        {
+            VM.Status="Telegram WS proxy ещё не готов. Дождитесь запуска.";
+            VM.WriteLog("UI_ACTION page=telegram action=open-proxy result=not-ready");
+            return;
+        }
+        var result = journalShell.OpenTelegramProxy(link, port, Clipboard.SetText, out var message);
         VM.Status = message;
         VM.WriteLog("UI_ACTION page=telegram action=open-proxy result=" + JournalResult(result));
     }

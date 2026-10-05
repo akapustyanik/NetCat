@@ -11,12 +11,24 @@ public sealed class TelegramService(string bin, string runtime) : IDisposable
     // for the primary DC WebSocket path, so forcing zero disables that path.
     private const string RunnerScript = "import sys, json\nfrom proxy.tg_ws_proxy import main\nwith open(sys.argv[1], encoding='utf-8') as f: c=json.load(f)\nsys.argv=['tg-ws-proxy','--host','127.0.0.1','--port',str(c['port']),'--secret',c['secret']]\nmain()\n";
     public bool Running => process.Running;
+    private sealed record ProxyConnection(int Port, string Link);
+    private volatile ProxyConnection? connection;
+    public bool Ready => Running && connection != null;
     public int Port { get; private set; }
-    public string Link { get; private set; } = "";
+    public string Link => Running ? connection?.Link ?? "" : "";
+    public bool TryGetProxyLink(out string link, out int port)
+    {
+        // Read a single published generation: Stop/update may clear readiness
+        // between the button binding and its already queued click handler.
+        var current = connection;
+        if (current == null || !Running) { link = ""; port = 0; return false; }
+        link = current.Link; port = current.Port; return true;
+    }
     public event Action<string>? Log;
     public async Task StartAsync(AppSettings settings, CancellationToken ct)
     {
         if (Running) return;
+        connection = null;
         if (!System.Text.RegularExpressions.Regex.IsMatch(settings.TelegramWsSecret, "^[a-fA-F0-9]{32}$")) settings.TelegramWsSecret = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
         Port = settings.TelegramWsPort;
         if (Port is < 1 or > 65535) throw new FormatException("Порт Telegram: от 1 до 65535.");
@@ -33,15 +45,16 @@ public sealed class TelegramService(string bin, string runtime) : IDisposable
         await WriteLockedAsync(runner, RunnerScript, ct);
             process.Start(Path.Combine(bin,"tg-runtime","NetCat.Telegram.exe"), ["-I","-B","-u",runner,config]);
             await RouterService.WaitPortAsync(Port,process,ct);
-            Link = $"tg://proxy?server=127.0.0.1&port={Port}&secret=dd{settings.TelegramWsSecret}";
+            connection = new(Port, $"tg://proxy?server=127.0.0.1&port={Port}&secret=dd{settings.TelegramWsSecret}");
             Log?.Invoke($"Telegram WS proxy запущен в фоне: 127.0.0.1:{Port}");
         }
         catch { await StopAsync(); throw; }
     }
     public async Task StopAsync()
     {
+        connection = null;
         try { await process.StopAsync(); }
-        finally { Link=""; ReleaseLaunchFiles(); PrivateFiles.DeleteSecrets(runtime,"telegram.json","telegram_runner.py"); }
+        finally { ReleaseLaunchFiles(); PrivateFiles.DeleteSecrets(runtime,"telegram.json","telegram_runner.py"); }
     }
     private async Task WriteLockedAsync(string path,string text,CancellationToken ct)
     {
@@ -50,5 +63,5 @@ public sealed class TelegramService(string bin, string runtime) : IDisposable
         await file.WriteAsync(System.Text.Encoding.UTF8.GetBytes(text),ct);await file.FlushAsync(ct);
     }
     private void ReleaseLaunchFiles(){foreach(var file in launchFiles)file.Dispose();launchFiles.Clear();}
-    public void Dispose() { process.Dispose(); ReleaseLaunchFiles(); PrivateFiles.DeleteSecrets(runtime,"telegram.json","telegram_runner.py"); }
+    public void Dispose() { connection = null; process.Dispose(); ReleaseLaunchFiles(); PrivateFiles.DeleteSecrets(runtime,"telegram.json","telegram_runner.py"); }
 }

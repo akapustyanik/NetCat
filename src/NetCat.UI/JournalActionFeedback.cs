@@ -21,9 +21,16 @@ public sealed class UnelevatedExplorerShellLauncher : IUnelevatedShellLauncher
 
     public ShellHandoffResult OpenTelegramProxy(string generatedUri, int localPort, Action<string> copyToClipboard, out string message)
     {
+        try { ValidateTelegramProxyUri(generatedUri, localPort); }
+        catch (InvalidOperationException)
+        {
+            // A startup/restart link is not a shell failure and must never be
+            // passed to Explorer or offered as a clipboard fallback.
+            message = "Локальный прокси Telegram ещё не готов или ссылка недействительна.";
+            return ShellHandoffResult.Failed;
+        }
         try
         {
-            ValidateTelegramProxyUri(generatedUri, localPort);
             OpenVerifiedTarget(generatedUri);
             message = "Telegram открыт для подключения локального прокси.";
             return ShellHandoffResult.OpenedUnelevatedShell;
@@ -138,7 +145,7 @@ public static class JournalActionFeedback
 {
     public static bool TryCopy(string text, Action<string> setClipboard, int attempts = 3, Action<int>? wait = null)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(text);
+        if (string.IsNullOrWhiteSpace(text)) return false;
         ArgumentNullException.ThrowIfNull(setClipboard);
         if (attempts < 1) throw new ArgumentOutOfRangeException(nameof(attempts));
 

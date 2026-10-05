@@ -449,8 +449,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
     public string LocalEndpoint => Router.Running ? $"HTTP / SOCKS5 · 127.0.0.1:{Router.ListenPort}" : $"HTTP / SOCKS5 · 127.0.0.1:{State.SocksPort}";
     public bool VpnConnected => Router.VpnRunning;
     public bool TelegramRunning => Telegram.Running;
+    public bool TelegramReady => Telegram.Ready;
     public bool ZapretRunning => Zapret.Running;
-    public string TelegramStatus => Telegram.Running ? $"Работает · 127.0.0.1:{Telegram.Port}" : "WS proxy выключен";
+    public string TelegramStatus => Telegram.Ready ? $"Работает · 127.0.0.1:{Telegram.Port}" : Telegram.Running ? "WS proxy запускается…" : "WS proxy выключен";
     public string TelegramButton => Telegram.Running ? "Остановить" : "Включить";
     private string healthDetails = "Подключите VPN для проверки доступа.";
     private int healthPort;
@@ -733,7 +734,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
         OnPropertyChanged(nameof(ActiveTrafficSummary)); OnPropertyChanged(nameof(ActiveTrafficDetails));
         if (healthPort != Router.LatencyPort) { healthPort=Router.LatencyPort; healthDetails="Проверяю профиль и системный маршрут. Это займёт несколько секунд."; }
         OnPropertyChanged(nameof(CanSelectOpenVpn)); OnPropertyChanged(nameof(OpenVpnProfile));
-        foreach (var property in new[] { nameof(HealthDetails), nameof(VpnStatus), nameof(VpnButton), nameof(OpenVpnStatus), nameof(OpenVpnButton), nameof(CanCancelOperation), nameof(CanCancelOpenVpn), nameof(ZapretStatus), nameof(Scenario), nameof(ProfileDetails), nameof(VpnConnected), nameof(LocalEndpoint), nameof(TelegramStatus), nameof(TelegramButton), nameof(TelegramRunning), nameof(ZapretRunning) }) OnPropertyChanged(property);
+        foreach (var property in new[] { nameof(HealthDetails), nameof(VpnStatus), nameof(VpnButton), nameof(OpenVpnStatus), nameof(OpenVpnButton), nameof(CanCancelOperation), nameof(CanCancelOpenVpn), nameof(ZapretStatus), nameof(Scenario), nameof(ProfileDetails), nameof(VpnConnected), nameof(LocalEndpoint), nameof(TelegramStatus), nameof(TelegramButton), nameof(TelegramRunning), nameof(TelegramReady), nameof(ZapretRunning) }) OnPropertyChanged(property);
         foreach(var strategy in Strategies)
         {
             strategy.IsActive = Zapret.Running && Path.GetFileName(strategy.File) == Zapret.ActiveStrategy;
@@ -750,14 +751,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
             logQueue.Add("DIRECT_BIND_STALE · refresh scheduled");
         }
     }
-    private (bool Running,bool Requested,bool Tun,int Port,bool OpenVpn,Guid? OpenVpnId,OpenVpnRuntimePhase OpenVpnPhase,OpenVpnRetryState RetryState,bool Zapret,string Strategy,bool Telegram)? runtimeSnapshot;
+    private (bool Running,bool Requested,bool Tun,int Port,bool OpenVpn,Guid? OpenVpnId,OpenVpnRuntimePhase OpenVpnPhase,OpenVpnRetryState RetryState,bool Zapret,string Strategy,bool Telegram,bool TelegramReady)? runtimeSnapshot;
     public void PollRuntimeState()
     {
         if(activeTrafficTest is { Unavailable.Length: 0 } && activeTrafficTest.Validate(Router.CaptureTrafficStamp()) is { Unavailable.Length: > 0 } invalidated)
         {
             activeTrafficTest = invalidated; NotifyState();
         }
-        var next=(Router.Running,Router.VpnRequested,Router.TunActive,Router.LatencyPort,Router.OpenVpn.Running,Router.OpenVpn.ActiveProfileId,Router.OpenVpn.RuntimePhase,RuntimeCoordinator?.OpenVpnRetryController?.State ?? OpenVpnRetryState.Idle,Zapret.Running,Zapret.ActiveStrategy,Telegram.Running);
+        var next=(Router.Running,Router.VpnRequested,Router.TunActive,Router.LatencyPort,Router.OpenVpn.Running,Router.OpenVpn.ActiveProfileId,Router.OpenVpn.RuntimePhase,RuntimeCoordinator?.OpenVpnRetryController?.State ?? OpenVpnRetryState.Idle,Zapret.Running,Zapret.ActiveStrategy,Telegram.Running,Telegram.Ready);
         if(runtimeSnapshot==next)return;
         runtimeSnapshot=next;NotifyState();
     }
