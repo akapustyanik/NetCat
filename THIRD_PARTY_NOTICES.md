@@ -55,8 +55,9 @@ NetCat integrates and interacts with several third-party open-source components 
 
 ### 8. tg-ws-proxy & Embedded Python Runtime
 - **Upstream:** [https://github.com/Flowseal/tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy) and [https://www.python.org/](https://www.python.org/)
-- **License:** MIT License (tg-ws-proxy) / Python Software Foundation License (Python 3.12 embedded)
+- **License:** MIT License (tg-ws-proxy) / Python Software Foundation License (Python 3.13 embedded)
 - **Usage:** Standalone runtime directory (`modules/tg-runtime/`, `modules/tg-ws-proxy/`). Used as an optional local WebSocket proxy for Telegram MTProto.
+- **HTTP/2 dependencies:** HTTPX, HTTPCore, AnyIO, h11, h2, HPACK, Hyperframe, IDNA and typing_extensions. Their upstream license files are included in the runtime's `Lib/site-packages/*.dist-info` directories.
 ---
 
 ### 9. Bouncy Castle Cryptography (.NET)

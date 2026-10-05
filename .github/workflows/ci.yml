@@ -38,6 +38,8 @@ jobs:
           foreach ($entry in Get-ChildItem -LiteralPath (Join-Path $bundleStage 'modules')) {
             Copy-Item -LiteralPath $entry.FullName -Destination $moduleRoot -Recurse
           }
+          python -B scripts/Add-TelegramHttp2Runtime.py --runtime (Join-Path $moduleRoot 'tg-runtime') --cache (Join-Path $env:RUNNER_TEMP 'telegram-http2-wheels')
+          if ($LASTEXITCODE -ne 0) { throw 'Reviewed Telegram HTTP/2 dependencies failed' }
 
       - name: Run tests
         run: dotnet test NetCat.sln -c Release --no-restore

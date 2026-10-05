@@ -7,6 +7,9 @@ public sealed class TelegramService(string bin, string runtime) : IDisposable
 {
     private readonly ProcessHost process = new();
     private readonly List<FileStream> launchFiles = [];
+    // Let upstream choose its connection-pool default. v1.11 uses the pool
+    // for the primary DC WebSocket path, so forcing zero disables that path.
+    private const string RunnerScript = "import sys, json\nfrom proxy.tg_ws_proxy import main\nwith open(sys.argv[1], encoding='utf-8') as f: c=json.load(f)\nsys.argv=['tg-ws-proxy','--host','127.0.0.1','--port',str(c['port']),'--secret',c['secret']]\nmain()\n";
     public bool Running => process.Running;
     public int Port { get; private set; }
     public string Link { get; private set; } = "";
@@ -27,7 +30,7 @@ public sealed class TelegramService(string bin, string runtime) : IDisposable
         await WriteLockedAsync(config, JsonSerializer.Serialize(new { port = Port, secret = settings.TelegramWsSecret }), ct);
         var runner = Path.Combine(runtime, "telegram_runner.py");
         // Upstream CLI only; no tray/UI modules are imported. Secret is not placed in the process command line.
-        await WriteLockedAsync(runner, "import sys, json\nfrom proxy.tg_ws_proxy import main\nwith open(sys.argv[1], encoding='utf-8') as f: c=json.load(f)\nsys.argv=['tg-ws-proxy','--host','127.0.0.1','--port',str(c['port']),'--secret',c['secret'],'--pool-size','0']\nmain()\n", ct);
+        await WriteLockedAsync(runner, RunnerScript, ct);
             process.Start(Path.Combine(bin,"tg-runtime","NetCat.Telegram.exe"), ["-I","-B","-u",runner,config]);
             await RouterService.WaitPortAsync(Port,process,ct);
             Link = $"tg://proxy?server=127.0.0.1&port={Port}&secret=dd{settings.TelegramWsSecret}";

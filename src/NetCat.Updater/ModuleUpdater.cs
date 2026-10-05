@@ -853,8 +853,7 @@ public sealed partial class ModuleUpdater(string bin, Func<int>? proxyPort = nul
                 var file=Path.Combine(staging,path); Directory.CreateDirectory(Path.GetDirectoryName(file)!); await File.WriteAllBytesAsync(file,bytes,ct);
             }
             if (!File.Exists(Path.Combine(staging,"proxy","tg_ws_proxy.py"))) throw new InvalidDataException("Нет CLI-модуля Telegram.");
-            var validation=await ProcessHost.RunAsync(Path.Combine(bin,"tg-runtime","NetCat.Telegram.exe"),["-c","import sys; sys.path.insert(0,sys.argv[1]); import proxy.tg_ws_proxy",staging],ct);
-            if(validation.Code!=0) throw new InvalidDataException("Новая версия Telegram несовместима со встроенной средой. Обновление не применено.");
+            await ValidateTelegramAsync(staging,ct);
             if(!IsTrustedDirectUpstreamRelease(release))
             {
                 throw new InvalidDataException(
@@ -881,6 +880,27 @@ public sealed partial class ModuleUpdater(string bin, Func<int>? proxyPort = nul
             try { Directory.Move(staging,target); } catch { if(!Directory.Exists(target)&&Directory.Exists(backup)) Directory.Move(backup,target); throw; }
         }
         finally { if(Directory.Exists(staging)) Directory.Delete(staging,true); }
+    }
+    private async Task ValidateTelegramAsync(string staging,CancellationToken ct)
+    {
+        // Match the production interpreter flags. Validation must not mutate
+        // the reviewed runtime or populate the candidate with bytecode.
+        const string script = "import sys\nsys.path.insert(0,sys.argv[1])\ntry:\n import proxy.tg_ws_proxy\nexcept ModuleNotFoundError as error:\n print('NETCAT_MISSING_MODULE:' + str(error.name))\n sys.exit(78)\n";
+        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(TimeSpan.FromSeconds(30));
+        var validation=await ProcessHost.RunAsync(
+            Path.Combine(bin,"tg-runtime","NetCat.Telegram.exe"),
+            ["-I","-B","-c",script,staging],deadline.Token);
+        if(validation.Code==0)return;
+
+        // Only expose a validated dependency name, never arbitrary process output.
+        var missing=System.Text.RegularExpressions.Regex.Match(
+            validation.Output,@"(?m)^NETCAT_MISSING_MODULE:([A-Za-z_][A-Za-z0-9_.]{0,99})\r?$");
+        if(validation.Code==78 && missing.Success)
+            throw new InvalidDataException(
+                $"Новая версия Telegram требует библиотеку {missing.Groups[1].Value}, которой нет во встроенной среде. Обновите NetCat. Работающий модуль не заменён.");
+        throw new InvalidDataException(
+            "Новая версия Telegram несовместима со встроенной средой. Обновление не применено.");
     }
     private sealed record PreparedModule(
         ModuleRelease Release,

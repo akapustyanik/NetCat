@@ -32,6 +32,9 @@ Copy-Item -LiteralPath (Join-Path $taskRuntime 'python.exe') -Destination (Join-
 @('python313.zip','.','Lib/site-packages','../tg-ws-proxy') | Set-Content (Join-Path $taskRuntime 'python313._pth') -Encoding ascii
 $taskWheels=Join-Path $taskCache 'wheels'
 New-Item -ItemType Directory -Force $taskWheels | Out-Null
+# v1.11.0 imports HTTP/2 unconditionally, including when --no-h2 is used.
+# Bundle its headless dependencies with NetCat; the module updater must never
+# install arbitrary packages into an already reviewed interpreter at runtime.
 python -m pip download --index-url https://pypi.org/simple --only-binary=:all: --platform win_amd64 --python-version 313 --dest $taskWheels 'cryptography==46.0.5' certifi
 if($LASTEXITCODE -ne 0) { throw 'Python wheel download failed' }
 $taskPackages=Join-Path $taskRuntime 'Lib/site-packages'
@@ -51,5 +54,7 @@ foreach($taskWheel in (Get-ChildItem $taskWheels -Filter '*.whl')) {
     $taskRecords+=@{file=$taskWheel.Name;sha256=$taskSha}
 }
 @{python='3.13.15';pythonSha256=(Get-FileHash $taskPython).Hash.ToLowerInvariant();sourceTree=$taskTree.sha;wheels=$taskRecords} | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $taskRuntime 'runtime.lock.json') -Encoding utf8
-& (Join-Path $taskRuntime 'NetCat.Telegram.exe') -c "import proxy.tg_ws_proxy; import cryptography; print('Headless Telegram imports OK')"
+python -B (Join-Path $PSScriptRoot 'Add-TelegramHttp2Runtime.py') --runtime $taskRuntime --cache (Join-Path $taskCache 'http2-wheels')
+if($LASTEXITCODE -ne 0) { throw 'Reviewed Telegram HTTP/2 dependency installation failed' }
+& (Join-Path $taskRuntime 'NetCat.Telegram.exe') -I -B -c "import proxy.tg_ws_proxy; import cryptography, httpx, h2; print('Headless Telegram imports OK')"
 if($LASTEXITCODE -ne 0) { throw 'Headless import check failed' }
