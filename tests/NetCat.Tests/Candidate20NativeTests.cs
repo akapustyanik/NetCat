@@ -32,7 +32,7 @@ public sealed class Candidate20NativeTests
         public readonly AppSettings Settings;
         public readonly Resolver Ordinary = new("127.0.0.3", 3, 53);
         public readonly Resolver Corporate = new("127.0.0.1", 1);
-        public readonly int DnsPort = OpenVpnService.FreeTcpUdpPort();
+        public int DnsPort = OpenVpnService.FreeTcpUdpPort();
         public readonly TcpListener Echo = new(IPAddress.Any, 0);
         public readonly NetworkSnapshot Physical;
         public CancellationToken Token => Timeout.Token;
@@ -64,6 +64,11 @@ public sealed class Candidate20NativeTests
                         File.Copy(original,frozen,true);ruleSet["path"]=frozen;
                     }
                     if(vpnDns && config["dns"]!["servers"]!.AsArray().First(s=>s!["tag"]!.ToString()==(config["dns"]!["servers"]!.AsArray().Any(n=>n!["tag"]!.ToString()=="dns-vpn-origin")?"dns-vpn-origin":"dns-vpn")) is {} vpn && vpn["type"]!.ToString()=="https") { var servers=config["dns"]!["servers"]!.AsArray(); var i=servers.IndexOf(vpn); servers[i]=new System.Text.Json.Nodes.JsonObject{["type"]="udp",["tag"]=vpn["tag"]!.ToString(),["server"]="127.0.0.3",["server_port"]=Ordinary.Port}; }
+                    // This injected test listener is outside RouterService's
+                    // allocator. Allocate after its real inbounds are known and
+                    // retire the prior candidate on a bounded startup retry.
+                    DnsPort = PortStartup.Distinct(OpenVpnService.FreeTcpUdpPort, config["inbounds"]!.AsArray()
+                        .Select(n => n?["listen_port"]?.GetValue<int>()).Append(DnsPort).ToArray());
                     config["inbounds"]!.AsArray().Add(new System.Text.Json.Nodes.JsonObject{["type"]="direct",["tag"]="dns-probe",["listen"]="127.0.0.1",["listen_port"]=DnsPort,["network"]="udp",["override_address"]="1.1.1.1",["override_port"]=53});
                     File.WriteAllText(file,config.ToJsonString());
                 }

@@ -157,7 +157,7 @@ public static class SingBoxConfig
             route.Add(Route(new JsonObject { ["rule_set"] = Array(["openvpn-domains"]) }, "openvpn"));
             AddDns(Dns(new JsonObject { ["rule_set"] = Array(["openvpn-domains"]) }, "dns-openvpn", "ipv4_only"));
         }
-        else AddDomains(RuleValidation.Domains(s.OpenVpnDomains), Target(RouteTarget.OpenVpn));
+        else if (openVpnGateway != null || ovpn != null) AddDomains(RuleValidation.Domains(s.OpenVpnDomains), Target(RouteTarget.OpenVpn));
         AddDomains(RuleValidation.Domains(s.LocalDomains).Concat(physical.Suffixes).Concat(["local", "lan", "localdomain", "home.arpa"]), "direct");
         route.Add(Route(new JsonObject { ["domain_regex"] = Array(["^[^.]+$"]) }, "direct"));
         AddDns(Dns(new JsonObject { ["domain_regex"] = Array(["^[^.]+$"]) }, "dns-direct", physical.HasIpv6DefaultRoute ? null : "ipv4_only"));
@@ -183,7 +183,7 @@ public static class SingBoxConfig
             .ToArray();
         if (openVpnGateway is { TransportKey: null })
             route.Add(Route(new JsonObject { ["rule_set"] = Array(["openvpn-owned"]) }, "openvpn"));
-        else if (openVpnGateway == null && openVpnOwnedCidrs.Length > 0)
+        else if (openVpnGateway == null && ovpn != null && openVpnOwnedCidrs.Length > 0)
         {
             var target = ovpn != null ? "openvpn" : "block";
             route.Add(Route(new JsonObject { ["ip_cidr"] = Array(openVpnOwnedCidrs) }, target));

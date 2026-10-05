@@ -21,6 +21,7 @@ internal sealed class GuardedDirectGateway : IDisposable
     private NetworkSnapshot? physical;
     private readonly ConcurrentDictionary<long, (IPAddress? Destination, CancellationTokenSource Stop)> sessions = new();
     private long sequence;
+    private bool protectionEnabled = true;
     private readonly LocalSocksAdmission admission = new();
 
     public CorporateDomainGuard DomainGuard { get; }
@@ -36,10 +37,19 @@ internal sealed class GuardedDirectGateway : IDisposable
     }
 
     public void Bind(NetworkSnapshot value) { lock (gate) physical = value; }
+    public void SetProtectionEnabled(bool value)
+    {
+        lock (gate)
+        {
+            protectionEnabled = value;
+            if (!value) { known = []; candidates.Clear(); }
+            Rebuild();
+        }
+    }
 
     public void Candidate(Guid profile, long generation, IReadOnlyList<string> prefixes)
     {
-        lock (gate) { candidates[(profile, generation)] = prefixes.ToArray(); Rebuild(); }
+        lock (gate) { if (!protectionEnabled) return; candidates[(profile, generation)] = prefixes.ToArray(); Rebuild(); }
     }
 
     public void ClearCandidate(Guid profile, long generation)
@@ -55,14 +65,14 @@ internal sealed class GuardedDirectGateway : IDisposable
             var ids = settings.Profiles.Where(p => p.IsOpenVpn).Select(p => p.Id).ToHashSet();
             foreach (var id in candidates.Keys.Where(id => !ids.Contains(id.Profile)).ToArray()) candidates.Remove(id);
             if (link?.ProfileId is { } active) candidates.Remove((active, link.Generation));
-            known = ownership.Known;
+            known = protectionEnabled ? ownership.Known : [];
             Rebuild();
         }
     }
 
     private void Rebuild()
     {
-        blocked = known.Concat(candidates.Values.SelectMany(x => x)).Distinct().Select(prefix => {
+        blocked = (protectionEnabled ? known.Concat(candidates.Values.SelectMany(x => x)) : []).Distinct().Select(prefix => {
             var parts = prefix.Split('/'); var ip = OpenVpnPushParser.Ipv4(parts[0]); int bits = int.Parse(parts[1]);
             return (System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(ip.GetAddressBytes()), bits);
         }).ToArray();

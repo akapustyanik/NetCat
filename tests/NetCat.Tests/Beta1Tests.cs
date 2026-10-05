@@ -825,7 +825,10 @@ public sealed class Beta1Tests : IDisposable
         var settings = new AppSettings
         {
             OpenVpnProfileId = ovpnProfile.Id,
-            Profiles = [ovpnProfile]
+            Profiles = [ovpnProfile],
+            // Explicit user OpenVPN routes still require that tunnel. Automatic
+            // remembered prefixes are released on intentional OFF separately.
+            Rules = [new() { Kind = RuleKind.IpCidr, Value = "10.0.117.0/24", Target = RouteTarget.OpenVpn }]
         };
 
         var config = SingBoxConfig.Build(settings, physical, null, null, false);

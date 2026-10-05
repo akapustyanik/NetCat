@@ -44,7 +44,11 @@ public sealed class RouterService : IDisposable, IRouterRuntime
     private readonly CorporateDomainGuard domainGuard = new();
     public CorporateDomainGuard DomainGuard => domainGuard;
     private readonly object gatewayLock = new();
-    public bool OpenVpnGatewayReady => openVpnSidecar?.Running ?? !IsRunning;
+    // Standalone callers retain the guarded contract until intent is supplied.
+    // RuntimeCoordinator always publishes authoritative ON/OFF before routing.
+    private volatile bool openVpnRoutingRequested = true;
+    private volatile bool openVpnOwnershipReleasePending;
+    public bool OpenVpnGatewayReady => !openVpnOwnershipReleasePending && (openVpnSidecar?.Running ?? !IsRunning);
     public void InvalidateOpenVpnOverlay() => openVpnSidecar?.Invalidate();
     public bool OpenVpnOverlayReady => openVpnSidecar?.Active == true;
     public event Action? OpenVpnOverlayLost;
@@ -57,6 +61,38 @@ public sealed class RouterService : IDisposable, IRouterRuntime
             guardedDirect?.Update(settings, OpenVpn.Link, OpenVpnOwnership.Build(settings, OpenVpn.Link));
         }
     }
+    public void PrepareDomainOwnership(AppSettings settings, bool openVpnRequested)
+    {
+        lock (gatewayLock)
+        {
+            openVpnRoutingRequested = openVpnRequested;
+            if (openVpnRequested) openVpnOwnershipReleasePending = false;
+            domainGuard.SetEnabled(openVpnRequested);
+            guardedDirect?.SetProtectionEnabled(openVpnRequested);
+            if (openVpnSidecar != null)
+            {
+                openVpnSidecar.RoutingRequested = openVpnRequested;
+                // Existing main processes watch these rule-set files. Releasing
+                // automatic domains/prefixes does not restart main VPN or TUN.
+                if (!openVpnRequested)
+                {
+                    try { openVpnSidecar.RememberRoutes(settings); openVpnOwnershipReleasePending = false; }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                    {
+                        // Keep UI intent/cancellation usable. The coordinator's
+                        // existing overlay retry handles locked ownership files.
+                        openVpnOwnershipReleasePending = true;
+                        Log?.Invoke("OPENVPN_OFF release=pending error=" + ProcessHost.Redact(ex.Message));
+                    }
+                }
+            }
+            PrepareDomainOwnership(settings);
+        }
+    }
+    public void PrepareDomainOwnership(AppSettings settings, Func<bool> openVpnRequested)
+    {
+        lock (gatewayLock) PrepareDomainOwnership(settings, openVpnRequested());
+    }
     private OpenVpnSidecar GatewaySidecar
     {
         get
@@ -65,10 +101,12 @@ public sealed class RouterService : IDisposable, IRouterRuntime
             {
             if (openVpnSidecar != null) return openVpnSidecar;
             guardedDirect ??= new(domainGuard);
+            guardedDirect.SetProtectionEnabled(openVpnRoutingRequested);
             corporateDns ??= new(domainGuard);
             if(guardedVpn == null) { guardedVpn = new(domainGuard); guardedVpn.Start(PortStartup.Distinct(OpenVpnService.FreeTcpUdpPort,
                 corporateDns.DirectReturnPort,corporateDns.VpnReturnPort,corporateDns.DirectPort,corporateDns.VpnPort,guardedDirect.Port,guardedVpn.Port)); }
             openVpnSidecar = new(SingBox, Path.Combine(runtime, "openvpn-gateway"), OpenVpn.DestinationLeases) { Log = line => Log?.Invoke(line), OwnershipPrepared = (settings,link,ownership) => { domainGuard.Prepare(settings); corporateDns.Prepare(settings); guardedDirect.Update(settings,link,ownership); } };
+            openVpnSidecar.RoutingRequested = openVpnRoutingRequested;
             OpenVpn.CandidateGenerationPrepared += guardedDirect.Candidate;
             OpenVpn.CandidateGenerationInvalidated += guardedDirect.ClearCandidate;
             openVpnSidecar.ProcessExited += (_, _) => OpenVpnOverlayLost?.Invoke();
@@ -288,7 +326,7 @@ public sealed class RouterService : IDisposable, IRouterRuntime
         {
             var explicitOvpn = s.Rules.Where(r => r.Enabled && r.Target == RouteTarget.OpenVpn && r.Kind == RuleKind.IpCidr).Select(r => r.Value);
             var ovpnProf = s.Profiles.FirstOrDefault(p => p.Id == s.OpenVpnProfileId && p.IsOpenVpn);
-            var learned = ovpnProf?.LearnedRoutes ?? (IEnumerable<string>)Array.Empty<string>();
+            var learned = openVpnRoutingRequested ? ovpnProf?.LearnedRoutes ?? (IEnumerable<string>)Array.Empty<string>() : [];
             var blockedRoutes = explicitOvpn.Concat(learned).Where(c => !string.IsNullOrWhiteSpace(c)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
             foreach (var r in blockedRoutes)
             {

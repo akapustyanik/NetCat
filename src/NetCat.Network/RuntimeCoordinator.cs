@@ -147,7 +147,7 @@ public sealed class RuntimeCoordinator : IDisposable
         var desiredNow = DesiredStateProvider.GetCurrentDesiredState();
         if (!desiredNow.OpenVpnEnabled) CancelOpenVpnOperation();
         var settingsNow = GetSettings();
-        RouterRuntime.PrepareDomainOwnership(settingsNow);
+        RouterRuntime.PrepareDomainOwnership(settingsNow, () => DesiredStateProvider.GetCurrentDesiredState().OpenVpnEnabled);
         var profileNow = settingsNow.Profiles.FirstOrDefault(p => p.Id == (desiredNow.SelectedOpenVpnProfileId ?? settingsNow.OpenVpnProfileId) && p.IsOpenVpn);
         if (OpenVpnRuntime.Reconnecting && (!desiredNow.OpenVpnEnabled || profileNow == null || profileNow.Id != OpenVpnRuntime.ActiveProfileId || OpenVpnRuntime.NeedsRestart(profileNow)))
             OpenVpnRuntime.CancelPendingConnection();
@@ -495,6 +495,8 @@ public sealed class RuntimeCoordinator : IDisposable
         // Always reread fresh desired state
         var desired = DesiredStateProvider.GetCurrentDesiredState();
         var settings = GetSettings();
+
+        RouterRuntime.PrepareDomainOwnership(settings, () => DesiredStateProvider.GetCurrentDesiredState().OpenVpnEnabled);
 
         ObserveRouterLifecycle(desired);
         if (physicalNetworkAvailability == PhysicalNetworkAvailability.Unknown)

@@ -33,6 +33,8 @@ public interface IRouterRuntime
     Task ApplyOpenVpnOverlayAsync(AppSettings settings, OpenVpnLink? link, Func<bool> stillCurrent, CancellationToken ct)
         => stillCurrent() ? ApplyOpenVpnOverlayAsync(settings, link, ct) : Task.FromCanceled(new CancellationToken(true));
     void PrepareDomainOwnership(AppSettings settings) { }
+    void PrepareDomainOwnership(AppSettings settings, bool openVpnRequested) => PrepareDomainOwnership(settings);
+    void PrepareDomainOwnership(AppSettings settings, Func<bool> openVpnRequested) => PrepareDomainOwnership(settings, openVpnRequested());
 }
 
 public interface IZapretRuntime

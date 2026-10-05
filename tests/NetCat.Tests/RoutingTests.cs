@@ -56,7 +56,8 @@ public sealed class RoutingTests
     [Fact]
     public void OpenVpnDomainsFailClosedWhenDisconnected()
     {
-        var config = SingBoxConfig.Build(new AppSettings { OpenVpnDomains = "office.example" }, Physical, Vless(), null, true);
+        // An explicit user rule must not silently switch transports on OFF.
+        var config = SingBoxConfig.Build(new AppSettings { OpenVpnDomains = "office.example", Rules = [new() { Kind = RuleKind.Domain, Value = "office.example", Target = RouteTarget.OpenVpn }] }, Physical, Vless(), null, true);
         var route = config["route"]!["rules"]!.AsArray().First(n => n?["domain_suffix"]?.ToJsonString().Contains("office.example") == true)!;
         Assert.Equal("reject", route["action"]!.ToString());
         var dns = config["dns"]!["rules"]!.AsArray().First(n => n?["domain_suffix"]?.ToJsonString().Contains("office.example") == true)!;

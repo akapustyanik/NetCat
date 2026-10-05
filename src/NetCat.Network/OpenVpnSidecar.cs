@@ -23,6 +23,12 @@ public sealed class OpenVpnSidecar : IDisposable
     private readonly object ownershipGate = new();
     private readonly object publicationGate = new();
     private OpenVpnLink? lastUnscopedLink;
+    private volatile bool routingRequested = true;
+    public bool RoutingRequested
+    {
+        get => routingRequested;
+        set { lock (ownershipGate) { routingRequested = value; if (!value) lastUnscopedLink = null; } }
+    }
     public OpenVpnOwnership Ownership { get; private set; } = new([], []);
     private string? applied;
     private (Guid?, long, Guid)? appliedGeneration;
@@ -63,14 +69,14 @@ public sealed class OpenVpnSidecar : IDisposable
             if (stillCurrent?.Invoke() == false) throw new OperationCanceledException("Состояние OpenVPN изменилось.");
             ValidateOwner(link);
 
-            if (link is { ProfileId: null }) lastUnscopedLink = link;
-            Ownership = OpenVpnOwnership.Build(settings, link);
+            if (routingRequested && link is { ProfileId: null }) lastUnscopedLink = link;
+            Ownership = routingRequested ? OpenVpnOwnership.Build(settings, link) : new([], []);
             OwnershipPrepared?.Invoke(settings, link, Ownership);
 
             if (stillCurrent?.Invoke() == false) throw new OperationCanceledException("Состояние OpenVPN изменилось.");
 
             WriteRules(Gateway.DomainsPath, new JsonObject { ["version"] = 3, ["rules"] =
-                string.IsNullOrWhiteSpace(settings.OpenVpnDomains) ? new JsonArray() : new JsonArray(new JsonObject { ["domain_suffix"] = SingBoxConfig.Array(RuleValidation.Domains(settings.OpenVpnDomains)) }) }.ToJsonString());
+                !routingRequested || string.IsNullOrWhiteSpace(settings.OpenVpnDomains) ? new JsonArray() : new JsonArray(new JsonObject { ["domain_suffix"] = SingBoxConfig.Array(RuleValidation.Domains(settings.OpenVpnDomains)) }) }.ToJsonString());
             var knownRoutes = Ownership.Known.Concat(lastUnscopedLink?.LearnedRoutes ?? []).Distinct().Order().ToArray();
             var rules = new JsonObject { ["version"] = 3, ["rules"] = knownRoutes.Length == 0 ? new JsonArray() :
                 new JsonArray(new JsonObject { ["ip_cidr"] = SingBoxConfig.Array(knownRoutes.Order()) }) };

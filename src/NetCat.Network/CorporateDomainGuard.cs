@@ -15,6 +15,20 @@ public sealed class CorporateDomainGuard
     private string[] known = [];
     private volatile string[] activeSnapshot = [];
     private long revision;
+    private bool enabled = true;
+
+    // Intentional OFF releases automatic ownership. A lost link while the user
+    // still requests OpenVPN must keep the activation/reconnect barrier.
+    public void SetEnabled(bool value)
+    {
+        lock (gate)
+        {
+            if (enabled == value) return;
+            enabled = value;
+            if (!value) candidates.Clear();
+            Rebuild();
+        }
+    }
 
     public long Revision => Interlocked.Read(ref revision);
 
@@ -58,6 +72,7 @@ public sealed class CorporateDomainGuard
 
         lock (gate)
         {
+            if (!enabled) return;
             candidates[(profile, generation)] = canonical;
             Rebuild();
         }
@@ -99,7 +114,7 @@ public sealed class CorporateDomainGuard
 
     private void Rebuild()
     {
-        var all = known.Concat(candidates.Values.SelectMany(x => x))
+        var all = (enabled ? known.Concat(candidates.Values.SelectMany(x => x)) : [])
             .Distinct(StringComparer.Ordinal)
             .OrderByDescending(s => s.Length)
             .ToArray();
