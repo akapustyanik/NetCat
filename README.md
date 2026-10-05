@@ -8,7 +8,7 @@ NetCat — portable-приложение для Windows, объединяюще�
 - Профили sing-box и Xray: VLESS, VMess, Trojan, Shadowsocks, Hysteria2, TUIC и Naive.
 - TUN и правила для приложений, доменов и IP-адресов.
 - Проверки подключения и передачи данных, мониторинг и автосмена профилей.
-- OpenVPN для корпоративной сети, Zapret и Telegram WS proxy.
+- OpenVPN для корпоративной сети независимо от основного VPN, Zapret и Telegram WS proxy.
 - Обновление подписок и модулей, автозапуск и работа в системном трее.
 
 ## Требования
@@ -17,13 +17,13 @@ Windows 10/11 x64. Для TUN, маршрутов и Zapret нужны прав�
 
 ## Установка
 
-Скачайте `NetCat-v1.0.0-win-x64.zip` из [Releases](https://github.com/akapustyanik/NetCat/releases),
+Скачайте `NetCat-v1.0.1-win-x64.zip` из [Releases](https://github.com/akapustyanik/NetCat/releases),
 распакуйте в отдельную папку и запустите `NetCat.exe`.
 
 ## Обновления
 
 Архивы проверяются по SHA256 и подписанному Ed25519-манифесту.
-EXE версии 1.0.0 не имеет Authenticode-подписи; Windows может показать предупреждение.
+EXE версии 1.0.1 не имеет Authenticode-подписи; Windows может показать предупреждение.
 Обновление самой программы выполняется вручную: проверка издателя в updater сохранена.
 
 ## Разработка

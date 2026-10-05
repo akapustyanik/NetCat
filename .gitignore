@@ -68,4 +68,5 @@ venv/
 /docs/*.txt
 /docs/releases/*
 !/docs/releases/v1.0.0.md
+!/docs/releases/v1.0.1.md
 /scripts/Test-ZapretLifetime.ps1
