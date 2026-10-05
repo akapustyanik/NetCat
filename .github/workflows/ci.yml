@@ -21,12 +21,23 @@ jobs:
       - name: Restore dependencies
         run: dotnet restore NetCat.sln
 
-      - name: Fetch modules
+      - name: Install reviewed release modules
+        shell: pwsh
         run: |
-          powershell -ExecutionPolicy Bypass -File scripts/Fetch-OfficialModules.ps1
-          powershell -ExecutionPolicy Bypass -File scripts/Fetch-TelegramHeadless.ps1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          $ErrorActionPreference = 'Stop'
+          $bundleArchive = Join-Path $env:RUNNER_TEMP 'NetCat-v1.0.0-win-x64.zip'
+          $bundleStage = Join-Path $env:RUNNER_TEMP 'NetCat-reviewed-v1.0.0'
+          $moduleRoot = Join-Path $PWD 'bin'
+          Invoke-WebRequest 'https://github.com/akapustyanik/NetCat/releases/download/v1.0.0/NetCat-v1.0.0-win-x64.zip' -OutFile $bundleArchive
+          $expected = '524e7708f8f4144e244e0fb4d6a7fa8bbe52098dc92b2b01458a25f96f494dc8'
+          if ((Get-FileHash -LiteralPath $bundleArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) {
+            throw 'Reviewed release bundle SHA256 mismatch'
+          }
+          Expand-Archive -LiteralPath $bundleArchive -DestinationPath $bundleStage
+          New-Item -ItemType Directory -Force -Path $moduleRoot | Out-Null
+          foreach ($entry in Get-ChildItem -LiteralPath (Join-Path $bundleStage 'modules')) {
+            Copy-Item -LiteralPath $entry.FullName -Destination $moduleRoot -Recurse
+          }
 
       - name: Run tests
         run: dotnet test NetCat.sln -c Release --no-restore

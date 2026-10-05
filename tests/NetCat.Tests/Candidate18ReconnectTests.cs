@@ -43,6 +43,9 @@ public sealed class Candidate18ReconnectTests
                 CreateAdapterOverride = () => new NoAdapter(),
                 StartProcessOverride = host => host.Start(ProcessHost.PowerShellPath, ["-NoProfile", "-NonInteractive", "-Command", script], log: false),
                 CaptureLinkOverride = g => new("Fixture-OpenVPN", 4242, Address, g.Gateway, g.Dns, g.Routes),
+                // The simulated link and routes require a simulated physical LAN.
+                // A runner's real 10.1/20 LAN otherwise rejects the fixture PUSH.
+                CapturePhysicalPrefixes = () => ["192.168.77.0/24"],
                 CaptureRouteTableOverride = () => { lock (Routes) return FailVerification && Installs > 0 ? [] : Routes.ToArray(); },
                 PowerShellOverride = Run
             };
@@ -86,6 +89,15 @@ public sealed class Candidate18ReconnectTests
         }
         public async ValueTask DisposeAsync()
         { try { await Service.StopAsync(); } finally { Service.Dispose(); Directory.Delete(Root, true); } }
+    }
+    [Fact] public async Task ControlledFixtureStillRejectsCorporateOverlapBeforeRouteInstall()
+    {
+        await using var f = new Fixture();
+        f.Push("192.168.77.0", "192.168.77.53", "192.168.77.1");
+        using var ct = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await Assert.ThrowsAsync<InvalidDataException>(() => f.Service.StartAsync(f.Profile, "", ct.Token));
+        Assert.Empty(f.Routes);
+        Assert.False(f.Service.Running);
     }
     [Fact] public async Task InProcessOpenVpnReconnectIsObservedWithoutProcessExit()
     {
