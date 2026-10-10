@@ -33,10 +33,10 @@ function Get-GitHubModule([string]$Key, [string]$Repo, [string]$Tag, [string]$Pa
     $script:records += @{ key=$Key; repo=$Repo; version=$Tag; asset=$asset.name; url=$asset.browser_download_url; sha256=$expected; verified='GitHub release asset SHA-256' }
     Write-Host "$Key $Tag verified"
 }
-Get-GitHubModule 'sing-box' 'SagerNet/sing-box' 'v1.14.2' '^sing-box-1\.14\.2-windows-amd64\.zip$' 'sing-box.exe'
+Get-GitHubModule 'sing-box' 'SagerNet/sing-box' 'v1.14.3' '^sing-box-1\.14\.3-windows-amd64\.zip$' 'sing-box.exe'
 Get-GitHubModule 'xray' 'XTLS/Xray-core' 'v26.3.27' '^Xray-windows-64\.zip$' 'xray.exe'
 Get-GitHubModule 'zapret' 'Flowseal/zapret-discord-youtube' '1.10.3' '\.zip$' 'winws.exe'
-Get-GitHubModule 'tg-ws-proxy' 'Flowseal/tg-ws-proxy' 'v1.10.4' '^TgWsProxy_windows\.exe$' 'TgWsProxy_windows.exe'
+Get-GitHubModule 'tg-ws-proxy' 'Flowseal/tg-ws-proxy' 'v1.11.1' '^TgWsProxy_windows\.exe$' 'TgWsProxy_windows.exe'
 $wintunZip = Join-Path $cache 'wintun-0.14.1.zip'
 if (-not (Test-Path $wintunZip)) { Receive-ModuleFile 'https://www.wintun.net/builds/wintun-0.14.1.zip' $wintunZip }
 Expand-Archive -LiteralPath $wintunZip -DestinationPath (Join-Path $cache 'wintun') -Force

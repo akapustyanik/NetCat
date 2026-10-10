@@ -68,14 +68,20 @@ public static class ModuleIntegrity
                     .Select(p=>new KeyValuePair<string,string>(module+"/"+p.Key,p.Value)).ToArray();
             var actual=SafeFiles(folder).Where(p=>Path.GetExtension(p).ToLowerInvariant() is ".exe" or ".dll" or ".sys")
                 .Select(p=>module+"/"+Path.GetRelativePath(folder,p).Replace('\\','/')).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            if (!actual.SetEquals(expected.Select(p=>p.Key))) throw new InvalidDataException("Состав исполняемого модуля изменён: "+module);
-            foreach(var item in expected)
+            var candidates = (installed == null
+                ? ReviewedPackageHistory.Inventories(module, expected.ToDictionary(p => p.Key, p => p.Value), runtime: false)
+                : [expected.ToDictionary(p => p.Key, p => p.Value)])
+                .Where(inventory => actual.SetEquals(inventory.Keys)).ToArray();
+            if (candidates.Length == 0) throw new InvalidDataException("Состав исполняемого модуля изменён: "+module);
+            var hashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach(var item in actual)
             {
-                var file=Path.Combine(folder,item.Key[(module.Length+1)..]);CheckPath(file);
+                var file=Path.Combine(folder,item[(module.Length+1)..]);CheckPath(file);
                 var handle=new FileStream(file,FileMode.Open,FileAccess.Read,FileShare.Read);handles.Add(handle);
-                if (!Convert.ToHexString(SHA256.HashData(handle)).Equals(item.Value,StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidDataException("Не совпадает доверенный SHA-256 модуля: "+item.Key+". Установите проверенный пакет NetCat.");
+                hashes.Add(item, Convert.ToHexString(SHA256.HashData(handle)));
             }
+            if (!candidates.Any(inventory => ReviewedPackageHistory.Matches(hashes, inventory)))
+                throw new InvalidDataException("Не совпадает доверенный SHA-256 модуля: "+module+". Установите проверенный пакет NetCat.");
             return new Lease(handles);
         }
         catch {foreach(var handle in handles)handle.Dispose();throw;}

@@ -51,15 +51,20 @@ public static class ReviewedRuntimeTrust
             LockDirectory(folder);
             var files=ModuleIntegrity.SafeFiles(folder).Select(p=>Path.GetRelativePath(folder,p).Replace('\\','/'))
                 .Where(p=>Covered(key,p)&&!Receipt(p)).ToArray();
-            if(!new HashSet<string>(files,StringComparer.OrdinalIgnoreCase).SetEquals(expected.Keys))
+            var actual = new HashSet<string>(files, StringComparer.OrdinalIgnoreCase);
+            var candidates = ReviewedPackageHistory.Inventories(key, expected, runtime: true)
+                .Where(inventory => actual.SetEquals(inventory.Keys)).ToArray();
+            if(candidates.Length == 0)
                 throw new InvalidDataException("Состав доверенного runtime изменён: "+key+". Нужен проверенный пакет NetCat.");
-            foreach(var pair in expected)
+            var hashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach(var relative in files)
             {
-                var path=Path.Combine(folder,pair.Key);ModuleIntegrity.CheckPath(path);
+                var path=Path.Combine(folder,relative);ModuleIntegrity.CheckPath(path);
                 var file=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.Read);handles.Add(file);
-                if(!Convert.ToHexString(SHA256.HashData(file)).Equals(pair.Value,StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidDataException("Нарушена целостность доверенного runtime: "+key+". Нужен проверенный пакет NetCat.");
+                hashes.Add(relative, Convert.ToHexString(SHA256.HashData(file)));
             }
+            if(!candidates.Any(inventory => ReviewedPackageHistory.Matches(hashes, inventory)))
+                throw new InvalidDataException("Нарушена целостность доверенного runtime: "+key+". Нужен проверенный пакет NetCat.");
             return new Lease(handles);
         }
         catch{foreach(var handle in handles)handle.Dispose();throw;}

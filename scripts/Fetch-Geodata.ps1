@@ -4,7 +4,15 @@ $taskRepo='Loyalsoldier/v2ray-rules-dat'
 $taskRelease=Invoke-RestMethod "https://api.github.com/repos/$taskRepo/releases/latest"
 $taskRecords=@()
 $taskLock=Join-Path $ModuleRoot 'modules.lock.json'
-if(Test-Path -LiteralPath $taskLock) { $taskRecords=@(Get-Content -Raw -LiteralPath $taskLock | ConvertFrom-Json | Where-Object { $_.key -notin @('geoip','geosite') }) }
+if(Test-Path -LiteralPath $taskLock) {
+ # Windows PowerShell 5.1 emits a JSON array as one pipeline object.
+ # Enumerate the assigned array explicitly before filtering and serializing.
+ $taskPrevious=Get-Content -Raw -LiteralPath $taskLock | ConvertFrom-Json
+ foreach($taskRecord in $taskPrevious) {
+  if(-not $taskRecord.key -or -not $taskRecord.version) { throw 'Invalid module lock entry' }
+  if($taskRecord.key -notin @('geoip','geosite')) { $taskRecords+=$taskRecord }
+ }
+}
 foreach($taskKey in @('geoip','geosite')) {
  $taskAsset=@($taskRelease.assets | Where-Object name -EQ "$taskKey.dat")
  if($taskAsset.Count -ne 1 -or $taskAsset[0].digest -notmatch '^sha256:[a-f0-9]{64}$') { throw "No verified asset for $taskKey" }

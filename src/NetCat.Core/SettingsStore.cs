@@ -26,12 +26,16 @@ public class SettingsStore
     public SettingsStore(string? root = null)
     {
         Root = root ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NetCat");
+        InterfaceScalePreference = new InterfaceScalePreference(Root);
+        AppearancePreference = new AppearancePreference(Root);
         Directory.CreateDirectory(Root);
         path = Path.Combine(Root, "settings.dpapi");
         backupPath = path + ".bak";
         uiPath = Path.Combine(Root, "ui-state.json");
         desiredPath = Path.Combine(Root, "desired-state.json");
     }
+    public InterfaceScalePreference InterfaceScalePreference { get; }
+    public AppearancePreference AppearancePreference { get; }
     private static void TryDeleteTemporary(string temporary)
     {
         try { File.Delete(temporary); }
@@ -96,6 +100,13 @@ public class SettingsStore
     }
 
     public AppSettings Load()
+    {
+        var settings = LoadSettings();
+        settings.InterfaceScale = InterfaceScalePreference.Load(settings.InterfaceScale);
+        AppearancePreference.Load(AppearanceValues.From(settings)).Apply(settings);
+        return settings;
+    }
+    private AppSettings LoadSettings()
     {
         gate.Wait();
 

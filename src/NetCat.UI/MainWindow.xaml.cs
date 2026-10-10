@@ -57,7 +57,7 @@ public partial class MainWindow : Window
             }
         };
     }
-    private void Vpn_Click(object sender, RoutedEventArgs e) => VM.UserRequestedVpnChange(!VM.Router.VpnRequested);
+    private void Vpn_Click(object sender, RoutedEventArgs e) => VM.UserRequestedVpnChange(!VM.DesiredState.MainVpnEnabled);
     private void OpenVpn_Click(object sender, RoutedEventArgs e) => VM.UserRequestedOpenVpnChange(!VM.DesiredState.OpenVpnEnabled);
     private async void Save_Click(object sender, RoutedEventArgs e) => await VM.RunAsync(_ => VM.SaveAsync());
     private async void Apply_Click(object sender, RoutedEventArgs e) => await VM.RunAsync(VM.ApplyRoutesAsync);
@@ -173,11 +173,13 @@ public partial class MainWindow : Window
         if (VM.State.Subscriptions.Count == 0) { VM.Status = "Сначала импортируйте URL подписки."; return; }
         var d = new EditorDialog(this, "Подписки"); var choice = d.Choice("Подписка", VM.State.Subscriptions, VM.State.Subscriptions[0]); var interval = d.Text("Интервал обновления, часов (0 — вручную)", VM.State.Subscriptions[0].UpdateHours.ToString());
         var insecure = d.Check("Дополнительно: разрешить HTTP и локальную сеть (небезопасно)", VM.State.Subscriptions[0].AllowInsecureTransport);
-        choice.SelectionChanged += (_, _) => { var selected=(Subscription)choice.SelectedItem; interval.Text=selected.UpdateHours.ToString(); insecure.IsChecked=selected.AllowInsecureTransport; };
+        var restoreDeleted = d.Check("Сбросить исключения вручную удалённых профилей", false);
+        choice.SelectionChanged += (_, _) => { var selected=(Subscription)choice.SelectedItem; interval.Text=selected.UpdateHours.ToString(); insecure.IsChecked=selected.AllowInsecureTransport; restoreDeleted.IsChecked=false; };
         var update = new Button { Content = "Обновить выбранную сейчас" }; d.Insert(update);
         update.Click += async (_, _) => { if(VM.Busy) { d.Error.Text="Дождитесь текущей операции."; return; } try { VM.Busy=true; update.IsEnabled = false; d.Error.Text = await RefreshSubscriptionAsync((Subscription)choice.SelectedItem, CancellationToken.None, interactive:true); } catch (Exception ex) { d.Error.Text = ProcessHost.Redact(ex.Message); } finally { VM.Busy=false; update.IsEnabled = true; } };
         d.Note("Изменения небезопасного режима сначала сохраните кнопкой принятия, затем откройте подписки и обновите. URL не показывается. Локальные имена и участие в автосмене сохраняются. Манифест сохраняет ID даже при смене параметров. Полный корректный манифест удаляет отсутствующие профили; выбранный профиль сохраняется с отметкой до смены выбора. При ошибках удаление запрещено.");
-        d.OnAccept = async () => { var id=((Subscription)choice.SelectedItem).Id;if (!int.TryParse(interval.Text, out var hours) || hours is < 0 or > 8760) throw new InvalidDataException("Укажите интервал от 0 до 8760 часов."); await VM.UpdateSettingsAsync(next=>{var selected=next.Subscriptions.Single(p=>p.Id==id);selected.UpdateHours=hours;selected.AllowInsecureTransport=insecure.IsChecked==true;}); return true; }; d.ShowDialog();
+        d.Note("Вручную удалённые профили не возвращаются при обновлении. Чтобы разрешить их повторное добавление, отметьте сброс исключений, сохраните и затем обновите выбранную подписку.");
+        d.OnAccept = async () => { var id=((Subscription)choice.SelectedItem).Id;if (!int.TryParse(interval.Text, out var hours) || hours is < 0 or > 8760) throw new InvalidDataException("Укажите интервал от 0 до 8760 часов."); await VM.UpdateSettingsAsync(next=>{var selected=next.Subscriptions.Single(p=>p.Id==id);selected.UpdateHours=hours;selected.AllowInsecureTransport=insecure.IsChecked==true;if(restoreDeleted.IsChecked==true)selected.ExcludedProfileKeys.Clear();}); return true; }; d.ShowDialog();
     }
     private async Task<string> RefreshSubscriptionAsync(Subscription sub, CancellationToken ct, bool interactive=false)
     {
@@ -602,7 +604,7 @@ public partial class MainWindow : Window
     private string? pendingNetcatUpdate;
     private async void InstallModule_Click(object sender, RoutedEventArgs e) => await VM.RunAsync(async ct =>
     {
-        var selected=VM.Modules.Where(m=>m.Selected&&m.Available&&!m.Pinned).ToArray();
+        var selected=VM.Modules.Where(m=>m.Selected&&m.CanSelectUpdate).ToArray();
         if(selected.Length==0) { VM.UpdateStatus="Выберите доступные обновления."; return; }
         var errors=new List<string>();
         foreach(var module in selected)
@@ -625,7 +627,7 @@ public partial class MainWindow : Window
         await VM.RunAsync(async ct =>
         {
             var errors=new List<string>(); int installed=0;
-            foreach(var module in VM.Modules.Where(m=>m.Selected&&m.Available&&!m.Pinned).ToArray())
+            foreach(var module in VM.Modules.Where(m=>m.Selected&&m.CanSelectUpdate).ToArray())
             {
                 try
                 {
@@ -638,17 +640,10 @@ public partial class MainWindow : Window
             var rows =
                 VM.Modules.ToArray();
 
-            VM.Modules.Clear();
-
-            foreach(var row in rows)
+            VM.ApplyModuleChecks(rows.Select(row => row.Check with
             {
-                VM.Modules.Add(
-                    VM.CreateModuleRow(
-                        new ModuleCheck(
-                            row.Key,
-                            VM.Updater.InstalledVersion(row.Key),
-                            row.Check.Release)));
-            }
+                Installed = VM.Updater.InstalledVersion(row.Key)
+            }).ToArray());
             VM.Refresh(); VM.UpdateStatus=installed>0 ? $"Установлено компонентов: {installed}." : launch!=null ? "NetCat готов к перезапуску." : "Нет выбранных скачанных обновлений.";
             if(errors.Count>0) VM.UpdateStatus+=" Ошибки: "+string.Join(", ",errors);
         });
@@ -836,22 +831,22 @@ public partial class MainWindow : Window
     private void PickColor(bool primary)
     {
         var picker=new ColorPickerWindow(this,primary?"Основной цвет интерфейса":"Акцентный цвет",primary?VM.State.BaseColor:VM.State.AccentColor,primary);
-        if(picker.ShowDialog()==true) { if(primary) VM.State.BaseColor=picker.SelectedHex; else VM.State.AccentColor=picker.SelectedHex; _=VM.RunAsync(_=>VM.SaveAsync()); }
+        if(picker.ShowDialog()==true) { if(primary) VM.State.BaseColor=picker.SelectedHex; else VM.State.AccentColor=picker.SelectedHex; }
     }
-    private async void Light_Click(object sender, RoutedEventArgs e) { VM.State.BaseColor = "#F4F6F8"; await VM.RunAsync(_=>VM.SaveAsync()); }
-    private async void Dark_Click(object sender, RoutedEventArgs e) { VM.State.BaseColor = "#151A22"; await VM.RunAsync(_=>VM.SaveAsync()); }
+    private void Light_Click(object sender, RoutedEventArgs e) => VM.State.BaseColor = "#F4F6F8";
+    private void Dark_Click(object sender, RoutedEventArgs e) => VM.State.BaseColor = "#151A22";
     private void AppearancePreview_Changed(object sender, RoutedEventArgs e)
     {
         if (IsLoaded) Theme.Apply(VM.State);
     }
-    private async void ResetAppearance_Click(object sender, RoutedEventArgs e)
+    private void ResetAppearance_Click(object sender, RoutedEventArgs e)
     {
         var defaults = new AppSettings();
         VM.State.BaseColor = defaults.BaseColor;
         VM.State.AccentColor = defaults.AccentColor;
         VM.State.PanelBrightness = defaults.PanelBrightness;
         VM.State.HighContrastText = defaults.HighContrastText;
-        await VM.RunAsync(_ => VM.SaveAsync());
+        VM.State.InterfaceScale = defaults.InterfaceScale;
     }
     private AutostartService Startup => new(new WindowsStartupTasks(msg => VM.WriteLog(msg), userFacingJournal: true), Environment.ProcessPath!, System.Security.Principal.WindowsIdentity.GetCurrent().User!.Value);
     private async Task RefreshAutostartAsync()

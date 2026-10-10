@@ -1,14 +1,5 @@
 [
   {
-    "repo": "SagerNet/sing-box",
-    "sha256": "c2d8bfff918755808781dfdeeb8581b6c91eb3a243d9a7b55483cfc0c0684d32",
-    "key": "sing-box",
-    "version": "v1.14.2",
-    "asset": "sing-box-1.14.2-windows-amd64.zip",
-    "verified": "GitHub release asset SHA-256",
-    "url": "https://github.com/SagerNet/sing-box/releases/download/v1.14.2/sing-box-1.14.2-windows-amd64.zip"
-  },
-  {
     "url": "https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-windows-64.zip",
     "asset": "Xray-windows-64.zip",
     "repo": "XTLS/Xray-core",
@@ -27,15 +18,6 @@
     "url": "https://github.com/Flowseal/zapret-discord-youtube/releases/download/1.10.3/zapret-discord-youtube-1.10.3.zip"
   },
   {
-    "repo": "Flowseal/tg-ws-proxy",
-    "sha256": "b51436e8960307316135e64ac14753b1f3b0e7a46afe1bd6081353b82de20f09",
-    "key": "tg-ws-proxy",
-    "version": "v1.10.4",
-    "asset": "TgWsProxy_windows.exe",
-    "verified": "GitHub release asset SHA-256",
-    "url": "https://github.com/Flowseal/tg-ws-proxy/releases/download/v1.10.4/TgWsProxy_windows.exe"
-  },
-  {
     "verified": "Authenticode: WireGuard",
     "key": "wintun",
     "url": "https://www.wintun.net/builds/wintun-0.14.1.zip",
@@ -50,21 +32,39 @@
     "version": "2.6.22"
   },
   {
-    "repo": "Loyalsoldier/v2ray-rules-dat",
-    "sha256": "391b522361c52804e486a98b53d97f3d9c1d3e4e4217bb34954774a0b456b9fd",
-    "key": "geoip",
-    "version": "202610032254",
-    "asset": "geoip.dat",
+    "url": "https://github.com/SagerNet/sing-box/releases/download/v1.14.3/sing-box-1.14.3-windows-amd64.zip",
+    "repo": "SagerNet/sing-box",
+    "key": "sing-box",
+    "sha256": "d8b86ef58936dba9230ec6a57ffa4243933f3c14ef4809828b6c553440ed1518",
     "verified": "GitHub release asset SHA-256",
-    "url": "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/download/202610032254/geoip.dat"
+    "asset": "sing-box-1.14.3-windows-amd64.zip",
+    "version": "v1.14.3"
   },
   {
-    "repo": "Loyalsoldier/v2ray-rules-dat",
-    "sha256": "59b6ed33176b6f03debcfa3105d42de268475ffa8a1e010f481985256e375262",
-    "key": "geosite",
-    "version": "202610032254",
-    "asset": "geosite.dat",
+    "url": "https://github.com/Flowseal/tg-ws-proxy/releases/download/v1.11.1/TgWsProxy_windows.exe",
+    "repo": "Flowseal/tg-ws-proxy",
+    "key": "tg-ws-proxy",
+    "sha256": "b11232956820b449348e51452c2d9ea2e441679b2e40053825b8e878689f51ab",
     "verified": "GitHub release asset SHA-256",
-    "url": "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/download/202610032254/geosite.dat"
+    "asset": "TgWsProxy_windows.exe",
+    "version": "v1.11.1"
+  },
+  {
+    "sha256": "116cc0f03d48991962f7f9cdbbcf53d45d89777f9c3cd1a663210853e5df6093",
+    "version": "202610092207",
+    "repo": "Loyalsoldier/v2ray-rules-dat",
+    "key": "geoip",
+    "asset": "geoip.dat",
+    "url": "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/download/202610092207/geoip.dat",
+    "verified": "GitHub release asset SHA-256"
+  },
+  {
+    "sha256": "79d15a5bd8205d83c377fcfde394500db762b2b400feff24612834e528a111cb",
+    "version": "202610092207",
+    "repo": "Loyalsoldier/v2ray-rules-dat",
+    "key": "geosite",
+    "asset": "geosite.dat",
+    "url": "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/download/202610092207/geosite.dat",
+    "verified": "GitHub release asset SHA-256"
   }
 ]

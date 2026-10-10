@@ -1,12 +1,26 @@
 using NetCat.Core;
 namespace NetCat.Engine;
 public sealed class SubscriptionSecurityApprovalRequiredException(int count) : IOException($"Подписка отключает проверку TLS-сертификатов в {count} профилях. Обновление не применено; требуется явное подтверждение в настройках подписки.");
-public sealed record SubscriptionMergeResult(AppSettings Settings, int Added, int Updated, int Removed, int Retained, int Rejected)
+public sealed record SubscriptionMergeResult(AppSettings Settings, int Added, int Updated, int Removed, int Retained, int Rejected, int Excluded = 0)
 {
-    public string Summary(int received) => $"Получено: {received}; добавлено: {Added}; обновлено: {Updated}; удалено: {Removed}; сохранено выбранных: {Retained}; отклонено: {Rejected}.";
+    public string Summary(int received) => $"Получено: {received}; добавлено: {Added}; обновлено: {Updated}; удалено: {Removed}; сохранено выбранных: {Retained}; отклонено: {Rejected}; исключено пользователем: {Excluded}.";
 }
 public static class SubscriptionMerge
 {
+    private static string ExclusionKey(string identity) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(identity)));
+    public static void ExcludeProfile(AppSettings settings, Profile profile)
+    {
+        var subscription = settings.Subscriptions.FirstOrDefault(s => s.Id == profile.SubscriptionId);
+        if (subscription == null) return;
+        var stable = string.IsNullOrEmpty(profile.SubscriptionItemId) ? ProfileIdentity.Key(profile) : profile.SubscriptionItemId;
+        var key = ExclusionKey(stable);
+        static string Source(Subscription sub) => Uri.TryCreate(sub.Url, UriKind.Absolute, out var uri) ? uri.AbsoluteUri : sub.Url;
+        // Legacy settings can contain multiple subscription IDs for one URL.
+        // Remember the same deletion in those aliases; otherwise a second
+        // scheduled refresh can resurrect exactly the entry just removed.
+        foreach (var alias in settings.Subscriptions.Where(s => s.Id == subscription.Id || Source(s) == Source(subscription)))
+            if (!alias.ExcludedProfileKeys.Contains(key, StringComparer.Ordinal)) alias.ExcludedProfileKeys.Add(key);
+    }
     public static AppSettings Prepare(AppSettings current, Guid subscriptionId, IEnumerable<Profile> profiles, bool approveSecurityChanges = false) =>
         Apply(current, subscriptionId, new ImportResult(profiles.ToList(), []), approveSecurityChanges).Settings;
 
@@ -16,12 +30,14 @@ public static class SubscriptionMerge
         var next = JsonSettings.Clone(current);
         var sub = next.Subscriptions.Single(s => s.Id == subscriptionId);
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        var kept = new HashSet<Guid>(); int added = 0, updated = 0, removed = 0, retained = 0, rejected = document.Errors.Count;
+        var kept = new HashSet<Guid>(); int added = 0, updated = 0, removed = 0, retained = 0, excluded = 0, rejected = document.Errors.Count;
+        var exclusions = sub.ExcludedProfileKeys.ToHashSet(StringComparer.Ordinal);
         foreach (var profile in document.Profiles)
         {
             var incoming = JsonSettings.Clone(profile); incoming.Name = ProfileDisplayNames.Normalize(incoming.Name); var key = ProfileIdentity.Key(incoming);
             var stable = incoming.SubscriptionItemId.StartsWith("manifest:", StringComparison.Ordinal) ? incoming.SubscriptionItemId : key;
             if (!seen.Add(stable)) { rejected++; continue; }
+            if (exclusions.Contains(ExclusionKey(stable))) { excluded++; continue; }
             var saved = next.Profiles.FirstOrDefault(p => p.SubscriptionId == subscriptionId &&
                 (p.SubscriptionItemId == stable || !p.SubscriptionItemId.StartsWith("manifest:", StringComparison.Ordinal) && (ProfileIdentity.Key(p) == key || current.ProfileFormatVersion < 1 && ProfileIdentity.MatchesLegacyGrpc(p, incoming))));
             if (ProfileSecurity.CertificateValidationDisabled(incoming) && (saved == null || !ProfileSecurity.CertificateValidationDisabled(saved)) && !approveSecurityChanges)
@@ -46,7 +62,7 @@ public static class SubscriptionMerge
                 else { next.Profiles.Remove(old); removed++; }
             }
         }
-        var outcome = new SubscriptionMergeResult(next, added, updated, removed, retained, rejected);
+        var outcome = new SubscriptionMergeResult(next, added, updated, removed, retained, rejected, excluded);
         sub.LastRefreshSummary = outcome.Summary(document.ReceivedCount > 0 ? document.ReceivedCount : document.Profiles.Count + document.Errors.Count);
         sub.UpdatedAt = DateTimeOffset.UtcNow;
         return outcome;

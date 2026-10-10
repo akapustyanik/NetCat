@@ -5,7 +5,7 @@ $taskCache=Join-Path $taskRoot 'artifacts/downloads/telegram-headless'
 $taskRuntime=Join-Path $taskRoot 'bin/tg-runtime'
 $taskModule=Join-Path $taskRoot 'bin/tg-ws-proxy'
 New-Item -ItemType Directory -Force $taskCache,$taskRuntime,$taskModule | Out-Null
-$taskTag='v1.10.4'
+$taskTag='v1.11.1'
 $taskHeaders = @{ 'User-Agent' = 'NetCat-Build'; Accept = 'application/vnd.github+json' }
 if ($env:GITHUB_TOKEN) { $taskHeaders['Authorization'] = "Bearer $env:GITHUB_TOKEN" }
 $taskTree=Invoke-RestMethod "https://api.github.com/repos/Flowseal/tg-ws-proxy/git/trees/${taskTag}?recursive=1" -Headers $taskHeaders

@@ -6,6 +6,23 @@ namespace NetCat.Tests;
 
 public sealed class ModuleBundleAcceptanceTests
 {
+    [Fact]
+    public void ModuleLockContainsFlatUniqueComponentRecords()
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(
+            File.ReadAllText(Path.Combine(RoutingTests.ModuleRoot, "modules.lock.json")));
+        var records = document.RootElement.EnumerateArray().ToArray();
+        var expected = new[] { "sing-box", "xray", "zapret", "tg-ws-proxy", "wintun", "openvpn", "geoip", "geosite" };
+        Assert.Equal(expected.Length, records.Length);
+        var keys = records.Select(record => record.GetProperty("key").GetString()).ToArray();
+        Assert.Equal(expected.Order(), keys.Order());
+        foreach (var record in records)
+        {
+            Assert.False(string.IsNullOrWhiteSpace(record.GetProperty("version").GetString()));
+            Assert.Matches("^[a-fA-F0-9]{64}$", record.GetProperty("sha256").GetString()!);
+        }
+    }
+
     [Theory]
     [InlineData("sing-box")]
     [InlineData("xray")]

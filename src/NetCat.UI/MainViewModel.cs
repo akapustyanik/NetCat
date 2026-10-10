@@ -135,7 +135,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
                 var profile = snapshot.Profiles.FirstOrDefault(p => p.Id == profileId && !p.IsOpenVpn)
                     ?? throw new InvalidOperationException("Выберите существующий VPN-профиль.");
                 WriteLog($"VPN_PROFILE intent old={GetCurrentDesiredState().SelectedVpnProfileId} new={profileId}");
-                if (GetCurrentDesiredState().MainVpnEnabled)
+                // A broken main router/TUN must not make manual recovery depend on
+                // a probe through that same broken network. Healthy switches still
+                // validate the replacement before disturbing the active connection.
+                var recoveringMain = RuntimeCoordinator.CurrentConvergenceState is { Phase: ConvergencePhase.Degraded } convergence &&
+                    convergence.PendingComponents.Any(c => c is ComponentId.MainRouter or ComponentId.Tun);
+                if (GetCurrentDesiredState().MainVpnEnabled && !recoveringMain)
                 {
                     var tested = Router.PreflightOverride is { } test
                         ? await test(profile, snapshot, ct).ConfigureAwait(false)
@@ -291,7 +296,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
                             Logs.Prepend(uiLines);
                             LogMetrics = $"{(count - last) * 5} строк/с · пропущено {dropped}";
                             OnPropertyChanged(nameof(LogMetrics));
-                        });
+                        }, System.Windows.Threading.DispatcherPriority.Background);
                     }
                     else
                     {
@@ -321,6 +326,32 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
     public StrategyResult? SelectedStrategy { get; set; }
     private bool refreshing, disposed;
     private bool publishing;
+    private bool interfaceScaleChanged;
+    private bool appearanceChanged;
+    public Task PendingAppearanceSave { get; private set; } = Task.CompletedTask;
+    public void FlushAppearancePreference()
+    {
+        if (!appearanceChanged) return;
+        try { Store.AppearancePreference.Flush(AppearanceValues.From(State)); }
+        catch (Exception error) { WriteLog("Сохранение оформления: " + error.GetType().Name); }
+    }
+    private async Task SaveAppearancePreferenceAsync(AppearanceValues appearance)
+    {
+        try { await Store.AppearancePreference.SaveAsync(appearance); }
+        catch (Exception error) { WriteLog("Сохранение оформления: " + error.GetType().Name); }
+    }
+    public Task PendingInterfaceScaleSave { get; private set; } = Task.CompletedTask;
+    public void FlushInterfaceScalePreference()
+    {
+        if (!interfaceScaleChanged) return;
+        try { Store.InterfaceScalePreference.Flush(State.InterfaceScale); }
+        catch (Exception error) { WriteLog("Сохранение размера интерфейса: " + error.GetType().Name); }
+    }
+    private async Task SaveInterfaceScalePreferenceAsync(double scale)
+    {
+        try { await Store.InterfaceScalePreference.SaveAsync(scale); }
+        catch (Exception error) { WriteLog("Сохранение размера интерфейса: " + error.GetType().Name); }
+    }
     private AppSettings committed = new();
     private readonly SemaphoreSlim settingsGate = new(1);
     private int suppressReactiveApplyCount;
@@ -339,6 +370,25 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
     private void StateChanged(object? sender,System.ComponentModel.PropertyChangedEventArgs e)
     {
         if(publishing || refreshing || disposed) return;
+        if (e.PropertyName is nameof(AppSettings.BaseColor) or nameof(AppSettings.AccentColor) or
+            nameof(AppSettings.PanelBrightness) or nameof(AppSettings.HighContrastText))
+        {
+            var appearance = AppearanceValues.From(State);
+            try { appearance.Validate(); }
+            catch (FormatException) { return; }
+            appearanceChanged = true;
+            appearance.Apply(committed);
+            PendingAppearanceSave = SaveAppearancePreferenceAsync(appearance);
+            projection.Post(() => Theme.Apply(State));
+            return;
+        }
+        if (e.PropertyName == nameof(AppSettings.InterfaceScale))
+        {
+            interfaceScaleChanged = true;
+            committed.InterfaceScale = State.InterfaceScale;
+            PendingInterfaceScaleSave = SaveInterfaceScalePreferenceAsync(State.InterfaceScale);
+            return;
+        }
         if(e.PropertyName==nameof(AppSettings.OpenVpnProfileId) && Router.OpenVpn.Running && State.OpenVpnProfileId!=Router.OpenVpn.ActiveProfileId)
         { State.OpenVpnProfileId=Router.OpenVpn.ActiveProfileId; OnPropertyChanged(nameof(OpenVpnProfile)); return; }
         if(e.PropertyName is nameof(AppSettings.YouTube) or nameof(AppSettings.Discord)) InvalidateScenarioTests();
@@ -460,7 +510,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
     public string UpdateStatus { get => updateStatus; set => SetProperty(ref updateStatus,value); }
     public bool CheckingUpdates { get => checkingUpdates; set { SetProperty(ref checkingUpdates,value); OnPropertyChanged(nameof(CanCheckUpdates)); } }
     public bool CanCheckUpdates => !CheckingUpdates;
-    public bool HasUpdates => Modules.Any(m => m.Available && !m.Pinned);
+    public int AvailableUpdateCount => Modules.Count(m => m.CanSelectUpdate);
+    public bool HasUpdates => AvailableUpdateCount > 0;
+    public string UpdateNotification => $"Доступны обновления: {AvailableUpdateCount}. Выберите компоненты и нажмите «Скачать выбранные».";
     public string ProfileDetails => Router.VpnRunning && Router.ActiveProfileId != State.MainProfileId ? "Проверяется новый профиль · сейчас работает " + State.Profiles.FirstOrDefault(p=>p.Id==Router.ActiveProfileId)?.Name : MainProfile == null ? "Импортируйте подписку или профиль" : $"{MainProfile.Protocol.ToUpperInvariant()} · {MainProfile.Core}";
     public string LocalEndpoint => Router.Running ? $"HTTP / SOCKS5 · 127.0.0.1:{Router.ListenPort}" : $"HTTP / SOCKS5 · 127.0.0.1:{State.SocksPort}";
     public bool VpnConnected => Router.VpnRunning;
@@ -542,7 +594,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
         healthDetails = "Профиль: " + TestFeedback.Summary(profile);
         NotifyState();
     }
-    public string VpnButton => Router.VpnRequested ? "Отключить VPN" : "Подключить VPN";
+    public string VpnButton => DesiredState.MainVpnEnabled ? "Отключить VPN" : "Подключить VPN";
     public string OpenVpnStatus
     {
         get
@@ -622,8 +674,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
         {
             DesiredState = DesiredState with { SelectedOpenVpnProfileId = State.OpenVpnProfileId };
         }
+        Modules.CollectionChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(AvailableUpdateCount));
+            OnPropertyChanged(nameof(HasUpdates));
+            OnPropertyChanged(nameof(UpdateNotification));
+        };
         Bin = Path.Combine(AppContext.BaseDirectory, "modules");
-        if (!Directory.Exists(Bin)) Bin = Path.Combine(AppContext.BaseDirectory, "bin");
+        if (!Directory.Exists(Bin) && Directory.Exists(Path.Combine(AppContext.BaseDirectory, "bin"))) Bin = Path.Combine(AppContext.BaseDirectory, "bin");
         if (!Directory.Exists(Bin)) { var candidate = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "bin")); if (Directory.Exists(candidate)) Bin = candidate; }
         Router = router ?? new(Bin, Path.Combine(store.Root, "runtime")); Zapret = zapret ?? new(Bin, Path.Combine(store.Root, "runtime", "zapret")); Updater = new(Bin,()=>Router.VpnRunning ? Router.LatencyPort : 0);
         TrafficMonitor = new TrafficMonitorService(() => PhysicalNetwork.TryCapture(ConfigRepository?.CurrentSettings.PhysicalInterface ?? ""));
@@ -698,7 +756,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
         };
 
         applicationUpdate = new AutomaticApplicationUpdate(
-            () => CanAutomaticallyUpdate, () => Modules.FirstOrDefault(m => m.Key == "netcat" && m.Available && m.Check.AutoUpdateSupported)?.Check.Release,
+            () => CanAutomaticallyUpdate, () => Modules.FirstOrDefault(m => m.Key == "netcat" && m.CanSelectUpdate)?.Check.Release,
             (release, ct) => PortableUpdate.PrepareAsync(release, AppContext.BaseDirectory,
                 State.PinnedModules.Concat(ModuleUpdater.Keys.Where(key => key != "netcat")).ToHashSet(StringComparer.OrdinalIgnoreCase), ct),
             job => ApplicationUpdatePrepared?.Invoke(job),
@@ -856,17 +914,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
                 await Updater.CheckAllAsync(
                     timeout.Token);
 
-            Modules.Clear();
-
-            foreach(var check in checks)
-                Modules.Add(
-                    CreateModuleRow(check));
-            var count=Modules.Count(m=>m.Available&&!m.Pinned); var errors=checks.Count(c=>c.Error.Length>0);
-            UpdateStatus=count>0 ? $"Доступны обновления: {count}. Выберите компоненты и нажмите «Скачать выбранные»." : errors==0 ? "Все компоненты актуальны" : "Проверка выполнена частично";
-            if(errors>0) UpdateStatus+=$" · Не удалось проверить: {errors}";
+            ApplyModuleChecks(checks);
         }
         catch(OperationCanceledException) { UpdateStatus="Проверка обновлений прервана или истёк таймаут"; }
         finally { CheckingUpdates=false; OnPropertyChanged(nameof(HasUpdates)); }
+    }
+    public void ApplyModuleChecks(IReadOnlyList<ModuleCheck> checks)
+    {
+        Modules.Clear();
+        foreach (var check in checks) Modules.Add(CreateModuleRow(check));
+        var errors = checks.Count(c => c.Error.Length > 0);
+        UpdateStatus = HasUpdates ? UpdateNotification : errors > 0 ? "Проверка выполнена частично" :
+            checks.Any(c => c.Available) ? "Нет обновлений, доступных для установки" : "Все компоненты актуальны";
+        if (errors > 0) UpdateStatus += $" · Не удалось проверить: {errors}";
     }
     private static string Json(object? value) => System.Text.Json.JsonSerializer.Serialize(value,JsonSettings.Options);
     private static bool ProfileConnectionChanged(Profile? a,Profile? b) => a?.Id!=b?.Id || a?.Host!=b?.Host || a?.Port!=b?.Port || a?.Core!=b?.Core || a?.OutboundJson!=b?.OutboundJson || a?.OpenVpnConfig!=b?.OpenVpnConfig || a?.Username!=b?.Username || a?.Password!=b?.Password;
@@ -1183,7 +1243,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
             SettingsRevision++;
             if (RoutingChanged(old, next) || ProfileConnectionChanged(old.Profiles.FirstOrDefault(p => p.Id == old.MainProfileId), next.Profiles.FirstOrDefault(p => p.Id == next.MainProfileId)))
                 RuntimeCoordinator.RequestReconcile(ReconcileReason.UserChangedSettings);
-            projection.Post(() => Theme.Apply(next));
+            projection.Post(() => Theme.Apply(State));
         }
         catch
         {
@@ -1255,6 +1315,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
     public Task DeleteProfileAsync(Guid id,CancellationToken ct=default) => UpdateSettingsAsync(next=>
     {
         if(Router.VpnRunning && Router.ActiveProfileId==id || Router.OpenVpn.Running && Router.OpenVpn.ActiveProfileId==id) throw new InvalidOperationException("Сначала остановите этот профиль.");
+        if (next.Profiles.FirstOrDefault(p => p.Id == id) is { } deleted) SubscriptionMerge.ExcludeProfile(next, deleted);
         next.Profiles.RemoveAll(p=>p.Id==id); SettingsValidation.RepairSelections(next);
     },ct:ct);
     public Task ImportProfilesAsync(IEnumerable<Profile> profiles,Subscription? subscription=null) => UpdateSettingsAsync(next=>
@@ -1370,6 +1431,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
     {
         try
         {
+            value.InterfaceScale = interfaceScaleChanged ? State.InterfaceScale : Store.InterfaceScalePreference.Load(value.InterfaceScale);
+            committed.InterfaceScale = value.InterfaceScale;
+            var appearance = appearanceChanged ? AppearanceValues.From(State) : Store.AppearancePreference.Load(AppearanceValues.From(value));
+            appearance.Apply(value);
+            appearance.Apply(committed);
             var results = Profiles.ToDictionary(p => p.Id, p => (p.Host, p.Port, p.Protocol, p.Core, p.OutboundJson, p.Result, p.ResultDetails, p.TrafficResult, p.TrafficDetails));
             publishing = true;
             try
@@ -1451,7 +1517,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
     {
         maintenance.Dispose();
         maintenanceLifetime.Cancel(); NetworkMonitor.Dispose();
-        if(disposed)return; disposed=true; State.PropertyChanged-=StateChanged;
+        if(disposed)return; FlushInterfaceScalePreference(); FlushAppearancePreference(); disposed=true; State.PropertyChanged-=StateChanged;
         Store.Diagnostic -= WriteLog;
         HealthMonitor.Dispose();
         TrafficMonitor.Dispose();
@@ -1467,7 +1533,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
         maintenanceLifetime.Cancel(); NetworkMonitor.Dispose(); HealthMonitor.Stop(); TrafficMonitor.StopSampling();
         await maintenance.StopAsync(); await logPump; await subscriptionPump;
         selectionChange.Cancel();WorkCancellation.Cancel();TestsCancellation.Cancel();
-        try {await PendingSelection;await PendingRoutes;await SaveAsync();}
+        try {await PendingInterfaceScaleSave;await PendingAppearanceSave;await PendingSelection;await PendingRoutes;await SaveAsync();}
         finally
         {
             FlushDesiredState();
@@ -1510,8 +1576,7 @@ public sealed class ModuleRow : ObservableObject
         Check.Installability;
 
     public bool CanSelectUpdate =>
-        Available &&
-        Check.AutoUpdateSupported &&
+        Check.InstallableUpdate &&
         !Pinned;
 
     public string DisplayName =>
@@ -1608,7 +1673,7 @@ public sealed class ModuleRow : ObservableObject
         set =>
             SetProperty(
                 ref selected,
-                value);
+                value && CanSelectUpdate);
     }
 
     public ModuleRow(

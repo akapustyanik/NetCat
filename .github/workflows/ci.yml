@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     runs-on: windows-latest
@@ -16,30 +19,36 @@ jobs:
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '8.0.425'
 
       - name: Restore dependencies
         run: dotnet restore NetCat.sln
 
-      - name: Install reviewed release modules
+      - name: Fetch verified release modules
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & ./scripts/Fetch-OfficialModules.ps1
+          & ./scripts/Fetch-TelegramHeadless.ps1
+          & ./scripts/Fetch-Geodata.ps1
+
+      - name: Stage previous reviewed package for upgrade regression tests
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $bundleArchive = Join-Path $env:RUNNER_TEMP 'NetCat-v1.0.0-win-x64.zip'
-          $bundleStage = Join-Path $env:RUNNER_TEMP 'NetCat-reviewed-v1.0.0'
-          $moduleRoot = Join-Path $PWD 'bin'
-          Invoke-WebRequest 'https://github.com/akapustyanik/NetCat/releases/download/v1.0.0/NetCat-v1.0.0-win-x64.zip' -OutFile $bundleArchive
-          $expected = '524e7708f8f4144e244e0fb4d6a7fa8bbe52098dc92b2b01458a25f96f494dc8'
-          if ((Get-FileHash -LiteralPath $bundleArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) {
-            throw 'Reviewed release bundle SHA256 mismatch'
+          $archive = Join-Path $env:RUNNER_TEMP 'NetCat-v1.0.2-win-x64.zip'
+          $stage = Join-Path $env:RUNNER_TEMP 'NetCat-previous-reviewed'
+          Invoke-WebRequest 'https://github.com/akapustyanik/NetCat/releases/download/v1.0.2/NetCat-v1.0.2-win-x64.zip' -OutFile $archive
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'ab30f9fbdcbe5827e360912b41c4b5ea5f31e8bde692030d6afe101b7a952b13') {
+            throw 'Previous reviewed release SHA256 mismatch'
           }
-          Expand-Archive -LiteralPath $bundleArchive -DestinationPath $bundleStage
-          New-Item -ItemType Directory -Force -Path $moduleRoot | Out-Null
-          foreach ($entry in Get-ChildItem -LiteralPath (Join-Path $bundleStage 'modules')) {
-            Copy-Item -LiteralPath $entry.FullName -Destination $moduleRoot -Recurse
+          Expand-Archive -LiteralPath $archive -DestinationPath $stage
+          $destination = Join-Path $PWD 'artifacts/previous-reviewed-modules'
+          New-Item -ItemType Directory -Force -Path $destination | Out-Null
+          foreach ($entry in Get-ChildItem -LiteralPath (Join-Path $stage 'modules')) {
+            Copy-Item -LiteralPath $entry.FullName -Destination $destination -Recurse
           }
-          python -B scripts/Add-TelegramHttp2Runtime.py --runtime (Join-Path $moduleRoot 'tg-runtime') --cache (Join-Path $env:RUNNER_TEMP 'telegram-http2-wheels')
-          if ($LASTEXITCODE -ne 0) { throw 'Reviewed Telegram HTTP/2 dependencies failed' }
-
       - name: Run tests
-        run: dotnet test NetCat.sln -c Release --no-restore
+        run: dotnet test NetCat.sln -c Release --no-restore -warnaserror

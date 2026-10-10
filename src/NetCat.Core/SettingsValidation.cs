@@ -6,11 +6,17 @@ public static class SettingsValidation
     public static void Validate(AppSettings s)
     {
         ThemeColor.Parse(s.BaseColor); ThemeColor.Parse(s.AccentColor);
+        if (!double.IsFinite(s.InterfaceScale) || s.InterfaceScale is < .7 or > 1.3)
+            throw new FormatException("Размер интерфейса должен быть от 70 до 130%.");
         if (!double.IsFinite(s.PanelBrightness) || s.PanelBrightness is < -20 or > 20)
             throw new FormatException("Яркость панелей должна быть от −20 до 20.");
         if (s.TestIntervalSeconds < 1)
             throw new FormatException("Интервал автопроверки должен быть не менее 1 секунды.");
         if(s.Profiles.Select(p=>p.Id).Distinct().Count()!=s.Profiles.Count || s.Subscriptions.Select(p=>p.Id).Distinct().Count()!=s.Subscriptions.Count || s.Rules.Select(p=>p.Id).Distinct().Count()!=s.Rules.Count) throw new FormatException("Повторяющийся идентификатор профиля, подписки или правила.");
+        foreach (var subscription in s.Subscriptions)
+            if (subscription.ExcludedProfileKeys == null || subscription.ExcludedProfileKeys.Count > 10000 ||
+                subscription.ExcludedProfileKeys.Any(key => key == null || key.Length != 64 || key.Any(c => !Uri.IsHexDigit(c))))
+                throw new FormatException("Некорректные исключения удалённых профилей подписки.");
         if(s.MainProfileId.HasValue && !s.Profiles.Any(p=>p.Id==s.MainProfileId && !p.IsOpenVpn)) throw new FormatException("Основной VPN-профиль отсутствует.");
         if(s.OpenVpnProfileId.HasValue && !s.Profiles.Any(p=>p.Id==s.OpenVpnProfileId && p.IsOpenVpn)) throw new FormatException("OpenVPN-профиль отсутствует.");
         foreach(var port in new[]{s.SocksPort,s.TelegramSocksPort,s.TelegramWsPort}) if(port is <1 or >65535) throw new FormatException("Порт должен быть от 1 до 65535.");

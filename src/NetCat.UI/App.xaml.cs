@@ -13,6 +13,15 @@ public partial class App : Application
     protected override async void OnStartup(StartupEventArgs e)
     {
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
+        if (e.Args is ["--release-driver", var moduleFolder])
+        {
+            // Explicit maintenance command: no IPC, connection restoration or UI.
+            // It refuses a foreign driver path and any remaining WinDivert client.
+            var result = NetCat.Engine.WinDivertDriverCleanup.TryCleanup(moduleFolder);
+            Shutdown(result is NetCat.Engine.WinDivertCleanupResult.Removed or NetCat.Engine.WinDivertCleanupResult.NotInstalled
+                or NetCat.Engine.WinDivertCleanupResult.ForeignInstallation ? 0 : 3);
+            return;
+        }
         if(e.Args.Contains(SystemTrafficProbeWorker.Argument))
         {
             // This branch precedes all ownership, IPC, recovery and UI startup.
@@ -218,6 +227,8 @@ public partial class App : Application
                              WindowPresentationState.VisibleNormal;
             windowManager.Presentation?.EndSession(finalState);
             vm.FlushDesiredState();
+            vm.FlushInterfaceScalePreference();
+            vm.FlushAppearancePreference();
         }
     }
     private void OnPowerChanged(object sender, Microsoft.Win32.PowerModeChangedEventArgs e)
@@ -231,6 +242,12 @@ public partial class App : Application
             trayIconService?.Dispose();
             appVm?.Dispose();
         }
-        finally {networkOwner?.Dispose();mutex?.Dispose();base.OnExit(e);}
+        finally
+        {
+            // Secondary SHOW/EXIT helpers and smoke windows must not touch drivers.
+            if (!IsSmoke && networkOwner?.Acquired == true)
+                NetCat.Engine.WinDivertDriverCleanup.TryCleanup(Path.Combine(AppContext.BaseDirectory, "modules"));
+            networkOwner?.Dispose();mutex?.Dispose();base.OnExit(e);
+        }
     }
 }

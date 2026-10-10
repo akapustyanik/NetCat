@@ -51,6 +51,13 @@ public sealed record ModuleCheck(
 )
 {
     public bool Available => Release != null && ModuleUpdater.IsNewer(Release.Version, Installed);
+    // Available describes upstream discovery. Only this predicate describes a
+    // checked update that the normal installer can actually accept.
+    public bool InstallableUpdate => Available && Error.Length == 0 &&
+        Release!.Key == Key && Installability == InstallabilityStatus.Supported &&
+        VersionStatus is not (VersionStatus.Unknown or VersionStatus.CheckFailed) &&
+        StatusKind is UpdateStatusKind.Current or UpdateStatusKind.UpdateAvailable &&
+        AutoUpdateSupported;
     public string Latest => Release?.Version ?? "—";
     public string UpstreamLatest => !string.IsNullOrEmpty(Release?.UpstreamVersion) ? Release.UpstreamVersion : Latest;
     public bool AutoUpdateSupported

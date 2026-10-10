@@ -99,6 +99,7 @@ public sealed class Subscription
     public int UpdateHours { get; set; } = 24;
     public bool AllowInsecureTransport { get; set; }
     public string LastRefreshSummary { get; set; } = "";
+    public List<string> ExcludedProfileKeys { get; set; } = [];
     public override string ToString() => Name;
 }
 public sealed class AppSettings : System.ComponentModel.INotifyPropertyChanged
@@ -186,6 +187,8 @@ public sealed class AppSettings : System.ComponentModel.INotifyPropertyChanged
     public double PanelBrightness { get => _panelBrightness; set => SetField(ref _panelBrightness, value); }
     private bool _highContrastText;
     public bool HighContrastText { get => _highContrastText; set => SetField(ref _highContrastText, value); }
+    private double _interfaceScale = 1;
+    public double InterfaceScale { get => _interfaceScale; set => SetField(ref _interfaceScale, value); }
     private bool _minimizeToTray = true;
     public bool MinimizeToTray { get => _minimizeToTray; set => SetField(ref _minimizeToTray, value); }
     private string _zapretStrategy = "";

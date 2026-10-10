@@ -10,6 +10,9 @@ public static class Theme
     public static void Apply(AppSettings settings)
     {
         if (Application.Current == null) return;
+        var scale = double.IsFinite(settings.InterfaceScale) ? Math.Clamp(settings.InterfaceScale, .7, 1.3) : 1;
+        Application.Current.Resources["InterfaceScaleTransform"] = new ScaleTransform(scale, scale);
+        WindowFrame.UpdateScale(scale);
         var palette = ThemePalette.Create(settings);
         void Set(string key, ThemeColor color) => Application.Current.Resources[key] =
             new SolidColorBrush(Color.FromRgb(color.R, color.G, color.B));

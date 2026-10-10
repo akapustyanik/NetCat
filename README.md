@@ -17,7 +17,7 @@ Windows 10/11 x64. Для TUN, маршрутов и Zapret нужны прав�
 
 ## Установка
 
-Скачайте `NetCat-v1.0.2-win-x64.zip` из [Releases](https://github.com/akapustyanik/NetCat/releases),
+Скачайте `NetCat-v1.0.3-win-x64.zip` из [Releases](https://github.com/akapustyanik/NetCat/releases),
 распакуйте в отдельную папку и запустите `NetCat.exe`.
 
 ## Обновления

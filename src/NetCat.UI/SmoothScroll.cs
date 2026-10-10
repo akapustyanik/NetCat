@@ -2,7 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Animation;
+using System.Diagnostics;
 
 namespace NetCat.UI;
 
@@ -31,51 +31,109 @@ public static class SmoothScroll
     {
         if (args.Handled || (!App.IsSmoke && Keyboard.Modifiers != ModifierKeys.None) || SystemParameters.WheelScrollLines == 0) return;
         var element = (FrameworkElement)sender;
-        var viewer = FindViewer(element);
+        // Preview tunnels from outer to inner. Start with the viewer under the
+        // pointer so a page does not steal input from an embedded list/editor.
+        var source = args.OriginalSource as DependencyObject;
+        ScrollViewer? viewer = null;
+        while (source != null)
+        {
+            if (source is ScrollViewer found) { viewer = found; break; }
+            source = Parent(source);
+        }
+        viewer ??= FindViewer(element);
         // A ListBox's own ScrollViewer consumes bubbling wheel events even when
         // it has no overflow. Handle the nearest scrollable ancestor in preview.
         while (viewer != null)
         {
             var pixels = SystemParameters.WheelScrollLines < 0 ? viewer.ViewportHeight * .85 : SystemParameters.WheelScrollLines * 16;
-            if (Move(element, viewer, -args.Delta / 120d * pixels)) { args.Handled = true; return; }
-            var parent = VisualTreeHelper.GetParent(viewer);
-            while (parent != null && parent is not ScrollViewer) parent = VisualTreeHelper.GetParent(parent);
+            if (Move(viewer, viewer, -args.Delta / 120d * pixels, Math.Abs(args.Delta) < 120)) { args.Handled = true; return; }
+            var parent = Parent(viewer);
+            while (parent != null && parent is not ScrollViewer) parent = Parent(parent);
             viewer = parent as ScrollViewer;
         }
     }
+    private static DependencyObject? Parent(DependencyObject item) => item is Visual or System.Windows.Media.Media3D.Visual3D
+        ? VisualTreeHelper.GetParent(item) : item is FrameworkContentElement content ? content.Parent : LogicalTreeHelper.GetParent(item);
     internal static bool ScrollBy(FrameworkElement element, double delta)
     {
         var viewer = FindViewer(element);
         if (viewer == null) return false;
-        return Move(element, viewer, delta);
+        return Move(viewer, viewer, delta);
     }
-    private static bool Move(FrameworkElement element, ScrollViewer viewer, double delta)
+    private static bool Move(FrameworkElement element, ScrollViewer viewer, double delta, bool precise = false)
     {
         if (viewer.ScrollableHeight <= 0) return false;
         var state = element.GetValue(StateProperty) as ScrollState;
         if (state == null || state.Viewer != viewer) { state?.Stop(); state = new ScrollState(viewer); element.SetValue(StateProperty, state); }
-        return state.Move(delta);
+        return state.Move(delta, precise);
     }
-    private sealed class ScrollState(ScrollViewer viewer) : Animatable
+    private sealed class ScrollState
     {
-        public ScrollViewer Viewer { get; } = viewer;
+        public ScrollViewer Viewer { get; }
         private bool moving;
+        private bool pendingOffset;
+        private bool preciseInput;
         private double target;
-        private static readonly DependencyProperty OffsetProperty = DependencyProperty.Register("Offset", typeof(double), typeof(ScrollState), new PropertyMetadata(0d, (obj, e) => ((ScrollState)obj).Viewer.ScrollToVerticalOffset((double)e.NewValue)));
-        protected override Freezable CreateInstanceCore() => new ScrollState(Viewer);
-        public void Stop() { var position = Viewer.VerticalOffset; BeginAnimation(OffsetProperty, null); SetValue(OffsetProperty, position); moving = false; }
-        public bool Move(double delta)
+        private long previousFrame;
+        private double position;
+        public ScrollState(ScrollViewer viewer)
         {
-            var next = Math.Clamp((moving ? target : Viewer.VerticalOffset) + delta, 0, Viewer.ScrollableHeight);
-            if (Math.Abs(next - Viewer.VerticalOffset) < .1) return false;
-            var from = Viewer.VerticalOffset; Stop(); target = next;
-            if (!SystemParameters.ClientAreaAnimation) { Viewer.ScrollToVerticalOffset(next); return true; }
-            moving = true;
-            var animation = new DoubleAnimation(from, next, TimeSpan.FromMilliseconds(160)) { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }, FillBehavior = FillBehavior.Stop };
-            SetValue(OffsetProperty, next);
-            animation.Completed += (_, _) => { moving = false; Viewer.ScrollToVerticalOffset(target); };
-            BeginAnimation(OffsetProperty, animation, HandoffBehavior.SnapshotAndReplace);
+            Viewer = viewer;
+            viewer.Unloaded += (_, _) => Stop();
+            viewer.PreviewMouseDown += (_, _) => Stop();
+            viewer.PreviewKeyDown += (_, _) => Stop();
+            viewer.ScrollChanged += (_, _) =>
+            {
+                if (pendingOffset && Math.Abs(Viewer.VerticalOffset - target) < .01)
+                    pendingOffset = false;
+            };
+        }
+        public void Stop()
+        {
+            CompositionTarget.Rendering -= Frame;
+            moving = pendingOffset = false;
+            target = position = Viewer.VerticalOffset;
+        }
+        public bool Move(double delta, bool precise)
+        {
+            var basis = moving || pendingOffset ? target : Viewer.VerticalOffset;
+            var next = Math.Clamp(basis + delta, 0, Viewer.ScrollableHeight);
+            if (Math.Abs(next - basis) < .001) return false;
+            target = next;
+            preciseInput = precise;
+            if (!SystemParameters.ClientAreaAnimation) { Stop(); Viewer.ScrollToVerticalOffset(next); return true; }
+            if (!moving)
+            {
+                moving = true;
+                position = Viewer.VerticalOffset;
+                previousFrame = Stopwatch.GetTimestamp();
+                CompositionTarget.Rendering += Frame;
+            }
+            // Retarget a single frame loop; preserve precision-touchpad deltas.
             return true;
+        }
+        private void Frame(object? sender, EventArgs e)
+        {
+            var now = Stopwatch.GetTimestamp();
+            var elapsed = Math.Clamp((now - previousFrame) / (double)Stopwatch.Frequency, 0, .1);
+            previousFrame = now;
+            target = Math.Clamp(target, 0, Viewer.ScrollableHeight);
+            // Precision touchpads already provide a smooth stream and inertia.
+            // Apply their accumulated distance on the next frame without adding
+            // another easing tail that can lag behind the ongoing gesture.
+            position = preciseInput ? target : position + (target - position) * (1 - Math.Exp(-elapsed / .035));
+            var complete = Math.Abs(target - position) < .1;
+            if (complete) position = target;
+            Viewer.ScrollToVerticalOffset(position);
+            if (complete)
+            {
+                CompositionTarget.Rendering -= Frame;
+                moving = false;
+                // ScrollToVerticalOffset is deferred. Keep the requested offset
+                // until ScrollChanged confirms it, so the next delta cannot be
+                // based on the old offset while layout is still catching up.
+                pendingOffset = true;
+            }
         }
     }
 }

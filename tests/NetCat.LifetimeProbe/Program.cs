@@ -4,6 +4,12 @@ using NetCat.Engine;
 using NetCat.Network;
 using NetCat.Core;
 
+if(args is ["cleanup-driver", var modules])
+{
+    Console.WriteLine(WinDivertDriverCleanup.TryCleanup(modules));
+    return;
+}
+
 if(args is ["unsigned-update-admission"])
 {
     var root = Path.Combine(Path.GetTempPath(), "NetCat-UnsignedAdmission-" + Guid.NewGuid().ToString("N"));
