@@ -22,6 +22,7 @@ public sealed class OpenVpnDestinationGateway : IDisposable
     private readonly object activationGate=new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long,Task> requests=new();
     private readonly Task acceptTask;
+    private readonly Func<TcpListener,CancellationToken,ValueTask<TcpClient>> acceptTcp;
     private long requestId;
     private int disposed;
     private CancellationTokenSource? activation;
@@ -31,9 +32,11 @@ public sealed class OpenVpnDestinationGateway : IDisposable
     public Func<string,OpenVpnLink,Func<bool>,CancellationToken,Task<IReadOnlyList<OpenVpnResolvedAddress>>> Resolve {get;init;}
         =(name,link,current,ct)=>OpenVpnDestinationDns.ResolveAsync(name,link,current,ct);
 
-    public OpenVpnDestinationGateway(OpenVpnDestinationLeases leases,Func<int> peerProcess)
+    public OpenVpnDestinationGateway(OpenVpnDestinationLeases leases,Func<int> peerProcess,
+        Func<TcpListener,CancellationToken,ValueTask<TcpClient>>? acceptTcp=null)
     {
         this.leases=leases;this.peerProcess=peerProcess;
+        this.acceptTcp=acceptTcp??((server,ct)=>server.AcceptTcpClientAsync(ct));
         listener.Server.ExclusiveAddressUse=true;listener.Start();
         Endpoint=new(((IPEndPoint)listener.LocalEndpoint).Port,Convert.ToHexString(RandomNumberGenerator.GetBytes(32)),Convert.ToHexString(RandomNumberGenerator.GetBytes(32)));
         VerifyOwnership();acceptTask=AcceptAsync();
@@ -52,7 +55,7 @@ public sealed class OpenVpnDestinationGateway : IDisposable
         {
             while(true)
             {
-                var client=await listener.AcceptTcpClientAsync(lifetime.Token).ConfigureAwait(false);
+                var client=await TcpListenerRecovery.AcceptAsync(listener,lifetime.Token,acceptTcp).ConfigureAwait(false);
                 if(!capacity.Wait(0)){client.Dispose();continue;}
                 long id=Interlocked.Increment(ref requestId);
                 var task=HandleAsync(client);requests[id]=task;

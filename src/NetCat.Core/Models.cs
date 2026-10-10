@@ -150,6 +150,8 @@ public sealed class AppSettings : System.ComponentModel.INotifyPropertyChanged
     public string TelegramWsSecret { get => _telegramWsSecret; set => SetField(ref _telegramWsSecret, value); }
     private bool _checkModuleUpdates = true;
     public bool CheckModuleUpdates { get => _checkModuleUpdates; set => SetField(ref _checkModuleUpdates, value); }
+    private bool _autoUpdateNetCat;
+    public bool AutoUpdateNetCat { get => _autoUpdateNetCat; set => SetField(ref _autoUpdateNetCat, value); }
     private bool _tun = true;
     public bool Tun { get => _tun; set => SetField(ref _tun, value); }
     private int _socksPort = 10808;

@@ -14,6 +14,8 @@ public sealed class CorporateDnsGuard : IDisposable
     private readonly CancellationTokenSource lifetime = new();
     private readonly SemaphoreSlim capacity = new(256);
     private readonly Endpoint direct, vpn;
+    private readonly Func<UdpClient, CancellationToken, ValueTask<UdpReceiveResult>> receiveUdp;
+    private readonly Func<TcpListener, CancellationToken, ValueTask<TcpClient>> acceptTcp;
     public CorporateDomainGuard DomainGuard { get; }
 
     private sealed class Endpoint(TcpListener tcp, UdpClient udp, int returnPort)
@@ -44,8 +46,12 @@ public sealed class CorporateDnsGuard : IDisposable
     public int DirectReturnPort => direct.ReturnPort;
     public int VpnReturnPort => vpn.ReturnPort;
 
-    public CorporateDnsGuard(CorporateDomainGuard? domainGuard = null, Func<int>? allocatePort = null, IReadOnlyCollection<int>? excludedPorts = null)
+    public CorporateDnsGuard(CorporateDomainGuard? domainGuard = null, Func<int>? allocatePort = null, IReadOnlyCollection<int>? excludedPorts = null,
+        Func<UdpClient, CancellationToken, ValueTask<UdpReceiveResult>>? receiveUdp = null,
+        Func<TcpListener, CancellationToken, ValueTask<TcpClient>>? acceptTcp = null)
     {
+        this.receiveUdp = receiveUdp ?? ((socket, ct) => socket.ReceiveAsync(ct));
+        this.acceptTcp = acceptTcp ?? ((listener, ct) => listener.AcceptTcpClientAsync(ct));
         DomainGuard = domainGuard ?? new();
         var excluded = excludedPorts ?? Array.Empty<int>();
         direct = Bind(allocatePort, excluded);
@@ -148,7 +154,34 @@ public sealed class CorporateDnsGuard : IDisposable
 
     private async Task UdpLoop(Endpoint endpoint)
     {
-        try { while (!lifetime.IsCancellationRequested) { var q = await endpoint.Udp.ReceiveAsync(lifetime.Token); if (!IPAddress.IsLoopback(q.RemoteEndPoint.Address) || !capacity.Wait(0)) continue; _ = AnswerUdp(endpoint, q); } }
+        var ct = lifetime.Token;
+        var retryDelay = 100;
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                UdpReceiveResult q;
+                try
+                {
+                    q = await receiveUdp(endpoint.Udp, ct).ConfigureAwait(false);
+                    retryDelay = 100;
+                }
+                catch (SocketException e) when (e.SocketErrorCode is
+                    SocketError.NoBufferSpaceAvailable or SocketError.ConnectionReset or
+                    SocketError.ConnectionRefused or SocketError.NetworkReset or
+                    SocketError.NetworkDown or SocketError.Interrupted or SocketError.TryAgain or SocketError.TimedOut)
+                {
+                    // Resource exhaustion and UDP ICMP errors do not invalidate
+                    // this bound listener. Keep ownership and resume receiving
+                    // after resources recover; never spin or outlive disposal.
+                    await Task.Delay(retryDelay, ct).ConfigureAwait(false);
+                    retryDelay = Math.Min(retryDelay * 2, 1000);
+                    continue;
+                }
+                if (!IPAddress.IsLoopback(q.RemoteEndPoint.Address) || !capacity.Wait(0)) continue;
+                _ = AnswerUdp(endpoint, q);
+            }
+        }
         catch (Exception e) when (e is SocketException or OperationCanceledException or ObjectDisposedException) { }
     }
 
@@ -161,7 +194,7 @@ public sealed class CorporateDnsGuard : IDisposable
 
     private async Task TcpLoop(Endpoint endpoint)
     {
-        try { while (!lifetime.IsCancellationRequested) { var client = await endpoint.Tcp.AcceptTcpClientAsync(lifetime.Token); if (!capacity.Wait(0)) { client.Dispose(); continue; } _ = AnswerTcp(endpoint, client); } }
+        try { while (!lifetime.IsCancellationRequested) { var client = await TcpListenerRecovery.AcceptAsync(endpoint.Tcp, lifetime.Token, acceptTcp); if (!capacity.Wait(0)) { client.Dispose(); continue; } _ = AnswerTcp(endpoint, client); } }
         catch (Exception e) when (e is SocketException or OperationCanceledException or ObjectDisposedException) { }
     }
 

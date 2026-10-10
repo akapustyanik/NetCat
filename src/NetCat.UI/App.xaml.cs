@@ -90,6 +90,25 @@ public partial class App : Application
             }
             var vm = new MainViewModel(store, settings);
             appVm = vm;
+            vm.ApplicationUpdatePrepared += job => Dispatcher.BeginInvoke(new Action(async () =>
+            {
+                // Queue after the maintenance callback finishes so shutdown can
+                // drain that callback without waiting on its own completion.
+                if (!vm.CanAutomaticallyUpdate) { vm.AutomaticUpdateLaunchFailed(); return; }
+                try
+                {
+                    vm.Busy = true;
+                    await NetCat.Updater.PortableUpdate.LaunchAsync(job);
+                    vm.Busy = false;
+                    if (windowManager.CurrentWindow is MainWindow updateWindow) await updateWindow.ExitAsync();
+                    else { await vm.StopForExitAsync(); Shutdown(0); }
+                }
+                catch (Exception ex)
+                {
+                    vm.Busy = false; vm.AutomaticUpdateLaunchFailed();
+                    vm.UpdateStatus = "Автообновление NetCat не выполнено: " + ex.Message; vm.WriteLog(vm.UpdateStatus);
+                }
+            }), System.Windows.Threading.DispatcherPriority.Background);
             if (!IsSmoke) Microsoft.Win32.SystemEvents.PowerModeChanged += OnPowerChanged;
             if (!IsSmoke && settings.RestoreConnectionsOnStartup)
             {
@@ -146,11 +165,11 @@ public partial class App : Application
 
             networkOwner?.Listen(
                 () => Dispatcher.InvokeAsync(() => windowManager.ShowMainWindow(vm)).Task,
-                () => Dispatcher.InvokeAsync(async () =>
+                () => RunOnDispatcherAsync(Dispatcher, async () =>
                 {
                     if (windowManager.CurrentWindow is MainWindow mw) await mw.ExitAsync();
                     else { await vm.StopForExitAsync(); Shutdown(0); }
-                }).Task);
+                }));
 
             presentation.TrayAvailable = trayAvailable;
             var presentationState = presentation.PreferredState;
@@ -186,6 +205,9 @@ public partial class App : Application
         }
         catch (Exception ex) { if (e.Args.Contains("--smoke")) Console.Error.WriteLine(ex); else MessageBox.Show(ex.Message, "NetCat — ошибка запуска", MessageBoxButton.OK, MessageBoxImage.Error); Shutdown(1); }
     }
+    private static Task RunOnDispatcherAsync(System.Windows.Threading.Dispatcher dispatcher, Func<Task> operation) =>
+        dispatcher.InvokeAsync(operation).Task.Unwrap();
+
     protected override void OnSessionEnding(SessionEndingCancelEventArgs e)
     {
         base.OnSessionEnding(e);

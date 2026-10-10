@@ -301,3 +301,4 @@ public sealed class IndependentAuditTests : IDisposable
         await Assert.ThrowsAsync<InvalidDataException>(() => PortableUpdate.ExtractVerifiedAsync(root, hash, CancellationToken.None));
     }
 }
+

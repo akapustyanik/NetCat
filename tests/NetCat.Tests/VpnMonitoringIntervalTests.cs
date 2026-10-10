@@ -155,4 +155,54 @@ public sealed class VpnMonitoringIntervalTests : IDisposable
         }
         finally { await StopAsync(monitor); }
     }
+
+    [Fact]
+    public async Task MonitoringResumesAfterStopAndRestart()
+    {
+        using var f = new Candidate12Tests.Fixture(new SettingsStore(root)); await f.Reconcile();
+        var clock = new ControlledClock(); using var monitor = Monitor(f, clock);
+        var probed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        monitor.MeasureLatencyFunc = (_, _, _, _) => { probed.TrySetResult(); return Task.FromResult(new DelayResult(true, 10)); };
+        monitor.Start(); await clock.NextAsync(); await StopAsync(monitor);
+        Assert.False(monitor.IsRunning);
+        monitor.Start();
+        try
+        {
+            (await clock.NextAsync()).Complete.SetResult();
+            await probed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(monitor.IsRunning);
+        }
+        finally { await StopAsync(monitor); }
+    }
+
+    [Fact]
+    public async Task RestartWaitsForPreviousSlowProbeBeforeStartingAnotherCycle()
+    {
+        using var f = new Candidate12Tests.Fixture(new SettingsStore(root)); await f.Reconcile();
+        var clock = new ControlledClock(); using var monitor = Monitor(f, clock);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finish = new TaskCompletionSource<DelayResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        int calls = 0;
+        monitor.MeasureLatencyFunc = (_, _, _, _) => { Interlocked.Increment(ref calls); entered.TrySetResult(); return finish.Task; };
+        monitor.Start();
+        try
+        {
+            (await clock.NextAsync()).Complete.SetResult(); await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            monitor.Stop(); monitor.Start(); monitor.Start();
+            await Task.Delay(100);
+            Assert.Equal(1, calls); Assert.False(clock.Waits.Reader.TryPeek(out _));
+            finish.TrySetResult(new(true, 10));
+            (await clock.NextAsync()).Complete.SetResult();
+            await clock.NextAsync(); Assert.Equal(2, calls);
+        }
+        finally { finish.TrySetResult(new(true, 10)); await StopAsync(monitor); }
+    }
+
+    [Fact]
+    public void DisposedMonitorRejectsRestart()
+    {
+        using var f = new Candidate12Tests.Fixture(new SettingsStore(root));
+        var monitor = Monitor(f, new ControlledClock()); monitor.Dispose();
+        Assert.Throws<ObjectDisposedException>(monitor.Start);
+    }
 }

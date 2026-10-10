@@ -13,11 +13,13 @@ public static class PublisherTrust
     [StructLayout(LayoutKind.Sequential)] private struct TrustData { public uint Size;public nint Policy,Sip;public uint Ui,Revocation,Choice;public nint File;public uint StateAction;public nint State,Url;public uint Flags,Context; }
     [DllImport("wintrust.dll",ExactSpelling=true)] private static extern int WinVerifyTrust(nint hwnd,ref Guid action,ref TrustData data);
     public static bool IsTrusted(string path)
+        => VerificationStatus(path) == 0;
+    public static int VerificationStatus(string path)
     {
         var file=new FileInfo { Size=(uint)Marshal.SizeOf<FileInfo>(),Path=path };var ptr=Marshal.AllocHGlobal(Marshal.SizeOf<FileInfo>());Marshal.StructureToPtr(file,ptr,false);
         var action=new Guid("00AAC56B-CD44-11d0-8CC2-00C04FC295EE");
         var data=new TrustData { Size=(uint)Marshal.SizeOf<TrustData>(),Ui=2,Choice=1,File=ptr,Flags=0x1000 };
-        try { return WinVerifyTrust(0,ref action,ref data)==0; } finally { Marshal.DestroyStructure<FileInfo>(ptr);Marshal.FreeHGlobal(ptr); }
+        try { return WinVerifyTrust(0,ref action,ref data); } finally { Marshal.DestroyStructure<FileInfo>(ptr);Marshal.FreeHGlobal(ptr); }
     }
     public static void RequireSamePublisher(string current,string next)
     {

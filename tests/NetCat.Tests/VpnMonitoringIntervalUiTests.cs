@@ -1,6 +1,5 @@
 using System.Reflection;
 using System.Windows.Controls;
-using System.Windows.Threading;
 using NetCat.Core;
 using NetCat.UI;
 using Xunit;
@@ -9,19 +8,8 @@ namespace NetCat.Tests;
 
 public sealed partial class Candidate32UiAuditTests
 {
-    private static void InvokeAutoTestTick(MainWindow window)
-    {
-        // Construct fixtures in smoke mode so no host-network monitors start.
-        // Only exercise a single synchronous tick of this empty/local fixture.
-        var smoke = typeof(App).GetProperty(nameof(App.IsSmoke))!;
-        var previous = App.IsSmoke;
-        try
-        {
-            smoke.SetValue(null, false);
-            typeof(MainWindow).GetMethod("TimerTick", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [null, EventArgs.Empty]);
-        }
-        finally { smoke.SetValue(null, previous); }
-    }
+    private static ApplicationMaintenanceScheduler Maintenance(MainViewModel vm) =>
+        (ApplicationMaintenanceScheduler)typeof(MainViewModel).GetField("maintenance", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(vm)!;
     [Theory]
     [InlineData(0)]
     [InlineData(-10)]
@@ -58,21 +46,13 @@ public sealed partial class Candidate32UiAuditTests
     [InlineData(1)]
     [InlineData(2)]
     [InlineData(15)]
-    public Task BackgroundProfileTestSchedulesSelectedIntervalAfterCompletion(int seconds) => Sta.Run(() =>
+    public Task BackgroundProfileTestSchedulesSelectedIntervalAfterCompletion(int seconds) => Sta.Run(async () =>
     {
         using var vm = new MainViewModel(new SettingsStore(root), new AppSettings { AutoTest = true, TestIntervalSeconds = seconds, CheckModuleUpdates = false });
-        var window = new MainWindow(vm);
-        try
-        {
-            ((DispatcherTimer)typeof(MainWindow).GetField("timer", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!).Stop();
-            var before = DateTime.Now;
-            InvokeAutoTestTick(window);
-            var after = DateTime.Now;
-            var scheduled = (DateTime)typeof(MainWindow).GetField("nextTest", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
-            Assert.InRange(scheduled, before.AddSeconds(seconds), after.AddSeconds(seconds));
-        }
-        finally { window.Close(); }
-        return Task.CompletedTask;
+        var before = DateTime.Now;
+        await Maintenance(vm).TickAsync();
+        var after = DateTime.Now;
+        Assert.InRange(Maintenance(vm).NextProfileTest, before.AddSeconds(seconds), after.AddSeconds(seconds));
     });
 
     [Theory]
@@ -82,25 +62,22 @@ public sealed partial class Candidate32UiAuditTests
     public Task BackgroundTicksAndManualRequestsDoNotQueueWhileProfileBatchIsRunning(int seconds) => Sta.Run(async () =>
     {
         using var vm = new MainViewModel(new SettingsStore(root), new AppSettings { AutoTest = true, TestIntervalSeconds = seconds, CheckModuleUpdates = false });
-        var window = new MainWindow(vm);
         var complete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         int calls = 0;
         var running = vm.RunTestsAsync(async ct => { calls++; await complete.Task.WaitAsync(ct); });
         try
         {
-            ((DispatcherTimer)typeof(MainWindow).GetField("timer", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!).Stop();
-            var nextField = typeof(MainWindow).GetField("nextTest", BindingFlags.Instance | BindingFlags.NonPublic)!;
-            var due = DateTime.Now.AddSeconds(-seconds * 5); nextField.SetValue(window, due);
+            var due = Maintenance(vm).NextProfileTest;
             for (int i = 0; i < 20; i++)
             {
-                InvokeAutoTestTick(window);
+                await Maintenance(vm).TickAsync();
                 await vm.RunTestsAsync(_ => { calls++; return Task.CompletedTask; });
             }
-            Assert.True(vm.TestsBusy); Assert.Equal(1, calls); Assert.Equal(due, nextField.GetValue(window));
+            Assert.True(vm.TestsBusy); Assert.Equal(1, calls); Assert.Equal(due, Maintenance(vm).NextProfileTest);
             complete.SetResult(); await running;
             Assert.False(vm.TestsBusy); Assert.Equal(1, calls);
         }
-        finally { complete.TrySetResult(); await running; window.Close(); }
+        finally { complete.TrySetResult(); await running; }
     });
 
     [Fact]

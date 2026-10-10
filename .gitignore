@@ -25,6 +25,7 @@ runtime/
 *.pfx
 *.key
 *.cer
+!/src/NetCat.Updater/PublisherCertificate.cer
 *.crt
 
 # Geodata and binary databases
@@ -69,4 +70,5 @@ venv/
 /docs/releases/*
 !/docs/releases/v1.0.0.md
 !/docs/releases/v1.0.1.md
+!/docs/releases/v1.0.2.md
 /scripts/Test-ZapretLifetime.ps1

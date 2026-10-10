@@ -17,6 +17,7 @@ try {
     Copy-Item -Path (Join-Path $taskRoot 'bin/*') -Destination (Join-Path $taskOutput 'modules') -Recurse -Force
     Copy-Item -LiteralPath (Join-Path $taskRoot 'README.md') -Destination (Join-Path $taskOutput 'README.md') -Force
     Copy-Item -LiteralPath (Join-Path $taskRoot 'THIRD_PARTY_NOTICES.md') -Destination (Join-Path $taskOutput 'THIRD_PARTY_NOTICES.md') -Force
+    Copy-Item -LiteralPath (Join-Path $taskRoot 'src/NetCat.Updater/PublisherCertificate.cer') -Destination (Join-Path $taskOutput 'NetCat-Publisher.cer') -Force
     if (Test-Path -LiteralPath (Join-Path $taskRoot 'licenses')) {
         Copy-Item -Path (Join-Path $taskRoot 'licenses') -Destination (Join-Path $taskOutput 'licenses') -Recurse -Force
     }

@@ -91,10 +91,22 @@ public static class PortableUpdate
         catch { UpdateCleanup.TryRemoveStage(stage); throw; }
     }
     public static async Task ExtractVerifiedAsync(string stage,string hash,CancellationToken ct)
+        => await ExtractVerifiedAsync(stage, hash, "payload", ct);
+
+    // Preparation already created payload. The authenticated helper independently
+    // hashes and extracts the archive into a fresh directory before applying it.
+    public static async Task<string> ExtractForApplyAsync(string stage,string hash,CancellationToken ct)
     {
-        var zip=Path.Combine(stage,"package.zip"); await using(var file=File.OpenRead(zip))
+        var directory = "apply-payload-" + Guid.NewGuid().ToString("N");
+        await ExtractVerifiedAsync(stage, hash, directory, ct);
+        return SafePath(stage, directory);
+    }
+
+    private static async Task ExtractVerifiedAsync(string stage,string hash,string directory,CancellationToken ct)
+    {
+        var zip=SafePath(stage,"package.zip"); await using(var file=File.OpenRead(zip))
             if(!Convert.ToHexString(await SHA256.HashDataAsync(file,ct)).Equals(hash,StringComparison.OrdinalIgnoreCase))throw new InvalidDataException("SHA-256 архива не совпадает.");
-        await PackageLimits.ExtractAsync(zip, Path.Combine(stage, "payload"), ct, byteLimit: 2L * 1024 * 1024 * 1024, entryLimit: 50000);
+        await PackageLimits.ExtractAsync(zip, SafePath(stage, directory), ct, byteLimit: 2L * 1024 * 1024 * 1024, entryLimit: 50000);
     }
     public static Task LaunchAsync(string jobPath) => UpdateChannel.LaunchAsync(jobPath);
     // Status reporting is diagnostic, not part of the update transaction.
@@ -181,13 +193,10 @@ public static class PortableUpdate
                 job.Root,
                 signed);
 
-            await ExtractVerifiedAsync(
+            var payload = await ExtractForApplyAsync(
                 job.Stage,
                 job.ArchiveHash,
                 deadline.Token);
-
-            var payload =
-                Path.Combine(job.Stage, "payload");
 
             var manifest =
                 await VerifyAsync(

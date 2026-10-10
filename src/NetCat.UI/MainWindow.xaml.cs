@@ -22,13 +22,11 @@ public partial class MainWindow : Window
     public MainViewModel VM { get; }
     private readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromSeconds(1) };
     private TelegramService telegram => VM.Telegram;
-    private bool exiting, timerBusy;
+    private bool exiting;
     private readonly WindowPresentationSession? presentation;
-    private DateTime nextTest = DateTime.Now;
     private readonly CancellationTokenSource lifetime = new();
     private readonly IUnelevatedShellLauncher journalShell;
     private int journalActionRunning;
-    private DateTime nextModuleCheck = DateTime.Now.AddHours(6);
     private int backgroundTicks;
     private readonly Queue<double> traffic = new();
     private sealed record ModuleVersionChoice(
@@ -57,7 +55,6 @@ public partial class MainWindow : Window
                 }
                 if (repaired) { VM.State.ProfileFormatVersion = 1; await VM.SaveAsync(); }
             }
-            if (VM.State.CheckModuleUpdates) await VM.CheckUpdatesAsync(lifetime.Token);
         };
     }
     private void Vpn_Click(object sender, RoutedEventArgs e) => VM.UserRequestedVpnChange(!VM.Router.VpnRequested);
@@ -572,6 +569,35 @@ public partial class MainWindow : Window
         }
     }
     private async void CheckModule_Click(object sender, RoutedEventArgs e) => await VM.CheckUpdatesAsync(lifetime.Token);
+    private async void TrustPublisher_Click(object sender, RoutedEventArgs e)
+    {
+        if (MessageBox.Show(this,
+            "Добавить собственный сертификат NetCat в доверенные корневые сертификаты и издатели текущего пользователя Windows?\n\n" +
+            VM.PublisherFingerprint + "\n\nЭто разрешает Windows доверять программам, подписанным этим ключом. Сверьте отпечаток с официальным README NetCat. Сертификат не будет добавлен для других пользователей.",
+            "Доверие издателю NetCat", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+        await VM.RunAsync(async _ =>
+        {
+            await Task.Run(() => PublisherCertificateTrust.Install(Environment.ProcessPath!));
+            VM.RefreshPublisherTrust(); VM.UpdateStatus = "Сертификат добавлен. Автоустановку можно включить отдельно.";
+        });
+    }
+    private void ExportPublisher_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new SaveFileDialog { Filter = "Сертификат (*.cer)|*.cer", FileName = "NetCat-Publisher.cer" };
+        if (dialog.ShowDialog(this) != true) return;
+        try { PublisherCertificateTrust.Export(dialog.FileName); VM.Status = "Сохранён публичный сертификат NetCat."; }
+        catch (Exception ex) { VM.Status = "Не удалось сохранить сертификат: " + ex.Message; }
+    }
+    private async void RemovePublisherTrust_Click(object sender, RoutedEventArgs e)
+    {
+        if (MessageBox.Show(this, "Удалить доверие к сертификату NetCat для текущего пользователя Windows? Автоустановка будет выключена.",
+            "Доверие издателю NetCat", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+        await VM.RunAsync(async _ =>
+        {
+            await Task.Run(() => PublisherCertificateTrust.Remove()); VM.State.AutoUpdateNetCat = false;
+            await VM.SaveAsync(); VM.RefreshPublisherTrust();
+        });
+    }
     private void RequireStopped() { if (VM.Router.Running || VM.Zapret.Running || telegram.Running || VM.TestsBusy) throw new InvalidOperationException("Перед установкой остановите подключения и тесты. Проверять обновления можно в любое время."); }
     private string? pendingNetcatUpdate;
     private async void InstallModule_Click(object sender, RoutedEventArgs e) => await VM.RunAsync(async ct =>
@@ -917,36 +943,10 @@ public partial class MainWindow : Window
     private async void StopAll_Click(object sender, RoutedEventArgs e) => await RunJournalActionAsync("stop-all", _ => VM.StopComponentsAsync());
     private async void RetryNetwork_Click(object sender, RoutedEventArgs e) => await RunJournalActionAsync("retry-network", VM.RetryNetworkAsync);
     private async void NetworkInfo_Click(object sender, RoutedEventArgs e) => await RunJournalActionAsync("check-physical-dns", _ => { var n = PhysicalNetwork.Capture(VM.State.PhysicalInterface); VM.WriteLog($"Физический адаптер: {n.Name}; DNS: {n.Dns}; суффиксы: {string.Join(", ", n.Suffixes)}. Прямые локальные домены используют этот DNS."); return Task.CompletedTask; });
-    private async void TimerTick(object? sender, EventArgs e)
+    private void TimerTick(object? sender, EventArgs e)
     {
         backgroundTicks++;
-        UpdateTraffic(); UpdatePingDisplay(); VM.PollRuntimeState(); if (timerBusy || VM.Busy || exiting) return;
-        timerBusy = true;
-        try
-        {
-            if (!App.IsSmoke && VM.State.AutoTest && !VM.Recovering && !VM.TestsBusy && DateTime.Now >= nextTest)
-            {
-                await VM.RunTestsAsync(async ct =>
-                {
-                    var settings=JsonSettings.Clone(VM.State); var revision=VM.Router.SessionRevision;
-                    var candidates = settings.Profiles.Where(p => !p.IsOpenVpn && (p.Candidate || p.Id == settings.MainProfileId)).ToArray(); var results = new List<(Profile Profile, DelayResult Result)>();
-                    foreach (var p in candidates)
-                    {
-                        if (!settings.AutoTest && p.Id != settings.MainProfileId) continue;
-                        VM.TestStatus="Фоновый тест: "+p.Name;
-                        var result = await VM.Router.TestProfileAsync(p, settings, ct);
-                        var current=VM.Profiles.FirstOrDefault(x=>x.Id==p.Id); current?.SetTestResult(result);
-                        results.Add((p, result));
-                    }
-
-                });
-                nextTest = DateTime.Now.AddSeconds(Math.Max(1, VM.State.TestIntervalSeconds));
-            }
-            if(!App.IsSmoke && VM.State.CheckModuleUpdates && DateTime.Now>=nextModuleCheck)
-            { nextModuleCheck=DateTime.Now.AddHours(6); await VM.CheckUpdatesAsync(lifetime.Token); }
-        }
-        catch (Exception ex) { VM.WriteLog(ex.Message); }
-        finally { timerBusy = false; }
+        UpdateTraffic(); UpdatePingDisplay(); VM.PollRuntimeState();
     }
     private void UpdateTraffic()
     {

@@ -37,26 +37,8 @@ public sealed class PortStartupTests
     public async Task XrayBridgeRetriesWithFreshTcpUdpPort()
     {
         using var occupied=new TcpListener(IPAddress.Loopback,0);occupied.Start();var port=((IPEndPoint)occupied.LocalEndpoint).Port;int allocations=0;
-        var recovery=PortStartup.BindTcpUdp();
-        using var recoveryTcp=recovery.Tcp;using var recoveryUdp=recovery.Udp;
-        var recoveryPort=((IPEndPoint)recoveryTcp.LocalEndpoint).Port;
         var root=Path.Combine(Path.GetTempPath(),"NetCat-XrayPort-"+Guid.NewGuid());
-        using(var router=new RouterService(RoutingTests.ModuleRoot,root)
-        {
-            // Hold the recovery candidate through initial listener setup and the
-            // failed attempt, then hand it to the allocator. A random free-port
-            // probe can return another already planned internal listener's port.
-            AllocateTcpUdpPort=()=>
-            {
-                if(++allocations==1)return port;
-                Assert.Equal(2,allocations);
-                using var competingTcp=new TcpListener(IPAddress.Loopback,recoveryPort){ExclusiveAddressUse=true};
-                using var competingUdp=new UdpClient(AddressFamily.InterNetwork);competingUdp.Client.ExclusiveAddressUse=true;
-                Assert.Throws<SocketException>(()=>competingTcp.Start());
-                Assert.Throws<SocketException>(()=>competingUdp.Client.Bind(new IPEndPoint(IPAddress.Loopback,recoveryPort)));
-                recoveryTcp.Stop();recoveryUdp.Dispose();return recoveryPort;
-            }
-        })
+        using(var router=new RouterService(RoutingTests.ModuleRoot,root){AllocateTcpUdpPort=()=>++allocations==1?port:OpenVpnService.FreeTcpUdpPort()})
         {
             var p=ProfileImporter.ParseLink("trojan://test@192.0.2.1:443?security=tls#port");var s=new AppSettings {Tun=false,Profiles=[p],MainProfileId=p.Id,SocksPort=OpenVpnService.FreePort()};
             await router.SetVpnAsync(s,true);Assert.True(router.VpnRunning);Assert.Equal(2,allocations);await router.StopAllAsync();

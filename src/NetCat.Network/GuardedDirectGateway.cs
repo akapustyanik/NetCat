@@ -88,7 +88,7 @@ internal sealed class GuardedDirectGateway : IDisposable
 
     private async Task AcceptAsync()
     {
-        try { while (!lifetime.IsCancellationRequested) { var client = await listener.AcceptTcpClientAsync(lifetime.Token); var lease=admission.TryAccept(); if(lease==null){client.Dispose();continue;} _ = ServeAsync(client,lease); } }
+        try { while (!lifetime.IsCancellationRequested) { var client = await TcpListenerRecovery.AcceptAsync(listener, lifetime.Token); var lease=admission.TryAccept(); if(lease==null){client.Dispose();continue;} _ = ServeAsync(client,lease); } }
         catch (Exception e) when (e is SocketException or OperationCanceledException or ObjectDisposedException) { }
     }
 

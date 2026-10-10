@@ -33,6 +33,22 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
     private readonly SemanticLogCoalescer coalescer = new();
     private Task logPump = Task.CompletedTask;
     private Task subscriptionPump = Task.CompletedTask;
+    private readonly ApplicationMaintenanceScheduler maintenance;
+    private readonly AutomaticApplicationUpdate applicationUpdate;
+    public event Action<string>? ApplicationUpdatePrepared;
+    public bool CanAutomaticallyUpdate => State.AutoUpdateNetCat && !State.PinnedModules.Contains("netcat") &&
+        !Busy && !TestsBusy && !CheckingUpdates && !Recovering && !IsStartupRestoring &&
+        PendingSelection.IsCompleted && PendingRoutes.IsCompleted && PendingOpenVpnSelection.IsCompleted &&
+        !Router.Running && !Router.VpnRequested && !Router.OpenVpn.Running && !Zapret.Running && !Telegram.Running &&
+        !DesiredState.MainVpnEnabled && !DesiredState.OpenVpnEnabled && !DesiredState.ZapretEnabled &&
+        NetCat.Core.WindowsExecutableTrust.IsElevated && PublisherCertificateTrust.IsEnrolled() &&
+        PublisherTrust.IsTrusted(Environment.ProcessPath!);
+    public void AutomaticUpdateLaunchFailed() => applicationUpdate.LaunchFailed();
+    public string PublisherTrustStatus => PublisherCertificateTrust.IsEnrolled()
+        ? "Сертификат NetCat добавлен для текущего пользователя Windows."
+        : "Сертификат NetCat ещё не добавлен в доверенные.";
+    public string PublisherFingerprint => "SHA256: " + PublisherCertificateTrust.Sha256;
+    public void RefreshPublisherTrust() => OnPropertyChanged(nameof(PublisherTrustStatus));
     private readonly SemaphoreSlim subscriptionRefreshGate = new(1);
     public string LogMetrics { get; private set; } = "";
 
@@ -681,8 +697,21 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
             }
         };
 
+        applicationUpdate = new AutomaticApplicationUpdate(
+            () => CanAutomaticallyUpdate, () => Modules.FirstOrDefault(m => m.Key == "netcat" && m.Available && m.Check.AutoUpdateSupported)?.Check.Release,
+            (release, ct) => PortableUpdate.PrepareAsync(release, AppContext.BaseDirectory,
+                State.PinnedModules.Concat(ModuleUpdater.Keys.Where(key => key != "netcat")).ToHashSet(StringComparer.OrdinalIgnoreCase), ct),
+            job => ApplicationUpdatePrepared?.Invoke(job),
+            ex => { UpdateStatus = "Автообновление NetCat отложено: " + ex.Message; WriteLog(UpdateStatus); });
+        maintenance = new ApplicationMaintenanceScheduler(
+            () => State, () => !Busy && !Recovering && !IsStartupRestoring,
+            () => !TestsBusy, RunBackgroundProfileTestsAsync, CheckUpdatesAsync,
+            ex => WriteLog("BACKGROUND_MAINTENANCE error=" + ProcessHost.Redact(ex.Message)),
+            maintain: applicationUpdate.TickAsync);
+
         if (!App.IsSmoke)
         {
+            maintenance.Start();
             HealthMonitor.Start();
             TrafficMonitor.StartSampling();
             NetworkMonitor.Start();
@@ -698,6 +727,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
 
     }
     public void Refresh() => projection.Post(RefreshCore);
+
+    private Task RunBackgroundProfileTestsAsync(CancellationToken ct) => RunTestsAsync(async testToken =>
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, testToken);
+        var settings = JsonSettings.Clone(State);
+        var candidates = settings.Profiles.Where(p => !p.IsOpenVpn && (p.Candidate || p.Id == settings.MainProfileId)).ToArray();
+        foreach (var p in candidates)
+        {
+            TestStatus = "Фоновый тест: " + p.Name;
+            var result = await Router.TestProfileAsync(p, settings, linked.Token);
+            Profiles.FirstOrDefault(x => x.Id == p.Id)?.SetTestResult(result);
+        }
+    });
 
     private void RefreshCore()
     {
@@ -1407,6 +1449,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
     }
     public void Dispose()
     {
+        maintenance.Dispose();
         maintenanceLifetime.Cancel(); NetworkMonitor.Dispose();
         if(disposed)return; disposed=true; State.PropertyChanged-=StateChanged;
         Store.Diagnostic -= WriteLog;
@@ -1421,7 +1464,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
     public async Task StopForExitAsync()
     {
         WriteLog($"APP_EXIT\n  pid={Environment.ProcessId}\n  reason=normal");
-        maintenanceLifetime.Cancel(); NetworkMonitor.Dispose(); HealthMonitor.Stop(); TrafficMonitor.StopSampling(); await logPump; await subscriptionPump;
+        maintenanceLifetime.Cancel(); NetworkMonitor.Dispose(); HealthMonitor.Stop(); TrafficMonitor.StopSampling();
+        await maintenance.StopAsync(); await logPump; await subscriptionPump;
         selectionChange.Cancel();WorkCancellation.Cancel();TestsCancellation.Cancel();
         try {await PendingSelection;await PendingRoutes;await SaveAsync();}
         finally

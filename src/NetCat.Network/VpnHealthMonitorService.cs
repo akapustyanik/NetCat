@@ -21,9 +21,11 @@ public class VpnHealthMonitorService : IVpnHealthMonitorService
     private readonly Func<DesiredRuntimeState> getDesiredState;
     private readonly Action<Func<DesiredRuntimeState, DesiredRuntimeState>> updateDesiredState;
     private readonly FailoverPolicy failoverPolicy = new();
-    private readonly CancellationTokenSource cts = new();
+    private readonly object lifecycleGate = new();
+    private CancellationTokenSource? cts;
     private Task? loopTask;
-    private bool isRunning;
+    private volatile bool isRunning;
+    private bool disposed;
     private int isProbing;
     private long lastObservedRevision = -1;
 
@@ -56,20 +58,46 @@ public class VpnHealthMonitorService : IVpnHealthMonitorService
 
     public void Start()
     {
-        if (isRunning) return;
-        isRunning = true;
-        loopTask = Task.Run(MonitorLoopAsync);
+        lock (lifecycleGate)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            if (isRunning) return;
+            var previous = loopTask;
+            var source = new CancellationTokenSource();
+            cts = source;
+            isRunning = true;
+            loopTask = Task.Run(async () =>
+            {
+                try
+                {
+                    // Stop cancels promptly. A restart must still drain a probe
+                    // whose implementation has not yet observed cancellation.
+                    if (previous != null) await previous.ConfigureAwait(false);
+                    await MonitorLoopAsync(source.Token).ConfigureAwait(false);
+                }
+                finally
+                {
+                    lock (lifecycleGate)
+                    {
+                        if (ReferenceEquals(cts, source)) { cts = null; isRunning = false; }
+                        source.Dispose();
+                    }
+                }
+            });
+        }
     }
 
     public void Stop()
     {
-        isRunning = false;
-        cts.Cancel();
+        lock (lifecycleGate)
+        {
+            isRunning = false;
+            cts?.Cancel();
+        }
     }
 
-    private async Task MonitorLoopAsync()
+    private async Task MonitorLoopAsync(CancellationToken token)
     {
-        var token = cts.Token;
         while (!token.IsCancellationRequested && isRunning)
         {
             var settings = configRepo.CurrentSettings;
@@ -236,7 +264,11 @@ public class VpnHealthMonitorService : IVpnHealthMonitorService
 
     public void Dispose()
     {
-        Stop();
-        cts.Dispose();
+        lock (lifecycleGate)
+        {
+            if (disposed) return;
+            disposed = true;
+            Stop();
+        }
     }
 }

@@ -26,7 +26,7 @@ internal sealed class GuardedVpnGateway(CorporateDomainGuard domains) : IDisposa
     private static TcpListener StartListener() { var t = new TcpListener(IPAddress.Loopback, 0) { ExclusiveAddressUse = true }; t.Start(); return t; }
     private async Task Accept()
     {
-        try { while (!lifetime.IsCancellationRequested) { var c = await listener.AcceptTcpClientAsync(lifetime.Token); var lease=admission.TryAccept(); if(lease==null){c.Dispose();continue;} _ = Serve(c,lease); } }
+        try { while (!lifetime.IsCancellationRequested) { var c = await TcpListenerRecovery.AcceptAsync(listener, lifetime.Token); var lease=admission.TryAccept(); if(lease==null){c.Dispose();continue;} _ = Serve(c,lease); } }
         catch(Exception e) when(e is OperationCanceledException or SocketException or ObjectDisposedException) { }
     }
     private static async Task<byte[]> Read(Stream s,int n,CancellationToken ct) { var b=new byte[n]; await s.ReadExactlyAsync(b,ct);return b; }

@@ -234,6 +234,18 @@
    <TabItem Header="Настройки"><ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,20,0"><StackPanel>
     <TextBlock Text="Настройки" Style="{StaticResource Heading}"/>
     <Border Style="{StaticResource Panel}"><StackPanel>
+     <TextBlock Text="Обновления NetCat" Style="{StaticResource Section}"/>
+     <TextBlock Text="{Binding PublisherTrustStatus}" Style="{StaticResource Caption}"/>
+     <TextBlock Text="{Binding PublisherFingerprint}" Style="{StaticResource Caption}" TextWrapping="Wrap"/>
+     <WrapPanel>
+      <Button Content="Доверять сертификату NetCat" Click="TrustPublisher_Click"/>
+      <Button Content="Сохранить сертификат…" Click="ExportPublisher_Click"/>
+      <Button Content="Удалить доверие" Click="RemovePublisherTrust_Click"/>
+     </WrapPanel>
+     <CheckBox Content="Автоматически устанавливать обновления NetCat" IsChecked="{Binding State.AutoUpdateNetCat}" Click="Save_Click"/>
+     <TextBlock Text="После добавления сертификата NetCat проверяет обновления при запуске и каждые 6 часов. Установка ждёт остановки подключений и тестов, затем перезапускает приложение. Закреплённая версия NetCat не обновляется. Нужен запуск с правами администратора." Style="{StaticResource Caption}"/>
+    </StackPanel></Border>
+    <Border Style="{StaticResource Panel}"><StackPanel>
      <TextBlock Text="Оформление" Style="{StaticResource Section}"/>
      <TextBlock Text="Выберите фон и акцент. Панели сохраняют оттенок фона без резкого переключения темы; подписи автоматически подстраиваются для читаемости." Style="{StaticResource Caption}"/>
      <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
