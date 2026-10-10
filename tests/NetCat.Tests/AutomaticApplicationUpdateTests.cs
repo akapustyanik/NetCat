@@ -19,11 +19,21 @@ public sealed class AutomaticApplicationUpdateTests
     }
 
     [Fact]
-    public async Task DisabledOrActiveSessionNeverPreparesUpdate()
+    public async Task DisabledOrBusySessionNeverPreparesUpdate()
     {
         int calls = 0;
         var updater = new AutomaticApplicationUpdate(() => false, () => Release, (_, _) => { calls++; return Task.FromResult("job"); }, _ => throw new Exception(), _ => throw new Exception());
         await updater.TickAsync(CancellationToken.None); Assert.Equal(0, calls);
+    }
+
+    [Fact]
+    public async Task NoAvailableUpdateDoesNotRepeatCertificateAndExecutableTrustChecks()
+    {
+        int trustChecks = 0;
+        var updater = new AutomaticApplicationUpdate(() => { trustChecks++; return true; }, () => null,
+            (_, _) => throw new Exception("No update to prepare."), _ => throw new Exception(), _ => throw new Exception());
+        for (int tick = 0; tick < 1000; tick++) await updater.TickAsync(CancellationToken.None);
+        Assert.Equal(0, trustChecks);
     }
 
     [Fact]
@@ -48,6 +58,22 @@ public sealed class AutomaticApplicationUpdateTests
         Assert.Equal(1, calls); now = now.AddMinutes(1); await updater.TickAsync(CancellationToken.None); Assert.Equal(2, calls); Assert.Equal(2, errors);
         using var cancel = new CancellationTokenSource(); cancel.Cancel(); now = now.AddMinutes(5);
         await updater.TickAsync(cancel.Token); Assert.Equal(2, calls);
+    }
+
+    [Fact]
+    public async Task ChangedReleaseCannotReuseAJobPreparedForAnotherPackage()
+    {
+        bool idle = true; int calls = 0;
+        var candidate = Release;
+        var finish = new TaskCompletionSource<string>();
+        var jobs = new List<string>();
+        var updater = new AutomaticApplicationUpdate(() => idle, () => candidate,
+            (_, _) => { calls++; return calls == 1 ? finish.Task : Task.FromResult("new-job"); }, jobs.Add, _ => throw new Exception());
+        var pending = updater.TickAsync(CancellationToken.None);
+        idle = false; finish.SetResult("old-job"); await pending;
+        candidate = Release with { Version = "1.0.4", Sha256 = new string('b', 64) };
+        idle = true; await updater.TickAsync(CancellationToken.None);
+        Assert.Equal(2, calls); Assert.Equal(new[] { "new-job" }, jobs);
     }
 
 }

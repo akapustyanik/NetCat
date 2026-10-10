@@ -27,7 +27,7 @@ public static class PublisherTrust
         catch(System.Security.Cryptography.CryptographicException) { throw new InvalidDataException("Самообновление NetCat требует подписанную сборку. Для неподписанного тестового EXE используйте новую тестовую папку."); }
         if(!IsTrusted(current))throw new InvalidDataException("Подпись установленной программы не прошла проверку. Автообновление остановлено.");
         if(!IsTrusted(next))throw new InvalidDataException("Обновление подписанной программы должно иметь доверенную подпись.");
-        using var oldCert=new X509Certificate2(X509Certificate.CreateFromSignedFile(current));using var newCert=new X509Certificate2(X509Certificate.CreateFromSignedFile(next));
+        using var oldCert=X509Certificate.CreateFromSignedFile(current);using var newCert=X509Certificate.CreateFromSignedFile(next);
         RequireIdentity(true,true,oldCert.GetPublicKeyString(),newCert.GetPublicKeyString());
     }
     public static void RequireIdentity(bool currentTrusted,bool nextTrusted,string currentKey,string nextKey)

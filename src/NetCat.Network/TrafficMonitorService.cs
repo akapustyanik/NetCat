@@ -66,6 +66,7 @@ public sealed class TrafficMonitorService : IDisposable
     private readonly object syncLock = new();
     private CancellationTokenSource? samplingCts;
     private Task? samplingTask;
+    private bool disposed;
 
     private int lastInterfaceIndex = -1;
     private long lastRxBytes = -1;
@@ -94,35 +95,53 @@ public sealed class TrafficMonitorService : IDisposable
 
     public void StartSampling(TimeSpan? interval = null)
     {
+        var sampleInterval = interval ?? TimeSpan.FromSeconds(1);
+        if (sampleInterval.TotalMilliseconds < 1 || sampleInterval.TotalMilliseconds > uint.MaxValue - 1)
+            throw new ArgumentOutOfRangeException(nameof(interval));
         lock (syncLock)
         {
+            ObjectDisposedException.ThrowIf(disposed, this);
             if (samplingCts != null) return;
-            samplingCts = new CancellationTokenSource();
-            var token = samplingCts.Token;
-            var sampleInterval = interval ?? TimeSpan.FromSeconds(1);
+            var previous = samplingTask;
+            var source = new CancellationTokenSource();
+            samplingCts = source;
+            var token = source.Token;
 
             samplingTask = Task.Run(async () =>
             {
-                while (!token.IsCancellationRequested)
+                try
                 {
-                    try
+                    // A restart must not overlap a subscriber/provider still
+                    // finishing the preceding sample after StopSampling.
+                    if (previous != null) await previous.ConfigureAwait(false);
+                    while (!token.IsCancellationRequested)
                     {
-                        var snapshot = Sample();
-                        SampleUpdated?.Invoke(snapshot);
-
+                        try
+                        {
+                            var snapshot = Sample();
+                            SampleUpdated?.Invoke(snapshot);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            break;
+                        }
+                        catch
+                        {
+                            // Back off below even if the provider/subscriber throws.
+                        }
+                        try { await Task.Delay(sampleInterval, token).ConfigureAwait(false); }
+                        catch (OperationCanceledException) { break; }
                     }
-                    catch (OperationCanceledException)
-                    {
-                        break;
-                    }
-                    catch
-                    {
-                        // Back off below even if the provider/subscriber throws.
-                    }
-                    try { await Task.Delay(sampleInterval, token).ConfigureAwait(false); }
-                    catch (OperationCanceledException) { break; }
                 }
-            }, token);
+                finally
+                {
+                    lock (syncLock)
+                    {
+                        if (ReferenceEquals(samplingCts, source)) samplingCts = null;
+                        source.Dispose();
+                    }
+                }
+            });
         }
     }
 
@@ -131,15 +150,18 @@ public sealed class TrafficMonitorService : IDisposable
         lock (syncLock)
         {
             samplingCts?.Cancel();
-            samplingCts?.Dispose();
             samplingCts = null;
-            samplingTask = null;
         }
     }
 
     public void Dispose()
     {
-        StopSampling();
+        lock (syncLock)
+        {
+            if (disposed) return;
+            disposed = true;
+            StopSampling();
+        }
     }
 
     public TrafficSnapshot Sample(long? overrideTimestamp = null)

@@ -26,6 +26,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
     public BatchedLog Logs { get; } = new();
     private readonly BufferedLog logQueue = new();
     private readonly CancellationTokenSource maintenanceLifetime = new();
+    private readonly SystemTunnelHealth systemTunnelHealth = new();
+    private ConfigurationSnapshot? trafficConfiguration;
+    private string trafficPhysicalInterface = "";
     private readonly UiProjection projection;
     private readonly SemaphoreSlim profileCommitGate = new(1, 1);
     private long projectedRevision = -1;
@@ -39,8 +42,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
     public bool CanAutomaticallyUpdate => State.AutoUpdateNetCat && !State.PinnedModules.Contains("netcat") &&
         !Busy && !TestsBusy && !CheckingUpdates && !Recovering && !IsStartupRestoring &&
         PendingSelection.IsCompleted && PendingRoutes.IsCompleted && PendingOpenVpnSelection.IsCompleted &&
-        !Router.Running && !Router.VpnRequested && !Router.OpenVpn.Running && !Zapret.Running && !Telegram.Running &&
-        !DesiredState.MainVpnEnabled && !DesiredState.OpenVpnEnabled && !DesiredState.ZapretEnabled &&
         NetCat.Core.WindowsExecutableTrust.IsElevated && PublisherCertificateTrust.IsEnrolled() &&
         PublisherTrust.IsTrusted(Environment.ProcessPath!);
     public void AutomaticUpdateLaunchFailed() => applicationUpdate.LaunchFailed();
@@ -684,7 +685,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
         if (!Directory.Exists(Bin) && Directory.Exists(Path.Combine(AppContext.BaseDirectory, "bin"))) Bin = Path.Combine(AppContext.BaseDirectory, "bin");
         if (!Directory.Exists(Bin)) { var candidate = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "bin")); if (Directory.Exists(candidate)) Bin = candidate; }
         Router = router ?? new(Bin, Path.Combine(store.Root, "runtime")); Zapret = zapret ?? new(Bin, Path.Combine(store.Root, "runtime", "zapret")); Updater = new(Bin,()=>Router.VpnRunning ? Router.LatencyPort : 0);
-        TrafficMonitor = new TrafficMonitorService(() => PhysicalNetwork.TryCapture(ConfigRepository?.CurrentSettings.PhysicalInterface ?? ""));
+        TrafficMonitor = new TrafficMonitorService(() => PhysicalNetwork.TryCapture(GetTrafficPhysicalInterface()));
 
         Telegram = new(Bin,Path.Combine(store.Root,"runtime","telegram")); Telegram.Log += WriteLog;
         Router.Log += WriteLog; Zapret.Log += WriteLog; Updater.Log += WriteLog; Router.Changed += NotifyState;
@@ -743,7 +744,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
             update => UpdateDesiredState(update))
         {
             TestProfileFunc = (profile, s, ct) => Router.TestProfileAsync(profile, s, ct),
-            CheckTunnelHealthFunc = (port, ct) => new SystemTunnelHealth().CheckAsync(port, ct),
+            CheckTunnelHealthFunc = systemTunnelHealth.CheckAsync,
             Log = WriteLog
         };
 
@@ -758,7 +759,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
         applicationUpdate = new AutomaticApplicationUpdate(
             () => CanAutomaticallyUpdate, () => Modules.FirstOrDefault(m => m.Key == "netcat" && m.CanSelectUpdate)?.Check.Release,
             (release, ct) => PortableUpdate.PrepareAsync(release, AppContext.BaseDirectory,
-                State.PinnedModules.Concat(ModuleUpdater.Keys.Where(key => key != "netcat")).ToHashSet(StringComparer.OrdinalIgnoreCase), ct),
+                State.PinnedModules.Concat(ModuleUpdater.Keys.Where(key => key != "netcat")).ToHashSet(StringComparer.OrdinalIgnoreCase), ct,
+                Router.VpnRunning ? Router.LatencyPort : 0),
             job => ApplicationUpdatePrepared?.Invoke(job),
             ex => { UpdateStatus = "Автообновление NetCat отложено: " + ex.Message; WriteLog(UpdateStatus); });
         maintenance = new ApplicationMaintenanceScheduler(
@@ -963,6 +965,23 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
         NotifyState();
     }
     public Task SaveAsync() => CommitDraftAsync(CancellationToken.None);
+    private Action? applicationUpdateShutdownCompleted;
+    public async Task LaunchApplicationUpdateAsync(string jobPath, Func<Task> exit, CancellationToken ct)
+    {
+        if (Busy || TestsBusy || CheckingUpdates || IsStartupRestoring || Recovering ||
+            !PendingSelection.IsCompleted || !PendingRoutes.IsCompleted || !PendingOpenVpnSelection.IsCompleted)
+            throw new InvalidOperationException("Дождитесь завершения текущей операции перед обновлением NetCat.");
+        Busy = true;
+        try
+        {
+            UpdateStatus = "Перезапускаю NetCat для установки проверенного обновления; подключения восстановятся автоматически…";
+            var handoff = new ApplicationUpdateHandoff(new ApplicationUpdateResumeStore(Store.Root));
+            await handoff.RunAsync(jobPath, BuildIdentity.Version, Telegram.Running,
+                async () => { await SaveAsync(); FlushDesiredState(); }, () =>
+                { applicationUpdateShutdownCompleted = handoff.RecordSuccessfulShutdown; Busy = false; return exit(); }, ct);
+        }
+        finally { applicationUpdateShutdownCompleted = null; Busy = false; }
+    }
     public async Task InstallPreparedModuleAsync(ModuleRelease release,CancellationToken ct)
     {
         if(release.Key == "zapret" && TestsBusy)
@@ -1513,6 +1532,19 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
         WriteLog(activeTrafficTest.Summary);
         NotifyState();
     }
+    // The sampler serializes calls. Only a new immutable committed snapshot
+    // requires decoding profiles/settings; normal one-second ticks reuse the name.
+    private string GetTrafficPhysicalInterface()
+    {
+        var snapshot = ConfigRepository?.Snapshot;
+        if (snapshot == null) return "";
+        if (!ReferenceEquals(snapshot, trafficConfiguration))
+        {
+            trafficPhysicalInterface = snapshot.Read().PhysicalInterface;
+            trafficConfiguration = snapshot;
+        }
+        return trafficPhysicalInterface;
+    }
     public void Dispose()
     {
         maintenance.Dispose();
@@ -1520,6 +1552,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
         if(disposed)return; FlushInterfaceScalePreference(); FlushAppearancePreference(); disposed=true; State.PropertyChanged-=StateChanged;
         Store.Diagnostic -= WriteLog;
         HealthMonitor.Dispose();
+        systemTunnelHealth.Dispose();
         TrafficMonitor.Dispose();
         RuntimeCoordinator?.Dispose();
         maintenanceLifetime.Cancel();
@@ -1542,6 +1575,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
             try { await RuntimeCoordinator.StopForShutdownAsync(); await Telegram.StopAsync(); }
             finally {settingsGate.Release();}
         }
+        Interlocked.Exchange(ref applicationUpdateShutdownCompleted, null)?.Invoke();
     }
     public async Task StopComponentsAsync()
     {

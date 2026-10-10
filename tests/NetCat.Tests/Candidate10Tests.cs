@@ -832,7 +832,7 @@ public sealed class Candidate10Tests : IDisposable
 
         var restoreGuard =
             source.IndexOf(
-                "if (!IsSmoke && settings.RestoreConnectionsOnStartup)",
+                "if (!IsSmoke && (settings.RestoreConnectionsOnStartup || updateResume != null))",
                 System.StringComparison.Ordinal);
 
         var reconcile =

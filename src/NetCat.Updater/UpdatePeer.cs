@@ -21,6 +21,7 @@ public static class UpdateAuthentication
             !Path.GetFullPath(job.Root).TrimEnd(Path.DirectorySeparatorChar).Equals(root,StringComparison.OrdinalIgnoreCase) ||
             !Path.GetFullPath(job.Stage).TrimEnd(Path.DirectorySeparatorChar).Equals(stage,StringComparison.OrdinalIgnoreCase) ||
             !System.Text.RegularExpressions.Regex.IsMatch(job.ArchiveHash,"^[a-fA-F0-9]{64}$") ||
-            job.Pinned==null || job.Pinned.Any(p=>!ModuleUpdater.Keys.Contains(p))) throw new InvalidDataException("Задание не принадлежит отправителю.");
+            job.Pinned==null || job.Pinned.Any(p=>!ModuleUpdater.Keys.Contains(p)) ||
+            job.ResumeToken.Length > 0 && !NetCat.Core.ApplicationUpdateResumeStore.IsValidToken(job.ResumeToken)) throw new InvalidDataException("Задание не принадлежит отправителю.");
     }
 }

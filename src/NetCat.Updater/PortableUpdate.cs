@@ -8,7 +8,7 @@ namespace NetCat.Updater;
 public sealed record PackageFile(string Path,string Sha256);
 public sealed record PackageComponent(string Key,string Version,List<PackageFile> Files);
 public sealed record PackageManifest(int Schema,string Version,List<PackageComponent> Components, string? Channel = null, ReleasePackage? Package = null, List<PackageFile>? ExtraFiles = null);
-public sealed record UpdateJob(string Root,string Stage,int ParentId,long ParentStart,string ArchiveHash,string[] Pinned,bool Smoke=false, string Version="", string Asset="", bool RecoveryOnly=false);
+public sealed record UpdateJob(string Root,string Stage,int ParentId,long ParentStart,string ArchiveHash,string[] Pinned,bool Smoke=false, string Version="", string Asset="", bool RecoveryOnly=false, string ResumeToken="");
 
 public static class PortableUpdate
 {
@@ -108,7 +108,47 @@ public static class PortableUpdate
             if(!Convert.ToHexString(await SHA256.HashDataAsync(file,ct)).Equals(hash,StringComparison.OrdinalIgnoreCase))throw new InvalidDataException("SHA-256 архива не совпадает.");
         await PackageLimits.ExtractAsync(zip, SafePath(stage, directory), ct, byteLimit: 2L * 1024 * 1024 * 1024, entryLimit: 50000);
     }
-    public static Task LaunchAsync(string jobPath) => UpdateChannel.LaunchAsync(jobPath);
+    public static Task LaunchAsync(string jobPath, string resumeToken = "") => UpdateChannel.LaunchAsync(jobPath, resumeToken);
+
+    public static string ResumeIdentity(UpdateJob job) => Convert.ToHexString(
+        SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(job with
+        {
+            ResumeToken = "",
+            Root = Path.GetFullPath(job.Root).TrimEnd(Path.DirectorySeparatorChar).ToUpperInvariant(),
+            Stage = Path.GetFullPath(job.Stage).TrimEnd(Path.DirectorySeparatorChar).ToUpperInvariant()
+        }, JsonSettings.Options)));
+
+    private static string ShutdownProof(UpdateJob job)
+    {
+        if (!ApplicationUpdateResumeStore.IsValidToken(job.ResumeToken))
+            throw new InvalidDataException("Недопустимое состояние завершения обновления.");
+        return Path.Combine(job.Stage, "shutdown-" + job.ResumeToken + ".ok");
+    }
+
+    public static void RecordSuccessfulShutdown(UpdateJob job)
+    {
+        using var file = new FileStream(ShutdownProof(job), FileMode.CreateNew, FileAccess.Write, FileShare.Read);
+        var bytes = System.Text.Encoding.ASCII.GetBytes(ResumeIdentity(job));
+        file.Write(bytes); file.Flush(true);
+    }
+
+    public static void RequireSuccessfulShutdown(UpdateJob job, int? exitCode)
+    {
+        if (job.ResumeToken.Length == 0) return; // Original updater protocol remains supported.
+        if (exitCode.HasValue && exitCode != 0 || !File.Exists(ShutdownProof(job)) ||
+            File.ReadAllText(ShutdownProof(job)) != ResumeIdentity(job))
+            throw new IOException("Подключения NetCat не удалось безопасно остановить. Обновление отменено.");
+    }
+
+    public static string[] RestartArguments(UpdateJob job)
+    {
+        if (job.Smoke) return ["--smoke"];
+        if (job.ResumeToken.Length == 0) return [];
+        if (!ApplicationUpdateResumeStore.IsValidToken(job.ResumeToken))
+            throw new InvalidDataException("Недопустимое состояние восстановления обновления.");
+        return [ApplicationUpdateResumeStore.TokenArgument + job.ResumeToken,
+            ApplicationUpdateResumeStore.JobArgument + ResumeIdentity(job)];
+    }
     // Status reporting is diagnostic, not part of the update transaction.
     private static async Task TryWriteUpdateStatusAsync(
         string path,
@@ -150,6 +190,7 @@ public static class PortableUpdate
 
         try
         {
+            int? parentExitCode = null;
             try
             {
                 using var parent =
@@ -160,6 +201,8 @@ public static class PortableUpdate
                 {
                     await parent.WaitForExitAsync()
                         .WaitAsync(TimeSpan.FromSeconds(90));
+                    originalProcessGone = true;
+                    parentExitCode = parent.ExitCode;
                 }
 
                 originalProcessGone = true;
@@ -179,6 +222,10 @@ public static class PortableUpdate
                 // Access Denied (5) is deliberately NOT swallowed.
                 originalProcessGone = true;
             }
+
+            // The proof is required even when the process disappeared before lookup,
+            // so an unobserved failed exit cannot authorize filesystem mutation.
+            RequireSuccessfulShutdown(job, parentExitCode);
 
             using var deadline =
                 new CancellationTokenSource(
@@ -299,8 +346,7 @@ public static class PortableUpdate
                         : ProcessWindowStyle.Normal
                 };
 
-                if (job.Smoke)
-                    restart.ArgumentList.Add("--smoke");
+                foreach (var argument in RestartArguments(job)) restart.ArgumentList.Add(argument);
 
                 using var restarted =
                     Process.Start(restart)

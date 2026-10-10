@@ -234,12 +234,14 @@ public sealed class Candidate32Dev3FunctionalFixTests
                     "NetCat.UI",
                     "MainWindow.xaml"));
 
-        Assert.True(
-            System.Text.RegularExpressions.Regex
-                .Matches(
-                    xaml,
-                    "Margin=\"0,0,8,8\"")
-                .Count >= 12);
+        var document = System.Xml.Linq.XDocument.Parse(xaml);
+        System.Xml.Linq.XNamespace ui = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+        var toolbarButtons = document.Descendants(ui + "WrapPanel")
+            .Where(panel => panel.Elements(ui + "Button").Any(button =>
+                (string?)button.Attribute("Click") is "InstallModule_Click" or "AutoZapret_Click"))
+            .SelectMany(panel => panel.Elements(ui + "Button")).ToArray();
+        Assert.NotEmpty(toolbarButtons);
+        Assert.All(toolbarButtons, button => Assert.Equal("0,0,8,8", (string?)button.Attribute("Margin")));
 
         var telegram =
             xaml.IndexOf(
