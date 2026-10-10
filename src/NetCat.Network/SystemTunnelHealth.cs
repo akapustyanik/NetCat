@@ -11,7 +11,17 @@ public sealed class SystemTunnelHealth : IDisposable
     [DllImport("iphlpapi.dll")] private static extern uint GetBestInterface(uint destination, out uint index);
     private HttpClient? client;
     private int boundPort;
-    public void Dispose() { client?.Dispose(); client = null; }
+    private readonly object lifetimeGate = new();
+    private bool disposed;
+    public void Dispose()
+    {
+        lock (lifetimeGate)
+        {
+            if (disposed) return;
+            disposed = true;
+            client?.Dispose(); client = null;
+        }
+    }
     public static async Task<NetworkStream> ConnectProbeAsync(IPAddress local,IPEndPoint target,CancellationToken ct)
     {
         var socket=new Socket(AddressFamily.InterNetwork,SocketType.Stream,ProtocolType.Tcp) { ExclusiveAddressUse=true };
@@ -28,25 +38,32 @@ public sealed class SystemTunnelHealth : IDisposable
     public async Task<DelayResult> CheckAsync(int sourcePort, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
+        lock (lifetimeGate) ObjectDisposedException.ThrowIf(disposed, this);
         var tun = NetworkInterface.GetAllNetworkInterfaces().FirstOrDefault(n=>n.Name=="NetCat-TUN" && n.OperationalStatus==OperationalStatus.Up);
         if (tun == null || sourcePort == 0) return new(false,-1,"Системный туннель не готов.");
         if (GetBestInterface(0x01010101,out var best) != 0 || best != tun.GetIPProperties().GetIPv4Properties().Index)
             return new(false,-1,"Маршрут Windows до адреса проверки проходит вне NetCat-TUN.");
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct); timeout.CancelAfter(TimeSpan.FromSeconds(8));
-        if (client == null || boundPort != sourcePort)
+        HttpClient activeClient;
+        lock (lifetimeGate)
         {
-        client?.Dispose(); boundPort = sourcePort;
-        var handler = new SocketsHttpHandler { UseProxy=false, AllowAutoRedirect=false,
-            ConnectCallback=async (_,token)=>
+            ObjectDisposedException.ThrowIf(disposed, this);
+            if (client == null || boundPort != sourcePort)
             {
-                return await ConnectProbeAsync(IPAddress.Parse("172.29.255.1"),new IPEndPoint(IPAddress.Parse("1.1.1.1"),443),token);
-            } };
-        client=new HttpClient(handler);
+                client?.Dispose(); boundPort = sourcePort;
+                var handler = new SocketsHttpHandler { UseProxy=false, AllowAutoRedirect=false,
+                    ConnectCallback=async (_,token)=>
+                    {
+                        return await ConnectProbeAsync(IPAddress.Parse("172.29.255.1"),new IPEndPoint(IPAddress.Parse("1.1.1.1"),443),token);
+                    } };
+                client=new HttpClient(handler);
+            }
+            activeClient = client;
         }
         try
         {
             var watch=Stopwatch.StartNew();
-            using var response=await client.GetAsync("https://1.1.1.1/cdn-cgi/trace",HttpCompletionOption.ResponseContentRead,timeout.Token);
+            using var response=await activeClient.GetAsync("https://1.1.1.1/cdn-cgi/trace",HttpCompletionOption.ResponseContentRead,timeout.Token);
             return response.IsSuccessStatusCode ? new(true,(int)watch.ElapsedMilliseconds) : new(false,-1,"HTTP "+(int)response.StatusCode);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return new(false,-1,"Туннель не ответил за 8 секунд."); }

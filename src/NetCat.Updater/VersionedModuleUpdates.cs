@@ -77,6 +77,8 @@ public sealed partial class ModuleUpdater
         int limit,
         CancellationToken ct)
     {
+        using var clientLease = clients.Acquire();
+        var client = clientLease.Client;
         if(!SupportsVersionSelection(key))
             throw new InvalidOperationException(
                 "Для этого компонента выбор версии пока не поддерживается.");
@@ -154,6 +156,8 @@ public sealed partial class ModuleUpdater
         string requestedVersion,
         CancellationToken ct)
     {
+        using var clientLease = clients.Acquire();
+        var client = clientLease.Client;
         if(string.IsNullOrWhiteSpace(requestedVersion) ||
            requestedVersion.Length>100 ||
            requestedVersion.Any(char.IsWhiteSpace))
@@ -213,6 +217,8 @@ public sealed partial class ModuleUpdater
         string version,
         CancellationToken ct)
     {
+        using var clientLease = clients.Acquire();
+        var client = clientLease.Client;
         if(!SupportsVersionSelection(key))
             throw new InvalidOperationException(
                 "Для этого компонента выбор версии пока не поддерживается.");

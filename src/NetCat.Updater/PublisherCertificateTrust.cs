@@ -51,8 +51,8 @@ public static class PublisherCertificateTrust
     public static void RequireMatchingSignature(string executable, X509Certificate2 certificate,
         Func<string, int>? verify = null)
     {
-        using var signer = new X509Certificate2(X509Certificate.CreateFromSignedFile(executable));
-        if (!CryptographicOperations.FixedTimeEquals(signer.RawData, certificate.RawData))
+        using var signer = X509Certificate.CreateFromSignedFile(executable);
+        if (!CryptographicOperations.FixedTimeEquals(signer.GetRawCertData(), certificate.RawData))
             throw new InvalidDataException("Эта сборка подписана другим сертификатом.");
         var status = (verify ?? PublisherTrust.VerificationStatus)(executable);
         // An untrusted root is the only permitted bootstrap failure. Missing,
@@ -65,6 +65,22 @@ public static class PublisherCertificateTrust
     {
         using var certificate = Load(); store ??= new CurrentUserStore();
         return Stores.All(s => store.Contains(s, certificate));
+    }
+
+    internal static bool ContainsAndReleaseCertificates(X509Certificate2Collection entries, byte[] expected)
+    {
+        try
+        {
+            foreach (var entry in entries)
+                if (entry.RawData.AsSpan().SequenceEqual(expected)) return true;
+            return false;
+        }
+        finally
+        {
+            // X509Store.Dispose does not dispose the certificate copies returned
+            // by Certificates, including copies after an early successful match.
+            foreach (var entry in entries) entry.Dispose();
+        }
     }
 
     public static void Install(string executable)
@@ -131,7 +147,7 @@ public static class PublisherCertificateTrust
         public bool Contains(StoreName name, X509Certificate2 certificate)
         {
             using var store = OpenOwned(name, true);
-            return store?.Certificates.Any(c => c.RawData.AsSpan().SequenceEqual(certificate.RawData)) == true;
+            return store != null && ContainsAndReleaseCertificates(store.Certificates, certificate.RawData);
         }
         public void Add(StoreName name, X509Certificate2 certificate)
         {
@@ -141,7 +157,14 @@ public static class PublisherCertificateTrust
         {
             using var store = OpenOwned(name, false);
             if (store == null) return;
-            foreach (var entry in store.Certificates.Where(c => c.RawData.AsSpan().SequenceEqual(certificate.RawData))) store.Remove(entry);
+            var entries = store.Certificates;
+            var expected = certificate.RawData;
+            try
+            {
+                foreach (var entry in entries)
+                    if (entry.RawData.AsSpan().SequenceEqual(expected)) store.Remove(entry);
+            }
+            finally { foreach (var entry in entries) entry.Dispose(); }
         }
     }
 }

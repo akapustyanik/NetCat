@@ -44,9 +44,24 @@ public sealed class OpenVpnDestinationGateway : IDisposable
     public void VerifyOwnership()
     {if(LocalListener.Owner(Endpoint.Port)!=Environment.ProcessId)throw new IOException("OpenVPN egress listener ownership mismatch.");}
     public void Activate()
-    {lock(activationGate){activation?.Cancel();activation=CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);}}
+    {
+        lock(activationGate)
+        {
+            ObjectDisposedException.ThrowIf(disposed != 0, this);
+            RetireActivation();
+            activation=CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+        }
+    }
     public void Invalidate()
-    {lock(activationGate){activation?.Cancel();activation=null;}}
+    {lock(activationGate){RetireActivation();}}
+    private void RetireActivation()
+    {
+        var previous = activation;
+        activation = null;
+        if (previous == null) return;
+        try { previous.Cancel(); }
+        finally { previous.Dispose(); }
+    }
     private CancellationToken ActiveToken()
     {lock(activationGate)return activation?.Token??throw new IOException("OpenVPN egress inactive.");}
     private async Task AcceptAsync()

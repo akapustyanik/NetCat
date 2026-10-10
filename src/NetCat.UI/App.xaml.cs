@@ -88,6 +88,21 @@ public partial class App : Application
             }
             var store = new SettingsStore(e.Args.Contains("--smoke") ? Path.Combine(Path.GetTempPath(), "NetCat-Smoke-" + Environment.ProcessId) : null);
             var settings = store.Load(); Theme.Apply(settings);
+            ApplicationUpdateResume? updateResume = null;
+            if (!IsSmoke)
+            {
+                if (e.Args.Any(arg => arg.StartsWith(ApplicationUpdateResumeStore.TokenArgument, StringComparison.Ordinal)))
+                {
+                    try
+                    {
+                        updateResume = new ApplicationUpdateResumeStore(store.Root).ConsumeArguments(e.Args, AppContext.BaseDirectory, BuildIdentity.Version);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.Cryptography.CryptographicException or System.Text.Json.JsonException)
+                    {
+                        startupMessages.Add("UPDATE_RESUME result=unavailable errorClass=" + ex.GetType().Name);
+                    }
+                }
+            }
             var runtime=Path.Combine(store.Root,"runtime"); PrivateFiles.ProtectDirectory(runtime);
             try { await OpenVpnService.RecoverAsync(Path.Combine(runtime,"openvpn")); }
             finally
@@ -106,11 +121,17 @@ public partial class App : Application
                 if (!vm.CanAutomaticallyUpdate) { vm.AutomaticUpdateLaunchFailed(); return; }
                 try
                 {
-                    vm.Busy = true;
-                    await NetCat.Updater.PortableUpdate.LaunchAsync(job);
-                    vm.Busy = false;
-                    if (windowManager.CurrentWindow is MainWindow updateWindow) await updateWindow.ExitAsync();
-                    else { await vm.StopForExitAsync(); Shutdown(0); }
+                    await vm.LaunchApplicationUpdateAsync(job, async () =>
+                    {
+                        if (windowManager.CurrentWindow is MainWindow updateWindow) await updateWindow.ExitAsync();
+                        else
+                        {
+                            var exitCode = 0;
+                            try { await vm.StopForExitAsync(); }
+                            catch (Exception ex) { exitCode = 1; vm.WriteLog("Завершение для обновления: " + ex.Message); }
+                            finally { vm.Dispose(); Shutdown(exitCode); }
+                        }
+                    }, CancellationToken.None);
                 }
                 catch (Exception ex)
                 {
@@ -119,9 +140,22 @@ public partial class App : Application
                 }
             }), System.Windows.Threading.DispatcherPriority.Background);
             if (!IsSmoke) Microsoft.Win32.SystemEvents.PowerModeChanged += OnPowerChanged;
-            if (!IsSmoke && settings.RestoreConnectionsOnStartup)
+            if (!IsSmoke && (settings.RestoreConnectionsOnStartup || updateResume != null))
             {
                 vm.RuntimeCoordinator.RequestReconcile(ReconcileReason.Startup);
+            }
+            if (updateResume?.TelegramEnabled == true)
+            {
+                // Start on the dispatcher after normal UI/tray initialization, using the existing bounded startup path.
+                _ = Dispatcher.InvokeAsync(async () =>
+                {
+                    try
+                    {
+                        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                        await vm.SetTelegramEnabledAsync(true, deadline.Token);
+                    }
+                    catch (Exception ex) { vm.WriteLog("UPDATE_RESUME Telegram: " + ex.Message); }
+                }, System.Windows.Threading.DispatcherPriority.Background).Task.Unwrap();
             }
             foreach(var message in startupMessages)vm.WriteLog(message);
             if(!IsSmoke && DesktopIdentity.Warning() is {Length:>0} warning) {vm.Status=warning;vm.WriteLog(warning);}

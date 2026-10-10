@@ -89,7 +89,7 @@ public sealed class Candidate32ReleaseUiTests
 
         var restore =
             source.IndexOf(
-                "if (!IsSmoke && settings.RestoreConnectionsOnStartup)",
+                "if (!IsSmoke && (settings.RestoreConnectionsOnStartup || updateResume != null))",
                 System.StringComparison.Ordinal);
 
         var reconcile =

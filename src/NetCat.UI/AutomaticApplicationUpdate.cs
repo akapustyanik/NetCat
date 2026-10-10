@@ -12,6 +12,7 @@ public sealed class AutomaticApplicationUpdate
     private readonly Action<Exception> failed;
     private readonly Func<DateTime> now;
     private string? prepared;
+    private ModuleRelease? preparedRelease;
     private DateTime retry;
     private bool busy, queued;
 
@@ -25,13 +26,19 @@ public sealed class AutomaticApplicationUpdate
 
     public async Task TickAsync(CancellationToken ct)
     {
-        if (busy || queued || now() < retry || !allowed()) return;
+        if (busy || queued || now() < retry) return;
         var candidate = release(); if (candidate == null) return;
+        if (!allowed()) return;
         busy = true;
         try
         {
             ct.ThrowIfCancellationRequested();
-            prepared ??= await prepare(candidate, ct);
+            if (preparedRelease != candidate) { prepared = null; preparedRelease = null; }
+            if (prepared == null)
+            {
+                prepared = await prepare(candidate, ct);
+                preparedRelease = candidate;
+            }
             ct.ThrowIfCancellationRequested();
             if (!allowed()) return;
             queued = true; ready(prepared);

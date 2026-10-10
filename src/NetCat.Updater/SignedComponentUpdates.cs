@@ -26,6 +26,8 @@ public sealed partial class ModuleUpdater
     {try{_ = VerifyComponentAuthorization(release);return true;}catch(Exception e)when(e is InvalidDataException or FormatException or JsonException){return false;}}
     private async Task<ModuleRelease> AuthorizeComponentAsync(ModuleRelease upstream,CancellationToken ct)
     {
+        using var clientLease = clients.Acquire();
+        var client = clientLease.Client;
         var source=ComponentReleaseBase(upstream.Key,upstream.Version);
         try
         {
@@ -44,6 +46,8 @@ public sealed partial class ModuleUpdater
         CancellationToken ct,
         bool selectedVersion = false)
     {
+        using var clientLease = clients.Acquire();
+        var client = clientLease.Client;
         var manifest=VerifyComponentAuthorization(release);
         if(!selectedVersion &&
            !IsNewer(

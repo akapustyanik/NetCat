@@ -16,13 +16,21 @@ public static partial class UpdateChannel
     private static string SecureRoot => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),"NetCat","updates");
     private static byte[] Hash(string path) { using var file=File.OpenRead(path); return SHA256.HashData(file); }
     private static string Stage(string path) => UpdateCleanup.ValidateStage(path);
-    public static async Task LaunchAsync(string jobPath)
+    public static async Task<UpdateJob> ReadLaunchJobAsync(string jobPath, CancellationToken ct)
     {
         var stage=Stage(Path.GetDirectoryName(Path.GetFullPath(jobPath))!);
         if(Path.GetFileName(jobPath)!="job.json") throw new InvalidDataException("Недопустимое задание обновления.");
-        var job=JsonSerializer.Deserialize<UpdateJob>(await File.ReadAllTextAsync(jobPath),JsonSettings.Options) ?? throw new InvalidDataException("Нет задания.");
+        var job=JsonSerializer.Deserialize<UpdateJob>(await File.ReadAllTextAsync(jobPath, ct),JsonSettings.Options) ?? throw new InvalidDataException("Нет задания.");
         if(job.Root!=AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar) && Path.GetFullPath(job.Root).TrimEnd(Path.DirectorySeparatorChar)!=Path.GetFullPath(AppContext.BaseDirectory).TrimEnd(Path.DirectorySeparatorChar)) throw new InvalidDataException("Задание относится к другой копии NetCat.");
         if(job.Stage!=stage || job.ParentId!=Environment.ProcessId || job.ParentStart!=Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks) throw new InvalidDataException("Задание устарело.");
+        return job;
+    }
+    public static async Task LaunchAsync(string jobPath, string resumeToken = "")
+    {
+        if (resumeToken.Length > 0 && !ApplicationUpdateResumeStore.IsValidToken(resumeToken))
+            throw new InvalidDataException("Недопустимое состояние восстановления обновления.");
+        var job = (await ReadLaunchJobAsync(jobPath, CancellationToken.None)) with { ResumeToken = resumeToken };
+        var stage = job.Stage;
         var helper=Path.Combine(stage,"NetCat.Update.exe");
         using var helperLease=new FileStream(helper,FileMode.Open,FileAccess.Read,FileShare.Read);
         UpdateAuthentication.HelperHash(Hash(Environment.ProcessPath!),SHA256.HashData(helperLease));

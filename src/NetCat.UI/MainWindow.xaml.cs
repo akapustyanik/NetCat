@@ -600,55 +600,52 @@ public partial class MainWindow : Window
             await VM.SaveAsync(); VM.RefreshPublisherTrust();
         });
     }
-    private void RequireStopped() { if (VM.Router.Running || VM.Zapret.Running || telegram.Running || VM.TestsBusy) throw new InvalidOperationException("Перед установкой остановите подключения и тесты. Проверять обновления можно в любое время."); }
-    private string? pendingNetcatUpdate;
-    private async void InstallModule_Click(object sender, RoutedEventArgs e) => await VM.RunAsync(async ct =>
+    private async void InstallModule_Click(object sender, RoutedEventArgs e)
     {
-        var selected=VM.Modules.Where(m=>m.Selected&&m.CanSelectUpdate).ToArray();
-        if(selected.Length==0) { VM.UpdateStatus="Выберите доступные обновления."; return; }
-        var errors=new List<string>();
-        foreach(var module in selected)
-        {
-            try
-            {
-                VM.UpdateStatus="Скачиваю и проверяю " + module.DisplayName + (VM.Router.VpnRunning ? " через VPN…" : "…");
-                if(module.Key=="netcat") pendingNetcatUpdate ??= await PortableUpdate.PrepareAsync(module.Check.Release!,AppContext.BaseDirectory,VM.State.PinnedModules,ct,VM.Router.VpnRunning ? VM.Router.LatencyPort : 0);
-                else if(!VM.Updater.HasPrepared(module.Check.Release!)) await VM.Updater.InstallAsync(module.Check.Release!,VM.State,ct,prepareOnly:true);
-                VM.WriteLog("Подготовлено обновление: " + module.DisplayName);
-            }
-            catch(Exception ex) when(ex is not OperationCanceledException) { errors.Add(module.DisplayName); VM.WriteLog(module.Key+": "+ex.Message); }
-        }
-        VM.UpdateStatus="Скачанные файлы готовы. При установке нужные компоненты будут перезапущены автоматически.";
-        if(errors.Count>0) VM.UpdateStatus+=" Не удалось скачать: "+string.Join(", ",errors);
-    });
-    private async void InstallDownloaded_Click(object sender, RoutedEventArgs e)
-    {
-        string? launch=null;
+        string? launch = null;
         await VM.RunAsync(async ct =>
         {
-            var errors=new List<string>(); int installed=0;
-            foreach(var module in VM.Modules.Where(m=>m.Selected&&m.CanSelectUpdate).ToArray())
-            {
-                try
+            var selected = VM.Modules.Where(m => m.Selected && m.CanSelectUpdate).ToArray();
+            if (selected.Length == 0) { VM.UpdateStatus = "Выберите доступные обновления."; return; }
+            if (VM.TestsBusy) throw new InvalidOperationException("Дождитесь завершения тестов или отмените их перед обновлением.");
+            var installer = new SelectedUpdateInstaller(
+                async (release, token) =>
                 {
-                    if(module.Key=="netcat") { RequireStopped(); if(pendingNetcatUpdate!=null) launch=pendingNetcatUpdate; continue; }
-                    if(!VM.Updater.HasPrepared(module.Check.Release!)) continue;
-                    await VM.InstallPreparedModuleAsync(module.Check.Release!,ct); installed++; VM.WriteLog("Обновлён модуль "+module.DisplayName);
-                }
-                catch(Exception ex) when(ex is not OperationCanceledException) { errors.Add(module.DisplayName); VM.WriteLog(ex.Message); }
-            }
-            var rows =
-                VM.Modules.ToArray();
-
-            VM.ApplyModuleChecks(rows.Select(row => row.Check with
+                    VM.UpdateStatus = "Скачиваю и проверяю NetCat" + (VM.Router.VpnRunning ? " через VPN…" : "…");
+                    return await PortableUpdate.PrepareAsync(release, AppContext.BaseDirectory, VM.State.PinnedModules, token,
+                        VM.Router.VpnRunning ? VM.Router.LatencyPort : 0);
+                },
+                async (release, token) =>
+                {
+                    VM.UpdateStatus = "Скачиваю и проверяю " + selected.First(m => m.Key == release.Key).DisplayName + "…";
+                    if (!VM.Updater.HasPrepared(release)) await VM.Updater.InstallAsync(release, VM.State, token, prepareOnly: true);
+                },
+                async (release, token) =>
+                {
+                    VM.UpdateStatus = "Устанавливаю " + selected.First(m => m.Key == release.Key).DisplayName + "…";
+                    await VM.InstallPreparedModuleAsync(release, token);
+                    VM.WriteLog("Обновлён модуль " + release.Key);
+                });
+            var result = await installer.RunAsync(selected.Select(m => m.Check.Release!), ct);
+            launch = result.ApplicationJob;
+            VM.ApplyModuleChecks(VM.Modules.Select(row => row.Check with
             {
                 Installed = VM.Updater.InstalledVersion(row.Key)
             }).ToArray());
-            VM.Refresh(); VM.UpdateStatus=installed>0 ? $"Установлено компонентов: {installed}." : launch!=null ? "NetCat готов к перезапуску." : "Нет выбранных скачанных обновлений.";
-            if(errors.Count>0) VM.UpdateStatus+=" Ошибки: "+string.Join(", ",errors);
+            VM.Refresh();
+            VM.UpdateStatus = result.InstalledModules > 0 ? $"Установлено компонентов: {result.InstalledModules}." :
+                launch != null ? "NetCat готов к автоматическому перезапуску." : "Не удалось установить выбранные обновления.";
+            if (result.Errors.Count > 0)
+            {
+                VM.UpdateStatus += " Ошибки: " + string.Join(", ", result.Errors.Select(error => selected.First(m => m.Key == error.Release.Key).DisplayName));
+                foreach (var error in result.Errors) VM.WriteLog(error.Release.Key + ": " + error.Error.Message);
+            }
         });
-        if(launch!=null && !VM.WorkCancellation.IsCancellationRequested)
-        { try { await PortableUpdate.LaunchAsync(launch); await ExitAsync(); } catch(Exception ex) { VM.Status="Не удалось запустить обновление: "+ex.Message; } }
+        if (launch != null && !VM.WorkCancellation.IsCancellationRequested)
+        {
+            try { await VM.LaunchApplicationUpdateAsync(launch, ExitAsync, VM.WorkCancellation.Token); }
+            catch (Exception ex) { VM.UpdateStatus = "Не удалось запустить обновление: " + ProcessHost.Redact(ex.Message); VM.WriteLog(VM.UpdateStatus); }
+        }
     }
     private async void RollbackModule_Click(
         object sender,

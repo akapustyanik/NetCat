@@ -159,13 +159,11 @@
       </Grid></DataTemplate></ListBox.ItemTemplate>
      </ListBox>
      <WrapPanel Margin="0,15,0,0">
- <Button Content="Скачать выбранные"
+ <Button x:Name="UpdateSelectedButton" Content="Обновить выбранные"
          Style="{StaticResource PrimaryButton}"
          Click="InstallModule_Click"
-         Margin="0,0,8,8"/>
-
- <Button Content="Установить скачанное"
-         Click="InstallDownloaded_Click"
+         IsEnabled="{Binding Idle}"
+         ToolTip="Скачать, проверить и установить выбранные обновления. Для обновления NetCat подключения будут остановлены и восстановлены автоматически."
          Margin="0,0,8,8"/>
 
  <Button Content="Выбрать версию…"

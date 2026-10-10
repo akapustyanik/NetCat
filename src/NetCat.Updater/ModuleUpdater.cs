@@ -119,10 +119,9 @@ public sealed record ModuleCheck(
 }
 public sealed partial class ModuleUpdater(string bin, Func<int>? proxyPort = null) : IDisposable
 {
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<int,HttpClient> clients = new();
-    private HttpClient client => clients.GetOrAdd(proxyPort?.Invoke() ?? 0, CreateClient);
+    private readonly ProxyHttpClientPool clients = new(() => proxyPort?.Invoke() ?? 0, CreateClient);
     public static HttpClient CreateClient(int port) => new(new SocketsHttpHandler { UseProxy=port>0, Proxy=port>0 ? new System.Net.WebProxy($"socks5://127.0.0.1:{port}") : null }) { Timeout=TimeSpan.FromMinutes(10) };
-    public void Dispose() { foreach(var client in clients.Values) client.Dispose(); }
+    public void Dispose() => clients.Dispose();
     private static readonly Dictionary<string,(string Repo,string Pattern,string Binary)> Sources = new()
     {
         ["netcat"] = ("akapustyanik/NetCat", @"^NetCat-v[0-9.]+\.zip$", "NetCat.exe"),
@@ -308,6 +307,8 @@ public sealed partial class ModuleUpdater(string bin, Func<int>? proxyPort = nul
 
     public async Task<ModuleRelease> CheckAsync(string key, CancellationToken ct)
     {
+        using var clientLease = clients.Acquire();
+        var client = clientLease.Client;
         var source = Sources[key];
         if (key == "wintun")
         {
@@ -408,6 +409,8 @@ public sealed partial class ModuleUpdater(string bin, Func<int>? proxyPort = nul
         bool selectedVersion = false,
         bool forceUnreviewed = false)
     {
+        using var clientLease = clients.Acquire();
+        var client = clientLease.Client;
         ct.ThrowIfCancellationRequested();
 
         var coreSelection =
@@ -689,6 +692,8 @@ public sealed partial class ModuleUpdater(string bin, Func<int>? proxyPort = nul
         bool prepareOnly,
         bool selectedVersion = false)
     {
+        using var clientLease = clients.Acquire();
+        var client = clientLease.Client;
         bool ovpn=release.Key=="openvpn";
         var pattern=ovpn?@"^https://swupdate\.openvpn\.org/community/releases/OpenVPN-2\.6\.\d+-I\d+-amd64\.msi$":@"^https://www\.wintun\.net/builds/wintun-[0-9.]+\.zip$";
         if(!System.Text.RegularExpressions.Regex.IsMatch(release.Url,pattern)) throw new InvalidDataException("Недопустимый официальный источник.");
@@ -842,6 +847,8 @@ public sealed partial class ModuleUpdater(string bin, Func<int>? proxyPort = nul
         bool prepareOnly,
         bool selectedVersion = false)
     {
+        using var clientLease = clients.Acquire();
+        var client = clientLease.Client;
         if (release.Repository != "Flowseal/tg-ws-proxy" || !System.Text.RegularExpressions.Regex.IsMatch(release.SourceTree,"^[a-f0-9]{40}$")) throw new InvalidDataException("Непроверенный источник Telegram.");
         var staging = Path.Combine(bin,".telegram-"+Guid.NewGuid().ToString("N")); Directory.CreateDirectory(staging);
         var target = Path.Combine(bin,"tg-ws-proxy"); var backup = target+".previous";
