@@ -65,7 +65,7 @@ public static class SmoothScroll
         if (viewer.ScrollableHeight <= 0) return false;
         var state = element.GetValue(StateProperty) as ScrollState;
         if (state == null || state.Viewer != viewer) { state?.Stop(); state = new ScrollState(viewer); element.SetValue(StateProperty, state); }
-        return state.Move(delta, precise);
+        return state.Move(delta, precise, SystemParameters.ClientAreaAnimation);
     }
     private sealed class ScrollState
     {
@@ -94,14 +94,23 @@ public static class SmoothScroll
             moving = pendingOffset = false;
             target = position = Viewer.VerticalOffset;
         }
-        public bool Move(double delta, bool precise)
+        public bool Move(double delta, bool precise, bool animationEnabled)
         {
             var basis = moving || pendingOffset ? target : Viewer.VerticalOffset;
             var next = Math.Clamp(basis + delta, 0, Viewer.ScrollableHeight);
             if (Math.Abs(next - basis) < .001) return false;
             target = next;
             preciseInput = precise;
-            if (!SystemParameters.ClientAreaAnimation) { Stop(); Viewer.ScrollToVerticalOffset(next); return true; }
+            if (!animationEnabled)
+            {
+                Stop();
+                // Layout is deferred even when Windows animations are disabled.
+                // Preserve queued deltas until ScrollChanged confirms the offset.
+                target = position = next;
+                pendingOffset = true;
+                Viewer.ScrollToVerticalOffset(next);
+                return true;
+            }
             if (!moving)
             {
                 moving = true;

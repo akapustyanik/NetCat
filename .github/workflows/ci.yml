@@ -50,5 +50,16 @@ jobs:
           foreach ($entry in Get-ChildItem -LiteralPath (Join-Path $stage 'modules')) {
             Copy-Item -LiteralPath $entry.FullName -Destination $destination -Recurse
           }
+          # These components have not changed since 1.0.2. Use their exact
+          # reviewed distributions, including OpenSSL policy and Python wheels.
+          $moduleRoot = [IO.Path]::GetFullPath((Join-Path $PWD 'bin'))
+          foreach ($key in @('openvpn', 'tg-runtime')) {
+            $target = [IO.Path]::GetFullPath((Join-Path $moduleRoot $key))
+            if (-not $target.StartsWith($moduleRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+              throw 'Component directory is outside the module root'
+            }
+            Remove-Item -LiteralPath $target -Recurse -Force
+            Copy-Item -LiteralPath (Join-Path $stage "modules/$key") -Destination $moduleRoot -Recurse
+          }
       - name: Run tests
         run: dotnet test NetCat.sln -c Release --no-restore -warnaserror

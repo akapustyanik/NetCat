@@ -15,6 +15,27 @@ public sealed partial class Candidate32UiAuditTests
     private static ScrollViewer Viewer(UIElement content, double height = 200) => new()
     { Content = content, Height = height, Width = 300, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
     [Fact]
+    public Task DisabledAnimationPreservesBatchedDeltasUntilDeferredLayoutCompletes() => Sta.Run(() =>
+    {
+        var viewer = Viewer(new Border { Height = 2000 });
+        var window = new Window { Content = viewer, SizeToContent = SizeToContent.WidthAndHeight };
+        try
+        {
+            window.Show(); viewer.UpdateLayout();
+            var type = typeof(SmoothScroll).GetNestedType("ScrollState", BindingFlags.NonPublic)!;
+            var state = Activator.CreateInstance(type, viewer)!;
+            var move = type.GetMethod("Move")!;
+            for (var i = 0; i < 24; i++) Assert.Equal(true, move.Invoke(state, [2d, false, false]));
+            viewer.UpdateLayout();
+            Assert.InRange(viewer.VerticalOffset, 47.99, 48.01);
+            for (var i = 0; i < 12; i++) Assert.Equal(true, move.Invoke(state, [-2d, false, false]));
+            viewer.UpdateLayout();
+            Assert.InRange(viewer.VerticalOffset, 23.99, 24.01);
+        }
+        finally { window.Close(); }
+        return Task.CompletedTask;
+    });
+    [Fact]
     public Task PrecisionDeltasAccumulateWithoutDestinationJumpOrRestart() => Sta.Run(async () =>
     {
         var viewer = Viewer(new Border { Height = 2000 });
