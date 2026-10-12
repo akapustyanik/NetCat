@@ -20,7 +20,9 @@ public static class SettingsMigration
         try
         {
             var config = JsonNode.Parse(profile.OutboundJson);
-            if (config?["tls"]?["reality"] != null || config?["protocol"] != null) profile.Core = "Xray";
+            if (config is JsonObject outbound &&
+                (outbound["tls"] is JsonObject tls && tls["reality"] != null || outbound["protocol"] != null))
+                profile.Core = "Xray";
         }
         catch (System.Text.Json.JsonException) { /* The editor/engine reports invalid profile JSON. */ }
     }

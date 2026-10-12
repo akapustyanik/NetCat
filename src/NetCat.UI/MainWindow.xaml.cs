@@ -177,6 +177,23 @@ public partial class MainWindow : Window
         choice.SelectionChanged += (_, _) => { var selected=(Subscription)choice.SelectedItem; interval.Text=selected.UpdateHours.ToString(); insecure.IsChecked=selected.AllowInsecureTransport; restoreDeleted.IsChecked=false; };
         var update = new Button { Content = "Обновить выбранную сейчас" }; d.Insert(update);
         update.Click += async (_, _) => { if(VM.Busy) { d.Error.Text="Дождитесь текущей операции."; return; } try { VM.Busy=true; update.IsEnabled = false; d.Error.Text = await RefreshSubscriptionAsync((Subscription)choice.SelectedItem, CancellationToken.None, interactive:true); } catch (Exception ex) { d.Error.Text = ProcessHost.Redact(ex.Message); } finally { VM.Busy=false; update.IsEnabled = true; } };
+        var remove = new Button { Content = "Удалить подписку и её профили" }; d.Insert(remove);
+        remove.Click += async (_, _) =>
+        {
+            if (VM.Busy) { d.Error.Text = "Дождитесь текущей операции."; return; }
+            var selected = (Subscription)choice.SelectedItem;
+            var count = SubscriptionMerge.ProfilesForSubscription(VM.ConfigRepository.CurrentSettings, selected.Id).Count;
+            if (MessageBox.Show(d, $"Удалить подписку «{selected.Name}» и её профили ({count})?\n\nДругие подписки и локальные профили сохранятся.",
+                "Удаление подписки", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+            try
+            {
+                VM.Busy = true; remove.IsEnabled = false;
+                await VM.DeleteSubscriptionAsync(selected.Id);
+                d.Close();
+            }
+            catch (Exception ex) { d.Error.Text = ProcessHost.Redact(ex.Message); }
+            finally { VM.Busy = false; remove.IsEnabled = true; }
+        };
         d.Note("Изменения небезопасного режима сначала сохраните кнопкой принятия, затем откройте подписки и обновите. URL не показывается. Локальные имена и участие в автосмене сохраняются. Манифест сохраняет ID даже при смене параметров. Полный корректный манифест удаляет отсутствующие профили; выбранный профиль сохраняется с отметкой до смены выбора. При ошибках удаление запрещено.");
         d.Note("Вручную удалённые профили не возвращаются при обновлении. Чтобы разрешить их повторное добавление, отметьте сброс исключений, сохраните и затем обновите выбранную подписку.");
         d.OnAccept = async () => { var id=((Subscription)choice.SelectedItem).Id;if (!int.TryParse(interval.Text, out var hours) || hours is < 0 or > 8760) throw new InvalidDataException("Укажите интервал от 0 до 8760 часов."); await VM.UpdateSettingsAsync(next=>{var selected=next.Subscriptions.Single(p=>p.Id==id);selected.UpdateHours=hours;selected.AllowInsecureTransport=insecure.IsChecked==true;if(restoreDeleted.IsChecked==true)selected.ExcludedProfileKeys.Clear();}); return true; }; d.ShowDialog();

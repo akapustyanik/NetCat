@@ -1,5 +1,6 @@
 using System.Windows;
 using NetCat.Core;
+using NetCat.Engine;
 using NetCat.Network;
 namespace NetCat.UI;
 public partial class App : Application
@@ -111,6 +112,14 @@ public partial class App : Application
                 PrivateFiles.DeleteSecrets(Path.Combine(runtime,"telegram"),"telegram.json");
                 PrivateFiles.DeleteSecrets(runtime,"router.json","router.next.json","xray.json");
                 foreach(var probe in Directory.GetDirectories(runtime,"probe-*")) PrivateFiles.DeleteSecrets(probe,"test.json","xray.json");
+            }
+            var savedDesired = store.LoadDesiredState();
+            var profileCleanup = SubscriptionMerge.NormalizeSources(settings,
+                new[] { savedDesired.SelectedVpnProfileId, savedDesired.SelectedOpenVpnProfileId }.OfType<Guid>());
+            if (profileCleanup.Subscriptions > 0 || profileCleanup.Profiles > 0)
+            {
+                await store.SaveAsync(settings);
+                startupMessages.Add($"SUBSCRIPTION_CLEANUP merged={profileCleanup.Subscriptions} duplicates={profileCleanup.Profiles}");
             }
             var vm = new MainViewModel(store, settings);
             appVm = vm;
