@@ -34,7 +34,8 @@ public static class ProfileIdentity
     public static string Key(Profile profile)
     {
         if(profile.IsOpenVpn) return "openvpn|"+Hash(string.Join("\n",profile.OpenVpnConfig.Replace("\r", "").Split('\n').Select(l=>l.Trim()).Where(l=>l.Length>0 && !l.StartsWith('#') && !l.StartsWith(';')))+"|"+profile.Username+"|"+profile.Password);
-        var config=JsonNode.Parse(profile.OutboundJson)!;
+        var config=JsonNode.Parse(profile.OutboundJson) as JsonObject
+            ?? throw new FormatException("Настройки профиля должны содержать объект outbound JSON.");
         var transport=config["transport"]?["type"]?.ToString() ?? config["streamSettings"]?["network"]?.ToString() ?? "tcp";
         if(transport is "raw" or "none")transport="tcp";
         var transportConfig=config["transport"] ?? config["streamSettings"]?[transport+"Settings"];

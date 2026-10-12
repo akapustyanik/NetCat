@@ -62,6 +62,35 @@ public sealed class ApplicationUpdateHandoffTests : IDisposable
     }
 
     [Fact]
+    public async Task AnotherConsumerReturnsUnavailableWhileTheWinnerValidatesItsTicket()
+    {
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        bool consuming = false;
+        var store = new ApplicationUpdateResumeStore(root, () =>
+        {
+            if (Volatile.Read(ref consuming))
+            {
+                entered.Set();
+                if (!release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException("Ticket validation fixture timed out.");
+            }
+            return DateTimeOffset.UtcNow;
+        });
+        var identity = PortableUpdate.ResumeIdentity(Job);
+        var token = store.Create(root, identity, "1.0.3", "1.0.4", true);
+        Volatile.Write(ref consuming, true);
+        var winner = Task.Run(() => store.Consume(token, identity, root, "1.0.4"));
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
+            Assert.Null(store.Consume(token, identity, root, "1.0.4"));
+        }
+        finally { release.Set(); }
+        Assert.True((await winner)!.TelegramEnabled);
+        Assert.Empty(Directory.GetFiles(Path.Combine(root, "update-resume")));
+    }
+
+    [Fact]
     public async Task HandoffPersistsIntentThenAuthenticatesHelperBeforeStoppingAnything()
     {
         var saved = new SettingsStore(root);

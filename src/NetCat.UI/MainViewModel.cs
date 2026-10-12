@@ -438,7 +438,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
     private Guid? pendingMainProfileId;
     private long selectionRevision;
     public Task PendingSelection { get; private set; } = Task.CompletedTask;
-    public long SettingsRevision { get; private set; }
+    // Selections, learned routes and failover also commit directly to the repository.
+    public long SettingsRevision => ConfigRepository.Snapshot.Revision;
     public AppSettings CommittedSnapshot => ConfigRepository.CurrentSettings;
     public Profile? MainProfile
     {
@@ -1248,7 +1249,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
             if (validateExtra != null) await validateExtra(next, ct);
             await ConfigRepository.UpdateSettingsAsync(current =>
             {
-                if (canCommit?.Invoke() == false) throw new OperationCanceledException("Настройки изменены во время операции.");
+                if (expectedRevision.HasValue && SettingsRevision != expectedRevision || canCommit?.Invoke() == false)
+                    throw new OperationCanceledException("Настройки изменены во время операции.");
                 foreach (var property in typeof(AppSettings).GetProperties().Where(p => p.CanWrite))
                 {
                     if (Json(property.GetValue(old)) == Json(property.GetValue(next))) continue;
@@ -1259,7 +1261,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
                 }
                 return current;
             }, ct);
-            SettingsRevision++;
             if (RoutingChanged(old, next) || ProfileConnectionChanged(old.Profiles.FirstOrDefault(p => p.Id == old.MainProfileId), next.Profiles.FirstOrDefault(p => p.Id == next.MainProfileId)))
                 RuntimeCoordinator.RequestReconcile(ReconcileReason.UserChangedSettings);
             projection.Post(() => Theme.Apply(State));
@@ -1290,7 +1291,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
             {
                 var merged = SubscriptionMerge.Apply(next, id, document, approveSecurityChanges);
                 next.CopyFrom(merged.Settings);
-                summary = next.Subscriptions.Single(s => s.Id == id).LastRefreshSummary;
+                summary = merged.Summary(document.ReceivedCount > 0 ? document.ReceivedCount : document.Profiles.Count + document.Errors.Count);
             }, ct:ct, expectedRevision:revision).ConfigureAwait(false);
             WriteLog($"SUBSCRIPTION id={id} {summary}");
             return summary + (document.Errors.Count > 0 ? Environment.NewLine + string.Join(Environment.NewLine, document.Errors.Take(15)) : "");
@@ -1333,9 +1334,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
     }
     public Task DeleteProfileAsync(Guid id,CancellationToken ct=default) => UpdateSettingsAsync(next=>
     {
-        if(Router.VpnRunning && Router.ActiveProfileId==id || Router.OpenVpn.Running && Router.OpenVpn.ActiveProfileId==id) throw new InvalidOperationException("Сначала остановите этот профиль.");
-        if (next.Profiles.FirstOrDefault(p => p.Id == id) is { } deleted) SubscriptionMerge.ExcludeProfile(next, deleted);
-        next.Profiles.RemoveAll(p=>p.Id==id); SettingsValidation.RepairSelections(next);
+        if (next.Profiles.FirstOrDefault(p => p.Id == id) is not { } deleted) return;
+        var targets = SubscriptionMerge.DeletionTargets(next, deleted);
+        if (targets.Any(p => Router.VpnRunning && Router.ActiveProfileId == p.Id || Router.OpenVpn.Running && Router.OpenVpn.ActiveProfileId == p.Id))
+            throw new InvalidOperationException("Сначала остановите этот профиль.");
+        foreach (var target in targets) SubscriptionMerge.ExcludeProfile(next, target);
+        var ids = targets.Select(p => p.Id).ToHashSet();
+        next.Profiles.RemoveAll(p => ids.Contains(p.Id)); SettingsValidation.RepairSelections(next);
     },ct:ct);
     public Task ImportProfilesAsync(IEnumerable<Profile> profiles,Subscription? subscription=null) => UpdateSettingsAsync(next=>
     {
@@ -1345,6 +1350,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable, IDesiredRunti
         else next.Profiles.AddRange(incoming);
         SettingsValidation.RepairSelections(next);
     });
+    public Task DeleteSubscriptionAsync(Guid id, CancellationToken ct = default) => UpdateSettingsAsync(next =>
+    {
+        var profiles = SubscriptionMerge.ProfilesForSubscription(next, id);
+        if (profiles.Any(p => Router.VpnRunning && Router.ActiveProfileId == p.Id || Router.OpenVpn.Running && Router.OpenVpn.ActiveProfileId == p.Id))
+            throw new InvalidOperationException("Сначала остановите профиль этой подписки.");
+        SubscriptionMerge.RemoveSubscription(next, id);
+    }, ct: ct);
     public async Task ApplyZapretAsync(bool enabled, string? file, CancellationToken ct)
     {
         TestsCancellation.Cancel();
