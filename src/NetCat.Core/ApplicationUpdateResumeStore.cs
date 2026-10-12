@@ -65,13 +65,17 @@ public sealed class ApplicationUpdateResumeStore
         if ((File.GetAttributes(folder) & FileAttributes.ReparsePoint) != 0)
             throw new IOException("Ссылка вместо папки восстановления обновления.");
         var path = PathFor(token);
+        var claim = path + ".claim-" + Guid.NewGuid().ToString("N");
+        var claimed = false;
         try
         {
-            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+            // Rename is the atomic claim. Other consumers see a missing source,
+            // rather than ERROR_ACCESS_DENIED on a file pending deletion.
+            File.Move(path, claim);
+            claimed = true;
+            if ((File.GetAttributes(claim) & FileAttributes.ReparsePoint) != 0)
                 throw new IOException("Ссылка вместо состояния восстановления обновления.");
-            // Exclusive open + delete-on-close is one atomic claim on Windows. No
-            // other process can consume the file between releasing a lock and deleting it.
-            using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None, 4096, FileOptions.DeleteOnClose);
+            using var file = new FileStream(claim, FileMode.Open, FileAccess.Read, FileShare.None, 4096, FileOptions.DeleteOnClose);
             if (file.Length > 8192) throw new InvalidDataException("Состояние восстановления обновления повреждено.");
             var bytes = new byte[checked((int)file.Length)];
             file.ReadExactly(bytes);
@@ -85,5 +89,12 @@ public sealed class ApplicationUpdateResumeStore
         catch (FileNotFoundException) { return null; }
         catch (DirectoryNotFoundException) { return null; }
         catch (IOException ex) when ((ex.HResult & 0xFFFF) is 32 or 33) { return null; }
+        finally
+        {
+            if (claimed)
+                try { File.Delete(claim); }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                { System.Diagnostics.Trace.WriteLine("UPDATE_RESUME cleanup=deferred errorClass=" + error.GetType().Name); }
+        }
     }
 }
